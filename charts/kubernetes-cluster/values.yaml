@@ -75,7 +75,17 @@ controlPlane:
     driver_info:
     ports:
 
-# Workers — N of them. Each becomes one BaremetalLifecycle CR with
+# Workers — N of them. Each becomes one BaremetalHost CR with
 # kubeadm-join userData, gated on the CP's spec.extra.kubeadm_join.
+#
+# To drain & remove a worker, move its entry from `nodes` to `removed`.
+# The chart renders a drain Job (against the workload apiserver via the
+# CP-published kubeconfig Secret), waits for the Job to complete, then
+# patches the BH with `spec.undeploy: true` (using the v0.3.4 widened
+# undeploy gate from baremetal-host). Once Ironic walks the node back
+# to `available`, remove the entry from `removed` entirely — cdc deletes
+# the BH and KOG fires DELETE on the Ironic node.
 workers:
+  drainTimeout: 5m
   nodes:
+  removed:

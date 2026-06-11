@@ -69,6 +69,27 @@ spec:
         - address: "00:60:2f:01:81:01"
           pxe_enabled: true
   workers:
+    drainTimeout: 5m
+    # To drain + remove a worker:
+    #  1. Move its entry from `nodes` to `removed` below
+    #  2. The chart renders a drain Job that runs `kubectl drain` against
+    #     the workload apiserver (via the CP-published workload kubeconfig
+    #     Secret). Job name: `drain-<clusterName>-<nodeName>`.
+    #  3. Once the drain Job succeeds, the chart re-renders the worker's
+    #     BaremetalHost with `spec.undeploy: true` (reusing the v0.3.4
+    #     widened undeploy gate from charts/baremetal-host).
+    #  4. Once the BH reports `available`, remove the entry from `removed`
+    #     entirely — cdc deletes the BH and KOG fires DELETE on the Node.
+    # removed:
+    #   - nodeName: blade04
+    #     nodeUuid: 44444444-2222-3333-4444-555555555555
+    #     driver: redfish
+    #     driver_info:
+    #       redfish_address: http://192.168.0.13:8000
+    #       redfish_username: ironic
+    #       redfish_password: baremetal
+    #       redfish_system_id: /redfish/v1/Systems/blade04
+    #     undeployMode: full
     nodes:
       - nodeName: blade02
         nodeUuid: 22222222-2222-3333-4444-555555555555

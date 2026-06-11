@@ -1,10 +1,19 @@
-# Render one BaremetalLifecycle per worker. The FSM gate is the captured
-# `kubeadm join` command in the CP Node CR's spec.extra.kubeadm_join —
-# read live via lookup in the joinCommand helper. While the gate is
-# empty (CP hasn't published yet), we render nothing and the chart's
-# next reconcile picks the gate up automatically (cdc re-evaluates the
-# whole chart on every reconcile).
+# Render one BaremetalHost per worker. Two flavours:
+#
+# 1. Workers in spec.workers.nodes — normal deploy. FSM gate is the
+#    captured kubeadm-join command in the CP Node CR's
+#    spec.extra.kubeadm_join (live lookup). Empty -> nothing renders;
+#    cdc re-picks-up on next reconcile.
+#
+# 2. Workers in spec.workers.removed — drain + undeploy. FSM gate is the
+#    workerDrainComplete lookup: the drain Job for this worker must have
+#    .status.succeeded == 1 before the BH gets `spec.undeploy: true`.
+#    Once Ironic walks the node from active back to available, the
+#    operator removes the entry from `removed` entirely and the BH stops
+#    being rendered — cdc cleans it up.
 {{- $jc := include "kubernetes-cluster.joinCommand" . -}}
+{{- $lcNs := include "kubernetes-cluster.lifecycleNamespace" . -}}
+{{- $cluster := .Values.clusterName -}}
 {{- if $jc -}}
 {{- $workers := default (list) (default (dict) .Values.workers).nodes -}}
 {{- range $idx, $w := $workers }}
@@ -12,13 +21,14 @@
 apiVersion: {{ include "kubernetes-cluster.lifecycleApiVersion" $ }}
 kind: {{ include "kubernetes-cluster.lifecycleKind" $ }}
 metadata:
-  name: {{ printf "%s-worker-%s" $.Values.clusterName $w.nodeName | quote }}
-  namespace: {{ include "kubernetes-cluster.lifecycleNamespace" $ | quote }}
+  name: {{ printf "%s-worker-%s" $cluster $w.nodeName | quote }}
+  namespace: {{ $lcNs | quote }}
   labels:
-    kubernetescluster.ogen.krateo.io/cluster: {{ $.Values.clusterName | quote }}
+    kubernetescluster.ogen.krateo.io/cluster: {{ $cluster | quote }}
     kubernetescluster.ogen.krateo.io/role: worker
 spec:
   nodeName: {{ $w.nodeName | quote }}
+  nodeNamespace: {{ $lcNs | quote }}
   {{- with $w.nodeUuid }}
   nodeUuid: {{ . | quote }}
   {{- end }}
@@ -34,18 +44,61 @@ spec:
   ports:
     {{- toYaml . | nindent 4 }}
   {{- end }}
-  instance_info:
-    {{- include "kubernetes-cluster.instanceInfo" $ | nindent 4 }}
+  enableInspection: false
+  online: true
+  image:
+    {{- include "kubernetes-cluster.image" $ | nindent 4 }}
   configDrive:
     metaData:
       hostname: {{ $w.nodeName | quote }}
       role: worker
-      cluster: {{ $.Values.clusterName | quote }}
+      cluster: {{ $cluster | quote }}
     userData: |
       {{- include "kubernetes-cluster.workerUserData" $ | nindent 6 }}
   configurationRef:
     {{- toYaml $.Values.configurationRef | nindent 4 }}
-  ironicApiUrl: {{ $.Values.ironicApiUrl | quote }}
-  ironicApiVersion: {{ $.Values.ironicApiVersion | quote }}
+{{- end }}
+{{- end }}
+
+{{- /* Removed workers: render BH with spec.undeploy: true once drain
+       has completed. The image + driver_info etc. stay set (BH chart
+       expects them) — the undeploy gate is the only behaviour change. */}}
+{{- $removed := default (list) (default (dict) .Values.workers).removed -}}
+{{- range $idx, $w := $removed }}
+{{- $drainCtx := dict "Values" $.Values "Release" $.Release "Capabilities" $.Capabilities "workerName" $w.nodeName -}}
+{{- $drainDone := include "kubernetes-cluster.workerDrainComplete" $drainCtx -}}
+{{- if $drainDone }}
+---
+apiVersion: {{ include "kubernetes-cluster.lifecycleApiVersion" $ }}
+kind: {{ include "kubernetes-cluster.lifecycleKind" $ }}
+metadata:
+  name: {{ printf "%s-worker-%s" $cluster $w.nodeName | quote }}
+  namespace: {{ $lcNs | quote }}
+  labels:
+    kubernetescluster.ogen.krateo.io/cluster: {{ $cluster | quote }}
+    kubernetescluster.ogen.krateo.io/role: worker
+    kubernetescluster.ogen.krateo.io/removing: "true"
+spec:
+  nodeName: {{ $w.nodeName | quote }}
+  nodeNamespace: {{ $lcNs | quote }}
+  {{- with $w.nodeUuid }}
+  nodeUuid: {{ . | quote }}
+  {{- end }}
+  driver: {{ $w.driver | quote }}
+  {{- with $w.driver_info }}
+  driver_info:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $w.ports }}
+  ports:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  enableInspection: false
+  image:
+    {{- include "kubernetes-cluster.image" $ | nindent 4 }}
+  undeploy: true
+  undeployMode: {{ default "full" $w.undeployMode | quote }}
+  configurationRef:
+    {{- toYaml $.Values.configurationRef | nindent 4 }}
 {{- end }}
 {{- end }}

@@ -36,6 +36,17 @@ rules:
     verbs:
       - get
       - patch
+  # Workload kubeconfig delivery (Milestone 5b). The CP cloud-init
+  # creates a Secret named <clusterName>-workload-kubeconfig with its
+  # admin.conf so the drain Jobs can talk to the workload apiserver.
+  # `get` lets the CP test for idempotency before POST.
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - create
+      - get
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

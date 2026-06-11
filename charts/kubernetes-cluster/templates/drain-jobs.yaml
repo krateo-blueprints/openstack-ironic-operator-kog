@@ -1,0 +1,66 @@
+# One drain Job per worker in spec.workers.removed[]. Each Job mounts
+# the workload-kubeconfig Secret (published by the CP's
+# publish-workload-kubeconfig.sh) and runs `kubectl drain` against the
+# workload apiserver.
+#
+# Gates:
+#   - skip render if the workload kubeconfig Secret isn't published yet
+#   - skip render if the Job for this worker already exists (Helm would
+#     try to recreate immutable fields otherwise)
+#
+# The Job's name is `drain-<clusterName>-<nodeName>` so the
+# workerDrainComplete helper can look it up.
+{{- $lcNs := include "kubernetes-cluster.lifecycleNamespace" . -}}
+{{- $cluster := .Values.clusterName -}}
+{{- $kcSecretName := include "kubernetes-cluster.workloadKubeconfigSecretName" . -}}
+{{- $kcSecret := lookup "v1" "Secret" $lcNs $kcSecretName -}}
+{{- $removed := default (list) (default (dict) .Values.workers).removed -}}
+{{- if and $kcSecret $removed }}
+{{- range $idx, $w := $removed }}
+{{- $jobName := printf "drain-%s-%s" $cluster $w.nodeName -}}
+{{- $existing := lookup "batch/v1" "Job" $lcNs $jobName -}}
+{{- if not $existing }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $jobName | quote }}
+  namespace: {{ $lcNs | quote }}
+  labels:
+    kubernetescluster.ogen.krateo.io/cluster: {{ $cluster | quote }}
+    kubernetescluster.ogen.krateo.io/role: drain
+    kubernetescluster.ogen.krateo.io/worker: {{ $w.nodeName | quote }}
+spec:
+  ttlSecondsAfterFinished: 3600
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        kubernetescluster.ogen.krateo.io/cluster: {{ $cluster | quote }}
+        kubernetescluster.ogen.krateo.io/role: drain
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: drain
+          image: bitnami/kubectl:1.31
+          command:
+            - /bin/sh
+            - -c
+          args:
+            - >-
+              kubectl drain {{ $w.nodeName | quote }}
+              --ignore-daemonsets
+              --delete-emptydir-data
+              --timeout={{ default "5m" (default (dict) $.Values.workers).drainTimeout }}
+              --kubeconfig /workload/kubeconfig
+          volumeMounts:
+            - name: workload-kc
+              mountPath: /workload
+              readOnly: true
+      volumes:
+        - name: workload-kc
+          secret:
+            secretName: {{ $kcSecretName | quote }}
+{{- end }}
+{{- end }}
+{{- end }}

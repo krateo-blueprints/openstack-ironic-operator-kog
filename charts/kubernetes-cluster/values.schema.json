@@ -81,6 +81,10 @@
     "workers": {
       "type": ["object", "null"],
       "properties": {
+        "drainTimeout": {
+          "type": ["string", "null"],
+          "description": "Passed to `kubectl drain --timeout=` in the Milestone 5b drain Jobs. Defaults to 5m."
+        },
         "nodes": {
           "type": ["array", "null"],
           "items": {
@@ -92,6 +96,25 @@
               "driver":      {"type": ["string", "null"]},
               "driver_info": {"type": ["object", "null"]},
               "ports":       {"type": ["array", "null"]}
+            }
+          }
+        },
+        "removed": {
+          "type": ["array", "null"],
+          "description": "Workers being drained + undeployed. Move an entry here from `nodes` to start the removal flow.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "nodeName":     {"type": ["string", "null"]},
+              "nodeUuid":     {"type": ["string", "null"]},
+              "driver":       {"type": ["string", "null"]},
+              "driver_info":  {"type": ["object", "null"]},
+              "ports":        {"type": ["array", "null"]},
+              "undeployMode": {
+                "type": ["string", "null"],
+                "enum": [null, "full", "none"],
+                "description": "Ironic cleanup pass between deleted and available. full=standard clean_steps, none=skip (fast, dirty). Requires baremetal:node:disable_cleaning policy for none."
+              }
             }
           }
         }

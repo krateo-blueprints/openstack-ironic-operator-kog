@@ -1,20 +1,23 @@
-# Render the control-plane BaremetalLifecycle CR.
+# Render the control-plane BaremetalHost CR.
+#
+# Since chart v0.4.0 the chart renders BaremetalHost (unified composition)
+# instead of BaremetalLifecycle so we can use the v0.3.4 widened
+# `spec.undeploy` gate for drain & undeploy (Milestone 5b) and reuse the
+# same CR type throughout the node's lifecycle.
 #
 # The CP is the FIRST node to come up; everything else waits on it.
 # The userData carries `kubeadm init` (with --control-plane-endpoint
-# when set, for HA), a CNI apply, and a `kubectl patch` against the
-# management cluster that publishes the join command into the CP's
-# own Node.spec.extra.kubeadm_join.
+# when set, for HA), a CNI apply, the kubectl-patch that publishes the
+# join command into the CP's own Node.spec.extra.kubeadm_join, the
+# workload-kubeconfig publish, and the systemd timer that re-mints the
+# join token every 12h.
 #
 # Render is gated on two values resolving:
 #   1. controlPlane.node.nodeName (spec) — the operator picks the node
 #   2. mgmtCaBundle (live lookup or explicit values fallback) — needed
 #      for the cloud-init to trust the management cluster's apiserver
 #
-# If the CA isn't resolvable yet (kube-root-ca.crt ConfigMap absent and
-# no explicit caBundle), we render nothing and cdc re-tries on the next
-# reconcile. Fail-closed so we don't bake an unworking publish-join.sh
-# into the bare-metal cloud-init at first boot.
+# Fail-closed: if the CA can't be resolved, no BaremetalHost is rendered.
 {{- $cp := (default (dict) (default (dict) .Values.controlPlane).node) -}}
 {{- $caBundle := include "kubernetes-cluster.mgmtCaBundle" . -}}
 {{- if and $cp.nodeName $caBundle -}}
@@ -29,6 +32,7 @@ metadata:
     kubernetescluster.ogen.krateo.io/role: control-plane
 spec:
   nodeName: {{ $cp.nodeName | quote }}
+  nodeNamespace: {{ include "kubernetes-cluster.lifecycleNamespace" . | quote }}
   {{- with $cp.nodeUuid }}
   nodeUuid: {{ . | quote }}
   {{- end }}
@@ -44,8 +48,10 @@ spec:
   ports:
     {{- toYaml . | nindent 4 }}
   {{- end }}
-  instance_info:
-    {{- include "kubernetes-cluster.instanceInfo" . | nindent 4 }}
+  enableInspection: false
+  online: true
+  image:
+    {{- include "kubernetes-cluster.image" . | nindent 4 }}
   configDrive:
     metaData:
       hostname: {{ $cp.nodeName | quote }}
@@ -55,6 +61,4 @@ spec:
       {{- include "kubernetes-cluster.cpUserData" . | nindent 6 }}
   configurationRef:
     {{- toYaml .Values.configurationRef | nindent 4 }}
-  ironicApiUrl: {{ .Values.ironicApiUrl | quote }}
-  ironicApiVersion: {{ .Values.ironicApiVersion | quote }}
 {{- end }}

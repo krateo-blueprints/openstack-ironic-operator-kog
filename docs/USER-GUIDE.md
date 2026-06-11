@@ -625,3 +625,85 @@ This is the load-bearing reuse for token rotation: the chart never
 implements a new "re-mint" CR or controller — it relies on
 `baremetal-host`'s undeploy/redeploy gate as the failure-recovery
 mechanism.
+
+## Drain and delete a worker
+
+Removing a worker from a `KubernetesCluster` is a three-phase flow,
+all gated by Helm `lookup`:
+
+1. **Move the entry from `spec.workers.nodes` to `spec.workers.removed`.**
+   Same shape; you can add `undeployMode: full` (default) or `none` for
+   the fast/dirty path (requires `baremetal:node:disable_cleaning` policy).
+
+   ```bash
+   kubectl patch kubernetescluster lab --type=json -p '[
+     {"op":"remove","path":"/spec/workers/nodes/1"},
+     {"op":"add","path":"/spec/workers/removed","value":[{
+       "nodeName":"blade04",
+       "driver":"redfish",
+       "driver_info":{"redfish_address":"http://192.168.0.13:8000"}
+     }]}
+   ]'
+   ```
+
+2. **Chart renders a drain `Job` against the workload apiserver.** Named
+   `drain-<clusterName>-<nodeName>`, mounts the workload kubeconfig from
+   the `<clusterName>-workload-kubeconfig` Secret (published by the CP
+   at first boot), runs `kubectl drain <node> --ignore-daemonsets
+   --delete-emptydir-data --timeout=<spec.workers.drainTimeout>`. Watch
+   it:
+
+   ```bash
+   kubectl -n openstack get job -l \
+     kubernetescluster.ogen.krateo.io/role=drain
+   kubectl -n openstack logs -l \
+     kubernetescluster.ogen.krateo.io/role=drain --tail=200
+   ```
+
+3. **Once the drain Job's `status.succeeded == 1`, the chart re-renders
+   the worker's BaremetalHost with `spec.undeploy: true`.** This uses
+   the v0.3.4 widened undeploy gate from `charts/baremetal-host`
+   ({active, deploy failed, clean failed, wait call-back, deploying}),
+   walking the blade through Ironic's clean cycle back to `available`.
+
+4. **Once the BH reports `available`, remove the entry from `removed`.**
+   cdc stops rendering the BH; helm deletes it; KOG fires `DELETE`
+   against Ironic. The Ironic node is removed.
+
+```bash
+# When you see provision_state=available on the removed blade
+kubectl -n openstack get node.baremetal.ogen.krateo.io blade04 \
+  -o jsonpath='{.status.provision_state}{"\n"}'
+# -> available
+
+# Drop the entry to finish cleanup
+kubectl patch kubernetescluster lab --type=json -p '[
+  {"op":"replace","path":"/spec/workers/removed","value":[]}
+]'
+```
+
+### Why drain Jobs and not the CP itself
+
+The CP has `admin.conf` locally — it could run drain in-blade. But the
+chart's FSM lives on the management cluster; gating worker undeploy on
+the in-blade drain finishing would require yet another rendezvous
+channel (back into `Node.spec.extra`). Instead the chart publishes the
+workload kubeconfig as a Secret in the lifecycle namespace, and a
+short-lived Job on the management cluster does the drain. Same
+FSM-via-`lookup` idiom, no new rendezvous keys.
+
+### What can go wrong
+
+- **PodDisruptionBudget blocks drain indefinitely.** `kubectl drain`
+  respects PDBs and waits. The Job times out at `drainTimeout` (default
+  5m). Bump it, or evict the PDB-protected pods manually.
+- **Workload kubeconfig Secret missing.** The CP's
+  `publish-workload-kubeconfig.sh` only runs once at first boot. If it
+  failed (mgmt API unreachable, CA mismatch), no drain Job will render.
+  Recovery: drive the CP through `BaremetalHost.spec.undeploy: true` →
+  re-deploy; the new cloud-init re-runs the publish.
+- **Worker is in `deploy failed` or `wait call-back`.** The v0.3.4
+  widened gate covers these. The drain Job will still try; if the
+  workload kubelet is down it'll fail. Operator-level decision: skip
+  the drain (manually delete the Job) and let the BH `spec.undeploy: true`
+  fire anyway. The chart doesn't force the drain step.

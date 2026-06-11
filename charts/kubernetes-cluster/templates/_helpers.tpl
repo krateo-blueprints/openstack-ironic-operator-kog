@@ -1,6 +1,13 @@
 {{- define "kubernetes-cluster.nodeApiVersion" -}}baremetal.ogen.krateo.io/v1alpha1{{- end -}}
-{{- define "kubernetes-cluster.lifecycleApiVersion" -}}composition.krateo.io/v0-3-1{{- end -}}
-{{- define "kubernetes-cluster.lifecycleKind" -}}BaremetalLifecycle{{- end -}}
+
+{{/* Per-node CR kind/apiVersion. The chart renders BaremetalHost
+     (unified composition) instead of BaremetalLifecycle so we can lean
+     on the v0.3.4 widened `spec.undeploy` gate for drain & undeploy
+     (Milestone 5b) and image swaps (Milestone 5a). Single CR per node
+     throughout its lifecycle. */}}
+{{- define "kubernetes-cluster.lifecycleApiVersion" -}}composition.krateo.io/v0-3-4{{- end -}}
+{{- define "kubernetes-cluster.lifecycleKind" -}}BaremetalHost{{- end -}}
+
 {{- define "kubernetes-cluster.lifecycleNamespace" -}}
 {{- if .Values.lifecycleNamespace -}}{{- .Values.lifecycleNamespace -}}{{- else -}}{{- .Release.Namespace -}}{{- end -}}
 {{- end -}}
@@ -30,11 +37,38 @@
 {{- end -}}
 {{- end -}}
 
-{{/* Common image dict that each rendered BaremetalLifecycle CR carries.
-     instance_info shape is what Ironic expects (image_source / image_checksum). */}}
-{{- define "kubernetes-cluster.instanceInfo" -}}
-image_source:   {{ .Values.image.source   | quote }}
-image_checksum: {{ .Values.image.checksum | quote }}
+{{/* Image dict in BaremetalHost shape (source + checksum). Differs from
+     baremetal-lifecycle's flatter `instance_info.image_source` —
+     baremetal-host nests under spec.image. */}}
+{{- define "kubernetes-cluster.image" -}}
+source:   {{ .Values.image.source   | quote }}
+checksum: {{ .Values.image.checksum | quote }}
+{{- end -}}
+
+{{/* Workers explicitly marked for removal in spec.workers.removed[]. */}}
+{{- define "kubernetes-cluster.removedWorkers" -}}
+{{- $workers := default (dict) .Values.workers -}}
+{{- toYaml (default (list) $workers.removed) -}}
+{{- end -}}
+
+{{/* Secret in the lifecycle namespace that carries the workload cluster's
+     admin.conf — published by the CP cloud-init on first boot, used by
+     the drain Jobs (templates/drain-jobs.yaml) to talk to the workload
+     cluster's apiserver. */}}
+{{- define "kubernetes-cluster.workloadKubeconfigSecretName" -}}
+{{- printf "%s-workload-kubeconfig" .Values.clusterName -}}
+{{- end -}}
+
+{{/* Has the drain Job for a given worker completed successfully?
+     Looked up live so the workers template can gate undeploy on it. */}}
+{{- define "kubernetes-cluster.workerDrainComplete" -}}
+{{- $ns   := include "kubernetes-cluster.lifecycleNamespace" . -}}
+{{- $name := printf "drain-%s-%s" .Values.clusterName .workerName -}}
+{{- $job  := lookup "batch/v1" "Job" $ns $name -}}
+{{- if $job -}}
+{{- $st := default (dict) $job.status -}}
+{{- if eq (default 0 $st.succeeded | int) 1 -}}true{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/* Management-cluster CA bundle for the CP's `kubectl patch` against the
@@ -166,12 +200,40 @@ write_files:
       done
       log "publish failed after 5 attempts — see /tmp/publish-join.out"
       exit 1
+  - path: /etc/kubernetes/publish-workload-kubeconfig.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      # One-shot: stash the workload cluster's admin.conf into a Secret on
+      # the management cluster so drain Jobs (Milestone 5b) can talk to
+      # the workload apiserver. Idempotent — POST returns 409 if the
+      # Secret already exists, which we treat as success.
+      set -uo pipefail
+      log() { logger -t kubeadm-workload-kubeconfig "$*"; }
+      MGMT_API="{{ .Values.managementCluster.apiUrl }}"
+      MGMT_TOKEN="{{ include "kubernetes-cluster.cpToken" . }}"
+      SECRET_NS="{{ include "kubernetes-cluster.lifecycleNamespace" . }}"
+      SECRET_NAME="{{ include "kubernetes-cluster.workloadKubeconfigSecretName" . }}"
+      KCFG_B64=$(base64 -w0 /etc/kubernetes/admin.conf)
+      RC=$(curl -sS -o /tmp/wkc.out -w "%{http_code}" \
+        -H "Authorization: Bearer ${MGMT_TOKEN}" \
+        -H "Content-Type: application/json" \
+        --cacert /etc/kubernetes/mgmt-ca.crt \
+        --request POST \
+        --data "{\"apiVersion\":\"v1\",\"kind\":\"Secret\",\"metadata\":{\"name\":\"${SECRET_NAME}\",\"namespace\":\"${SECRET_NS}\"},\"data\":{\"kubeconfig\":\"${KCFG_B64}\"}}" \
+        "${MGMT_API}/api/v1/namespaces/${SECRET_NS}/secrets") || RC=000
+      case "$RC" in
+        201) log "workload kubeconfig Secret created" ;;
+        409) log "workload kubeconfig Secret already exists — idempotent skip" ;;
+        *)   log "publish failed (HTTP $RC) — see /tmp/wkc.out"; exit 1 ;;
+      esac
 runcmd:
   - /etc/kubernetes/install-k8s.sh
   - kubeadm init --pod-network-cidr={{ .Values.network.podCIDR }} --service-cidr={{ .Values.network.serviceCIDR }} --kubernetes-version={{ .Values.k8sVersion }}{{ with include "kubernetes-cluster.controlPlaneEndpoint" . }} --control-plane-endpoint={{ . }}{{ end }}
   - mkdir -p /root/.kube && cp /etc/kubernetes/admin.conf /root/.kube/config
   - KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f {{ .Values.cni.manifestUrl }}
   - /etc/kubernetes/publish-join.sh
+  - /etc/kubernetes/publish-workload-kubeconfig.sh
   - systemctl daemon-reload
   - systemctl enable --now kubeadm-token-refresh.timer
 {{- end -}}
