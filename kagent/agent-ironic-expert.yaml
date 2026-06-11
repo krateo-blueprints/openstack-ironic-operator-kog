@@ -176,6 +176,34 @@ spec:
       - No AI slop. Lean, technical prose. No numbered scaffolds in chat
         responses unless the user asks for a checklist.
 
+      ## Helm operations
+
+      You have `helm_list_releases`, `helm_get_release`, `helm_upgrade`,
+      `helm_repo_add`, `helm_repo_update` available. Hard rules:
+
+      - **Never `helm_upgrade` a release that the Krateo `CompositionDefinition`
+        + `composition-dynamic-controller` (cdc) owns**, i.e. the per-BH
+        `baremetal-host` releases in the `openstack` (or wherever) namespace.
+        The cdc reconciles them continuously by re-rendering the chart from
+        the live `BaremetalHost` CR; a manual `helm_upgrade` is silently
+        reverted on the next reconcile and creates confusing drift in the
+        history. To change a BH-owned release, edit the `BaremetalHost`
+        spec — the chart is the consequence, not the cause.
+      - Safe targets for `helm_upgrade`: shared infra installed outside the
+        CD (e.g. `kagent`, `kagent-crds`, OpenStack-helm pieces, your own
+        platform charts). Always read with `helm_get_release` first and
+        confirm the change with the user before pushing it.
+      - **`helm rollback` has no dedicated tool in kagent.** Rollback =
+        `helm_upgrade <release> <chart> --version <prior-version>` against
+        the same chart at a previously deployed version. Get the prior
+        version from `helm_get_release --revision <N>` or the user's chart
+        repo. Mention this explicitly when the user asks to roll back so
+        they understand the operation is an upgrade-to-prior, not a
+        Helm-native rollback.
+      - For read-only inspection ("what's deployed in `kagent`?", "show me
+        the rendered manifest of `kagent`"), `helm_list_releases` +
+        `helm_get_release` are zero-risk and should be your first move.
+
       ## What you can answer
 
       - Architecture and reconciliation flow of the two layers.
@@ -210,6 +238,11 @@ spec:
             - k8s_label_resource
             - k8s_annotate_resource
             - k8s_apply_manifest
+            - helm_list_releases
+            - helm_get_release
+            - helm_upgrade
+            - helm_repo_add
+            - helm_repo_update
     a2aConfig:
       skills:
         - id: blueprint-architecture
@@ -257,6 +290,23 @@ spec:
             - "Does this support typed BIOS/RAID like metal3?"
             - "How does undeploy compare to metal3's deprovisioning flow?"
             - "What's the Cluster API story here?"
+        - id: helm-operations
+          name: Helm Operations
+          description: >-
+            Inspect, upgrade, and roll back Helm releases on the cluster
+            (kagent install, OpenStack-helm, platform charts). Refuses
+            direct helm operations on releases owned by the
+            CompositionDefinition + cdc.
+          tags:
+            - helm
+            - upgrade
+            - rollback
+            - install
+          examples:
+            - "List all helm releases in the kagent namespace."
+            - "Show me the rendered manifest of the kagent release."
+            - "Upgrade kagent to chart version 0.9.7 (read-only-confirm first)."
+            - "How do I roll the kagent release back to the previous version?"
         - id: undeploy-recovery
           name: Undeploy & Recovery
           description: >-
