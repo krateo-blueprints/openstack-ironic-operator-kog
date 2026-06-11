@@ -37,6 +37,34 @@ image_source:   {{ .Values.image.source   | quote }}
 image_checksum: {{ .Values.image.checksum | quote }}
 {{- end -}}
 
+{{/* Management-cluster CA bundle for the CP's `kubectl patch` against the
+     management API. Tries the auto-projected `kube-root-ca.crt` ConfigMap
+     in the SA namespace first (root-ca-cert-publisher controller, k8s 1.20+),
+     then falls back to an explicit .Values.managementCluster.caBundle for
+     hardened clusters where the auto-projection is disabled. Returns empty
+     when nothing resolves — lifecycle-cp.yaml gates on this. */}}
+{{- define "kubernetes-cluster.mgmtCaBundle" -}}
+{{- $mc := default (dict) .Values.managementCluster -}}
+{{- $ns := $mc.serviceAccountNamespace | default .Release.Namespace -}}
+{{- $cm := lookup "v1" "ConfigMap" $ns "kube-root-ca.crt" -}}
+{{- if $cm -}}
+{{- $ca := index (default (dict) $cm.data) "ca.crt" -}}
+{{- if $ca -}}{{- $ca -}}{{- end -}}
+{{- else if $mc.caBundle -}}
+{{- $mc.caBundle -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The `--control-plane-endpoint` advertised to kubeadm init. Empty for
+     single-CP clusters (Ironic node's primary IP becomes the apiserver
+     advertise address — kubeadm default). Non-empty for HA — must be a
+     stable address (LB VIP / DNS) reachable from every member blade.
+     See docs/USER-GUIDE.md "Cluster ingress" section for option matrix. */}}
+{{- define "kubernetes-cluster.controlPlaneEndpoint" -}}
+{{- $cp := default (dict) .Values.controlPlane -}}
+{{- if $cp.endpoint -}}{{- $cp.endpoint -}}{{- end -}}
+{{- end -}}
+
 {{/* Cloud-init userData for the CONTROL PLANE node. Installs kubeadm,
      runs `kubeadm init`, applies the CNI, then mints a join token and
      publishes it onto the CP's own Node CR via `kubectl patch` against
@@ -64,15 +92,16 @@ write_files:
       apt-get install -y kubelet={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubeadm={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubectl={{ trimPrefix "v" .Values.k8sVersion }}-1.1 containerd
       apt-mark hold kubelet kubeadm kubectl
       systemctl enable --now containerd
+  - path: /etc/kubernetes/mgmt-ca.crt
+    permissions: "0644"
+    content: |
+      {{- include "kubernetes-cluster.mgmtCaBundle" . | nindent 6 }}
   - path: /etc/kubernetes/publish-join.sh
     permissions: "0755"
     content: |
       #!/bin/bash
       set -euo pipefail
       JOIN_CMD=$(KUBECONFIG=/etc/kubernetes/admin.conf kubeadm token create --print-join-command --ttl 24h)
-      cat <<EOF > /etc/kubernetes/mgmt-ca.crt
-      {{ .Values.managementCluster.caBundle | default "" | indent 6 | trim }}
-      EOF
       MGMT_API="{{ .Values.managementCluster.apiUrl }}"
       MGMT_TOKEN="{{ include "kubernetes-cluster.cpToken" . }}"
       curl -fsSL \
@@ -84,7 +113,7 @@ write_files:
         "${MGMT_API}/apis/baremetal.ogen.krateo.io/v1alpha1/namespaces/{{ include "kubernetes-cluster.lifecycleNamespace" . }}/nodes/{{ include "kubernetes-cluster.cpNodeName" . }}"
 runcmd:
   - /etc/kubernetes/install-k8s.sh
-  - kubeadm init --pod-network-cidr={{ .Values.network.podCIDR }} --service-cidr={{ .Values.network.serviceCIDR }} --kubernetes-version={{ .Values.k8sVersion }}
+  - kubeadm init --pod-network-cidr={{ .Values.network.podCIDR }} --service-cidr={{ .Values.network.serviceCIDR }} --kubernetes-version={{ .Values.k8sVersion }}{{ with include "kubernetes-cluster.controlPlaneEndpoint" . }} --control-plane-endpoint={{ . }}{{ end }}
   - mkdir -p /root/.kube && cp /etc/kubernetes/admin.conf /root/.kube/config
   - KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f {{ .Values.cni.manifestUrl }}
   - /etc/kubernetes/publish-join.sh

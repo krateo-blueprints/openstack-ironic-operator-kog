@@ -13,10 +13,6 @@ cni:
   install: flannel
   manifestUrl: https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
 
-network:
-  podCIDR: 10.244.0.0/16
-  serviceCIDR: 10.96.0.0/12
-
 # OS image deployed onto every blade. Must be cloud-init-enabled and
 # Debian/Ubuntu-shaped (the userData uses apt). Override for RHEL/etc.
 image:
@@ -36,14 +32,16 @@ ironicApiVersion: "1.81"
 
 # Management-cluster API the CP cloud-init kubectl-patches to publish
 # the join token. URL is reachable from the bare-metal blade's network —
-# this is a network design constraint, not a chart concern. Leave blank
-# to derive from in-cluster kubernetes.default service (only works if
-# blades share the management cluster's pod/service network — they don't,
-# in practice).
+# this is a network design constraint, not a chart concern. See
+# `network.managementApiReachability` below for the option matrix
+# (kube-vip / MetalLB / external LB / NodePort+DNS).
 managementCluster:
   apiUrl: ""
-  # CA bundle for the management API. Skip-tls-verify if empty (don't
-  # ship like this).
+  # CA bundle for the management API. **Deprecated / optional override.**
+  # The chart now `lookup`s the auto-projected `kube-root-ca.crt`
+  # ConfigMap in the SA namespace (root-ca-cert-publisher controller,
+  # k8s 1.20+). Set this only if your management cluster has
+  # root-ca-cert-publisher disabled.
   caBundle: ""
   # Service account name + namespace used by the CP to patch its own
   # Node CR. The chart creates the SA + Role + RoleBinding + token
@@ -51,11 +49,24 @@ managementCluster:
   serviceAccountName: ""
   serviceAccountNamespace: ""
 
+# Network reachability hint — how the management cluster's API server
+# is exposed to bare-metal blades. Pure documentation today; future
+# milestones (HA control plane, day-2 ops) will branch on this enum.
+# See docs/USER-GUIDE.md "Cluster ingress" for the option matrix.
+network:
+  podCIDR: 10.244.0.0/16
+  serviceCIDR: 10.96.0.0/12
+  managementApiReachability: external-lb
+
 # Control plane — single node for MVP. HA control plane (N>1) is a
 # follow-up: render additional CP lifecycles gated on the first CP
 # having published the join command (same pattern as workers, but with
 # --control-plane and a separate cert-key publish step).
 controlPlane:
+  # Stable address kubeadm advertises as the cluster's apiserver. Empty
+  # for single-CP (kubeadm uses the node's primary IP). REQUIRED for HA
+  # (replicas > 1): point at a load-balanced VIP — see USER-GUIDE.md.
+  endpoint: ""
   node:
     nodeName:
     nodeUuid:

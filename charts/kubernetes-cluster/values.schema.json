@@ -23,7 +23,12 @@
       "type": ["object", "null"],
       "properties": {
         "podCIDR": {"type": "string"},
-        "serviceCIDR": {"type": "string"}
+        "serviceCIDR": {"type": "string"},
+        "managementApiReachability": {
+          "type": ["string", "null"],
+          "enum": [null, "kube-vip", "metallb", "external-lb", "nodeport-dns"],
+          "description": "How the management cluster's API is reached from bare-metal blades. Pure documentation hint today; future milestones may branch on this. See docs/USER-GUIDE.md 'Cluster ingress'."
+        }
       }
     },
     "image": {
@@ -56,6 +61,10 @@
     "controlPlane": {
       "type": "object",
       "properties": {
+        "endpoint": {
+          "type": ["string", "null"],
+          "description": "Stable address kubeadm advertises as the cluster apiserver. Empty for single-CP; required for HA (must point at a load-balanced VIP)."
+        },
         "node": {
           "type": "object",
           "properties": {

@@ -1,16 +1,23 @@
 # Render the control-plane BaremetalLifecycle CR.
 #
-# Always rendered (no FSM gate) — the CP is the FIRST node to come up;
-# everything else waits on it. The userData carries `kubeadm init`, a
-# CNI apply, and a `kubectl patch` against the management cluster that
-# publishes the join command into the CP's own Node.spec.extra.kubeadm_join.
+# The CP is the FIRST node to come up; everything else waits on it.
+# The userData carries `kubeadm init` (with --control-plane-endpoint
+# when set, for HA), a CNI apply, and a `kubectl patch` against the
+# management cluster that publishes the join command into the CP's
+# own Node.spec.extra.kubeadm_join.
 #
-# If the CP token Secret isn't ready yet (very first reconcile of the
-# composition), the helper returns empty and we still render — userData
-# without a token is harmless until /etc/kubernetes/publish-join.sh
-# runs, by which time the next reconcile WILL have the token.
+# Render is gated on two values resolving:
+#   1. controlPlane.node.nodeName (spec) — the operator picks the node
+#   2. mgmtCaBundle (live lookup or explicit values fallback) — needed
+#      for the cloud-init to trust the management cluster's apiserver
+#
+# If the CA isn't resolvable yet (kube-root-ca.crt ConfigMap absent and
+# no explicit caBundle), we render nothing and cdc re-tries on the next
+# reconcile. Fail-closed so we don't bake an unworking publish-join.sh
+# into the bare-metal cloud-init at first boot.
 {{- $cp := (default (dict) (default (dict) .Values.controlPlane).node) -}}
-{{- if $cp.nodeName -}}
+{{- $caBundle := include "kubernetes-cluster.mgmtCaBundle" . -}}
+{{- if and $cp.nodeName $caBundle -}}
 ---
 apiVersion: {{ include "kubernetes-cluster.lifecycleApiVersion" . }}
 kind: {{ include "kubernetes-cluster.lifecycleKind" . }}

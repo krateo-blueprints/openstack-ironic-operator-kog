@@ -24,6 +24,10 @@ spec:
   network:
     podCIDR: 10.244.0.0/16
     serviceCIDR: 10.96.0.0/12
+    # How the management cluster's apiserver is exposed to the blades.
+    # Pin one of: kube-vip, metallb, external-lb, nodeport-dns.
+    # See docs/USER-GUIDE.md "Cluster ingress" for the tradeoff matrix.
+    managementApiReachability: external-lb
   image:
     source: http://images.local/ubuntu-24.04-cloudimg-amd64.qcow2
     checksum: http://images.local/ubuntu-24.04-cloudimg-amd64.CHECKSUM
@@ -34,17 +38,24 @@ spec:
   ironicApiVersion: "1.81"
   managementCluster:
     # Reachable from the bare-metal provisioning network. Pin a stable
-    # advertised address (NodePort, MetalLB, or kube-apiserver LB).
+    # advertised address (kube-vip, MetalLB, external LB, or
+    # NodePort+DNS — see USER-GUIDE.md).
     apiUrl: https://10.0.0.1:6443
-    # PEM CA bundle for the management API. Inline; keep indentation
-    # consistent — the chart embeds this verbatim into cloud-init.
-    caBundle: |
-      -----BEGIN CERTIFICATE-----
-      ...replace with the management cluster's apiserver CA...
-      -----END CERTIFICATE-----
+    # PEM CA bundle is OPTIONAL since chart v0.2.0 — the chart `lookup`s
+    # the auto-projected `kube-root-ca.crt` ConfigMap in the SA namespace
+    # by default. Uncomment only if the management cluster has the
+    # root-ca-cert-publisher controller disabled.
+    # caBundle: |
+    #   -----BEGIN CERTIFICATE-----
+    #   ...PEM...
+    #   -----END CERTIFICATE-----
     serviceAccountName: lab-cp-publisher
     serviceAccountNamespace: openstack
   controlPlane:
+    # Stable apiserver endpoint advertised by `kubeadm init`. Empty
+    # acceptable for single-CP (kubeadm uses node primary IP). REQUIRED
+    # when adding HA replicas in Milestone 1 — must match the LB VIP.
+    endpoint: ""
     node:
       nodeName: blade01
       nodeUuid: 11111111-2222-3333-4444-555555555555

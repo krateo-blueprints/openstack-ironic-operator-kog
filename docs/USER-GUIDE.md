@@ -539,3 +539,51 @@ The v0.3.4 widened undeploy gate handles this. Recovery time observed: 45s.
 - Test plan and validation status: `docs/TEST-PLAN.md`
 - Orphan-recovery procedure: `docs/ORPHAN-RECOVERY.md`
 - Comparison vs metal3: `docs/VS-METAL3.md`
+
+---
+
+# Cluster ingress (for the `kubernetes-cluster` blueprint)
+
+This section applies when you're using the `kubernetes-cluster` chart
+to bootstrap a kubeadm cluster on top of the BaremetalHosts. The CP's
+cloud-init publishes the join command into its own Node CR via
+`kubectl patch` against the **management cluster's apiserver**, which
+means each blade has to reach that apiserver from the provisioning
+network. Pick one option below, set the address on
+`spec.managementCluster.apiUrl` AND `spec.controlPlane.endpoint` (HA),
+and record the choice on `spec.network.managementApiReachability` so
+future tooling can branch on it.
+
+### Option matrix
+
+| Option | Infra cost | When it fits | HA failover |
+|---|---|---|---|
+| `external-lb` | F5 / HAProxy / cloud LB owns 6443 in front of the management apiservers. Operator-provided. | Production / enterprise default. | LB handles it. |
+| `metallb` | MetalLB installed on the management cluster, with L2 or BGP advertised into the provisioning network. | Lab + small prod where blades share L2 with the management nodes. | Active/passive via L2 election. |
+| `kube-vip` | A static-pod `kube-vip` DaemonSet baked into the **bare-metal CP cloud-init** that VIP-balances ITS OWN cluster's apiserver (does not solve management-cluster reachability — covered for completeness because some users conflate it). | NOT what this section is about; listed to disambiguate. | n/a |
+| `nodeport-dns` | Expose management apiserver via NodePort on every management node, fronted by a DNS round-robin record. | Single-CP dev/PoC only. | None — DNS RR isn't real failover. |
+
+### Constraint enforced by kubeadm
+
+From the kubeadm HA docs:
+
+> *"Make sure the address of the load balancer always matches the address of kubeadm's `ControlPlaneEndpoint`."*
+
+So whatever you pick, `spec.controlPlane.endpoint` (advertised to
+`kubeadm init --control-plane-endpoint=...`) must equal the address
+the blades can reach. The MVP scaffold defaults `endpoint` to empty
+(`""`), which is acceptable for single-CP. For Milestone 1's HA path,
+making this consistent with the LB choice is a hard requirement.
+
+### CA bundle
+
+Since chart v0.2.0 the chart `lookup`s the auto-projected
+`kube-root-ca.crt` ConfigMap in the SA namespace
+(root-ca-cert-publisher controller, k8s 1.20+) and writes it into the
+CP's cloud-init. You don't need to paste a PEM into the CR. The
+`managementCluster.caBundle` value is preserved as an escape hatch for
+hardened management clusters where root-ca-cert-publisher is disabled.
+
+If neither path produces a CA bundle, the `lifecycle-cp.yaml` template
+gate fails closed — no `BaremetalLifecycle` CR is rendered for the CP,
+so the cloud-init doesn't get baked with a broken `publish-join.sh`.
