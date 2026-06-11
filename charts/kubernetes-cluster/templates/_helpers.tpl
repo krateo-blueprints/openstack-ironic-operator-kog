@@ -66,15 +66,22 @@ image_checksum: {{ .Values.image.checksum | quote }}
 {{- end -}}
 
 {{/* Cloud-init userData for the CONTROL PLANE node. Installs kubeadm,
-     runs `kubeadm init`, applies the CNI, then mints a join token and
-     publishes it onto the CP's own Node CR via `kubectl patch` against
-     the management cluster. The patch path is spec.extra.kubeadm_join
-     — chosen because spec.extra is a writable, KOG-reconciled field in
-     the Node CRD (Ironic round-trip is handled by the rest-dynamic
-     -controller; we don't fight it).
+     runs `kubeadm init` (with --control-plane-endpoint when set),
+     applies the CNI, then mints a join token and publishes it onto the
+     CP's own Node CR via `kubectl patch` against the management cluster.
+     The patch path is spec.extra.kubeadm_join — chosen because spec.extra
+     is a writable, KOG-reconciled field in the Node CRD (Ironic round-
+     trip is handled by the rest-dynamic-controller; we don't fight it).
+
+     Token rotation: kubeadm-token-refresh.timer fires every 12h and re-
+     runs publish-join.sh, so the published kubeadm_join stays valid past
+     the 24h kubeadm-default TTL. Workers added beyond the first day pick
+     up a fresh token on the cdc reconcile that follows the timer fire.
 
      The management-cluster API URL, CA bundle, and SA token are baked
      into the userData at render time via .Values.managementCluster.
+     CA bundle is sourced via kubernetes-cluster.mgmtCaBundle (looks up
+     kube-root-ca.crt ConfigMap first; falls back to caBundle value).
      The chart's rbac.yaml template creates a scoped SA (`patch nodes`
      on this one node) and a long-lived token Secret, then the helper
      `kubernetes-cluster.cpToken` pulls the token via lookup. */}}
@@ -96,27 +103,77 @@ write_files:
     permissions: "0644"
     content: |
       {{- include "kubernetes-cluster.mgmtCaBundle" . | nindent 6 }}
+  - path: /etc/systemd/system/kubeadm-token-refresh.service
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Mint a fresh kubeadm join token and publish it onto our Node CR
+      Wants=network-online.target
+      After=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/etc/kubernetes/publish-join.sh
+  - path: /etc/systemd/system/kubeadm-token-refresh.timer
+    permissions: "0644"
+    content: |
+      [Unit]
+      Description=Refresh kubeadm join token every 12h (50%% margin over 24h TTL)
+      Documentation=https://kubernetes.io/docs/reference/setup-tools/kubeadm/kubeadm-token/
+
+      [Timer]
+      # First fire 12h after init; thereafter every 12h. Persistent so
+      # missed runs (blade reboot / clock skew) are caught on next boot.
+      OnBootSec=12h
+      OnUnitActiveSec=12h
+      Persistent=true
+      RandomizedDelaySec=10m
+
+      [Install]
+      WantedBy=timers.target
   - path: /etc/kubernetes/publish-join.sh
     permissions: "0755"
     content: |
       #!/bin/bash
-      set -euo pipefail
-      JOIN_CMD=$(KUBECONFIG=/etc/kubernetes/admin.conf kubeadm token create --print-join-command --ttl 24h)
+      # Mint a fresh kubeadm join token (24h TTL) and publish it onto our
+      # Node CR's spec.extra.kubeadm_join. Called once from cloud-init at
+      # boot, then every 12h by kubeadm-token-refresh.timer. The 12h
+      # cadence is a 50% margin against the 24h TTL —
+      # https://kubernetes.io/docs/reference/setup-tools/kubeadm/kubeadm-token/
+      # — so a refresher miss still leaves a valid window before workers
+      # see InvalidToken.
+      set -uo pipefail
+      log() { logger -t kubeadm-token-refresh "$*"; }
+      JOIN_CMD=$(KUBECONFIG=/etc/kubernetes/admin.conf kubeadm token create --print-join-command --ttl 24h 2>/dev/null) || {
+        log "kubeadm token create failed; will retry on next timer fire"
+        exit 1
+      }
       MGMT_API="{{ .Values.managementCluster.apiUrl }}"
       MGMT_TOKEN="{{ include "kubernetes-cluster.cpToken" . }}"
-      curl -fsSL \
-        -H "Authorization: Bearer ${MGMT_TOKEN}" \
-        -H "Content-Type: application/merge-patch+json" \
-        --cacert /etc/kubernetes/mgmt-ca.crt \
-        --request PATCH \
-        --data "{\"spec\":{\"extra\":{\"kubeadm_join\":\"${JOIN_CMD//\"/\\\"}\"}}}" \
-        "${MGMT_API}/apis/baremetal.ogen.krateo.io/v1alpha1/namespaces/{{ include "kubernetes-cluster.lifecycleNamespace" . }}/nodes/{{ include "kubernetes-cluster.cpNodeName" . }}"
+      for attempt in 1 2 3 4 5; do
+        if curl -fsSL \
+          -H "Authorization: Bearer ${MGMT_TOKEN}" \
+          -H "Content-Type: application/merge-patch+json" \
+          --cacert /etc/kubernetes/mgmt-ca.crt \
+          --request PATCH \
+          --data "{\"spec\":{\"extra\":{\"kubeadm_join\":\"${JOIN_CMD//\"/\\\"}\"}}}" \
+          "${MGMT_API}/apis/baremetal.ogen.krateo.io/v1alpha1/namespaces/{{ include "kubernetes-cluster.lifecycleNamespace" . }}/nodes/{{ include "kubernetes-cluster.cpNodeName" . }}" > /tmp/publish-join.out 2>&1; then
+          log "join command published (attempt ${attempt})"
+          exit 0
+        fi
+        log "publish attempt ${attempt} failed; sleeping $((attempt * 10))s before retry"
+        sleep $((attempt * 10))
+      done
+      log "publish failed after 5 attempts — see /tmp/publish-join.out"
+      exit 1
 runcmd:
   - /etc/kubernetes/install-k8s.sh
   - kubeadm init --pod-network-cidr={{ .Values.network.podCIDR }} --service-cidr={{ .Values.network.serviceCIDR }} --kubernetes-version={{ .Values.k8sVersion }}{{ with include "kubernetes-cluster.controlPlaneEndpoint" . }} --control-plane-endpoint={{ . }}{{ end }}
   - mkdir -p /root/.kube && cp /etc/kubernetes/admin.conf /root/.kube/config
   - KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f {{ .Values.cni.manifestUrl }}
   - /etc/kubernetes/publish-join.sh
+  - systemctl daemon-reload
+  - systemctl enable --now kubeadm-token-refresh.timer
 {{- end -}}
 
 {{/* Cloud-init userData for a WORKER node. Installs kubeadm and runs the

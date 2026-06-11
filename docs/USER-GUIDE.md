@@ -587,3 +587,41 @@ hardened management clusters where root-ca-cert-publisher is disabled.
 If neither path produces a CA bundle, the `lifecycle-cp.yaml` template
 gate fails closed — no `BaremetalLifecycle` CR is rendered for the CP,
 so the cloud-init doesn't get baked with a broken `publish-join.sh`.
+
+## Token rotation (kubeadm join TTL)
+
+`kubeadm init` mints a bootstrap token with a 24h TTL. Past that, any
+worker still trying to join with the original token sees `InvalidToken`
+and the chart's worker render gate keeps firing fresh attempts against
+a dead token. Since chart v0.3.0 the CP cloud-init installs a systemd
+timer (`kubeadm-token-refresh.timer`) that fires every 12h, re-runs
+`publish-join.sh`, and PATCHes a fresh 24h token into
+`Node.spec.extra.kubeadm_join`. The 12h cadence is a 50% margin against
+the TTL — a missed refresh still leaves a valid window before workers
+fail.
+
+### What's verified
+
+The refresher emits to journald with tag `kubeadm-token-refresh`. To
+check it's healthy:
+
+```bash
+ssh root@<cp-blade> journalctl -t kubeadm-token-refresh --since "1 day ago"
+ssh root@<cp-blade> systemctl list-timers kubeadm-token-refresh.timer
+```
+
+### What happens if the refresher dies
+
+If the timer never fires (clock skew past TTL, blade hung, networking
+outage to the management apiserver longer than the refresher's retry
+window), the published token expires. **The CP itself keeps running**
+— it's just that *new* workers can't join. The recovery path is the
+same as for any irrecoverable CP-side issue: drive the CP through the
+v0.3.4 widened `BaremetalHost.spec.undeploy: true` → re-deploy gate.
+The new cloud-init carries the same refresher unit, so the rotation
+resumes on the rebuilt CP.
+
+This is the load-bearing reuse for token rotation: the chart never
+implements a new "re-mint" CR or controller — it relies on
+`baremetal-host`'s undeploy/redeploy gate as the failure-recovery
+mechanism.
