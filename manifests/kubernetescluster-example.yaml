@@ -1,0 +1,83 @@
+# Example KubernetesCluster: one control plane (blade01) + two workers (blade02, blade03).
+# Apply against a cluster where:
+#   - the kubernetes-cluster CompositionDefinition has been applied
+#   - the baremetal-lifecycle CompositionDefinition has been applied (the
+#     chart renders BaremetalLifecycle CRs that depend on this CRD)
+#   - the Ironic Node KOG primitive is installed (the chart's lookup reads
+#     nodes.baremetal.ogen.krateo.io to gate workers on the CP's join token)
+#   - the bare-metal blades can reach the management cluster's API server
+#     (managementCluster.apiUrl) — this is a network design constraint
+#
+#   kubectl apply -f manifests/kubernetescluster-example.yaml
+---
+apiVersion: composition.krateo.io/v0-1-0
+kind: KubernetesCluster
+metadata:
+  name: lab
+  namespace: openstack
+spec:
+  clusterName: lab
+  k8sVersion: v1.31.4
+  cni:
+    install: flannel
+    manifestUrl: https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+  network:
+    podCIDR: 10.244.0.0/16
+    serviceCIDR: 10.96.0.0/12
+  image:
+    source: http://images.local/ubuntu-24.04-cloudimg-amd64.qcow2
+    checksum: http://images.local/ubuntu-24.04-cloudimg-amd64.CHECKSUM
+  configurationRef:
+    name: ironic-config
+    namespace: openstack
+  ironicApiUrl: http://ironic.openstack.svc.cluster.local:6385
+  ironicApiVersion: "1.81"
+  managementCluster:
+    # Reachable from the bare-metal provisioning network. Pin a stable
+    # advertised address (NodePort, MetalLB, or kube-apiserver LB).
+    apiUrl: https://10.0.0.1:6443
+    # PEM CA bundle for the management API. Inline; keep indentation
+    # consistent — the chart embeds this verbatim into cloud-init.
+    caBundle: |
+      -----BEGIN CERTIFICATE-----
+      ...replace with the management cluster's apiserver CA...
+      -----END CERTIFICATE-----
+    serviceAccountName: lab-cp-publisher
+    serviceAccountNamespace: openstack
+  controlPlane:
+    node:
+      nodeName: blade01
+      nodeUuid: 11111111-2222-3333-4444-555555555555
+      driver: redfish
+      driver_info:
+        redfish_address: http://192.168.0.10:8000
+        redfish_username: ironic
+        redfish_password: baremetal
+        redfish_system_id: /redfish/v1/Systems/blade01
+      ports:
+        - address: "00:60:2f:01:81:01"
+          pxe_enabled: true
+  workers:
+    nodes:
+      - nodeName: blade02
+        nodeUuid: 22222222-2222-3333-4444-555555555555
+        driver: redfish
+        driver_info:
+          redfish_address: http://192.168.0.11:8000
+          redfish_username: ironic
+          redfish_password: baremetal
+          redfish_system_id: /redfish/v1/Systems/blade02
+        ports:
+          - address: "00:60:2f:02:81:01"
+            pxe_enabled: true
+      - nodeName: blade03
+        nodeUuid: 33333333-2222-3333-4444-555555555555
+        driver: redfish
+        driver_info:
+          redfish_address: http://192.168.0.12:8000
+          redfish_username: ironic
+          redfish_password: baremetal
+          redfish_system_id: /redfish/v1/Systems/blade03
+        ports:
+          - address: "00:60:2f:03:81:01"
+            pxe_enabled: true

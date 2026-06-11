@@ -1,0 +1,51 @@
+# Render one BaremetalLifecycle per worker. The FSM gate is the captured
+# `kubeadm join` command in the CP Node CR's spec.extra.kubeadm_join —
+# read live via lookup in the joinCommand helper. While the gate is
+# empty (CP hasn't published yet), we render nothing and the chart's
+# next reconcile picks the gate up automatically (cdc re-evaluates the
+# whole chart on every reconcile).
+{{- $jc := include "kubernetes-cluster.joinCommand" . -}}
+{{- if $jc -}}
+{{- $workers := default (list) (default (dict) .Values.workers).nodes -}}
+{{- range $idx, $w := $workers }}
+---
+apiVersion: {{ include "kubernetes-cluster.lifecycleApiVersion" $ }}
+kind: {{ include "kubernetes-cluster.lifecycleKind" $ }}
+metadata:
+  name: {{ printf "%s-worker-%s" $.Values.clusterName $w.nodeName | quote }}
+  namespace: {{ include "kubernetes-cluster.lifecycleNamespace" $ | quote }}
+  labels:
+    kubernetescluster.ogen.krateo.io/cluster: {{ $.Values.clusterName | quote }}
+    kubernetescluster.ogen.krateo.io/role: worker
+spec:
+  nodeName: {{ $w.nodeName | quote }}
+  {{- with $w.nodeUuid }}
+  nodeUuid: {{ . | quote }}
+  {{- end }}
+  {{- with $w.parentNode }}
+  parentNode: {{ . | quote }}
+  {{- end }}
+  driver: {{ $w.driver | quote }}
+  {{- with $w.driver_info }}
+  driver_info:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $w.ports }}
+  ports:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  instance_info:
+    {{- include "kubernetes-cluster.instanceInfo" $ | nindent 4 }}
+  configDrive:
+    metaData:
+      hostname: {{ $w.nodeName | quote }}
+      role: worker
+      cluster: {{ $.Values.clusterName | quote }}
+    userData: |
+      {{- include "kubernetes-cluster.workerUserData" $ | nindent 6 }}
+  configurationRef:
+    {{- toYaml $.Values.configurationRef | nindent 4 }}
+  ironicApiUrl: {{ $.Values.ironicApiUrl | quote }}
+  ironicApiVersion: {{ $.Values.ironicApiVersion | quote }}
+{{- end }}
+{{- end }}

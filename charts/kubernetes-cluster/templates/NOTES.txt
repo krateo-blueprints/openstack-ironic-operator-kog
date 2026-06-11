@@ -1,0 +1,25 @@
+KubernetesCluster {{ .Values.clusterName }} reconciled.
+
+The composition-dynamic-controller will re-render this chart on every
+reconcile and walk the cluster through:
+
+  1. control-plane:   one BaremetalLifecycle CR ({{ .Values.clusterName }}-cp-{{ .Values.controlPlane.node.nodeName }})
+                      drives the CP blade to `active` and runs kubeadm init.
+                      The CP cloud-init publishes the join command into
+                      its own Node CR's spec.extra.kubeadm_join via
+                      `kubectl patch` against the management cluster.
+
+  2. workers (gate):  read live via Helm lookup of the CP's
+                      Node.spec.extra.kubeadm_join. Empty -> render
+                      nothing, wait. Non-empty -> render one
+                      BaremetalLifecycle per worker with `kubeadm join`
+                      userData.
+
+Inspect:
+
+  kubectl -n {{ include "kubernetes-cluster.lifecycleNamespace" . }} get baremetallifecycle.composition.krateo.io \
+    -l kubernetescluster.ogen.krateo.io/cluster={{ .Values.clusterName }}
+
+  # Did the CP publish?
+  kubectl -n {{ include "kubernetes-cluster.lifecycleNamespace" . }} get node.baremetal.ogen.krateo.io {{ .Values.controlPlane.node.nodeName }} \
+    -o jsonpath='{.spec.extra.kubeadm_join}{"\n"}'

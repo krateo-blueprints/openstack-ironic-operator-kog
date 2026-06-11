@@ -1,0 +1,53 @@
+# Render the control-plane BaremetalLifecycle CR.
+#
+# Always rendered (no FSM gate) — the CP is the FIRST node to come up;
+# everything else waits on it. The userData carries `kubeadm init`, a
+# CNI apply, and a `kubectl patch` against the management cluster that
+# publishes the join command into the CP's own Node.spec.extra.kubeadm_join.
+#
+# If the CP token Secret isn't ready yet (very first reconcile of the
+# composition), the helper returns empty and we still render — userData
+# without a token is harmless until /etc/kubernetes/publish-join.sh
+# runs, by which time the next reconcile WILL have the token.
+{{- $cp := (default (dict) (default (dict) .Values.controlPlane).node) -}}
+{{- if $cp.nodeName -}}
+---
+apiVersion: {{ include "kubernetes-cluster.lifecycleApiVersion" . }}
+kind: {{ include "kubernetes-cluster.lifecycleKind" . }}
+metadata:
+  name: {{ printf "%s-cp-%s" .Values.clusterName $cp.nodeName | quote }}
+  namespace: {{ include "kubernetes-cluster.lifecycleNamespace" . | quote }}
+  labels:
+    kubernetescluster.ogen.krateo.io/cluster: {{ .Values.clusterName | quote }}
+    kubernetescluster.ogen.krateo.io/role: control-plane
+spec:
+  nodeName: {{ $cp.nodeName | quote }}
+  {{- with $cp.nodeUuid }}
+  nodeUuid: {{ . | quote }}
+  {{- end }}
+  {{- with $cp.parentNode }}
+  parentNode: {{ . | quote }}
+  {{- end }}
+  driver: {{ $cp.driver | quote }}
+  {{- with $cp.driver_info }}
+  driver_info:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $cp.ports }}
+  ports:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  instance_info:
+    {{- include "kubernetes-cluster.instanceInfo" . | nindent 4 }}
+  configDrive:
+    metaData:
+      hostname: {{ $cp.nodeName | quote }}
+      role: control-plane
+      cluster: {{ .Values.clusterName | quote }}
+    userData: |
+      {{- include "kubernetes-cluster.cpUserData" . | nindent 6 }}
+  configurationRef:
+    {{- toYaml .Values.configurationRef | nindent 4 }}
+  ironicApiUrl: {{ .Values.ironicApiUrl | quote }}
+  ironicApiVersion: {{ .Values.ironicApiVersion | quote }}
+{{- end }}

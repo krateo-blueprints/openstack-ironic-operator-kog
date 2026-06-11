@@ -1,0 +1,70 @@
+# kubernetes-cluster chart values. Pure block YAML — no flow brackets.
+# All defaults here are *placeholders* for the schema — a real cluster
+# overrides them via the KubernetesCluster CR rendered by core-provider.
+
+clusterName: lab
+
+# kubeadm-installed k8s version. Drives the kubelet/kubeadm/kubectl
+# package version on every node via cloud-init.
+k8sVersion: v1.31.4
+
+# CNI is wired by the CP post-init. Default flannel for simplicity.
+cni:
+  install: flannel
+  manifestUrl: https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+
+network:
+  podCIDR: 10.244.0.0/16
+  serviceCIDR: 10.96.0.0/12
+
+# OS image deployed onto every blade. Must be cloud-init-enabled and
+# Debian/Ubuntu-shaped (the userData uses apt). Override for RHEL/etc.
+image:
+  source:
+  checksum:
+
+# Where the rendered BaremetalLifecycle CRs land (defaults to release ns).
+lifecycleNamespace:
+
+# Ironic auth — same shape as BaremetalLifecycle.
+configurationRef:
+  name: ironic-config
+  namespace: openstack
+
+ironicApiUrl: http://ironic.openstack.svc.cluster.local:6385
+ironicApiVersion: "1.81"
+
+# Management-cluster API the CP cloud-init kubectl-patches to publish
+# the join token. URL is reachable from the bare-metal blade's network —
+# this is a network design constraint, not a chart concern. Leave blank
+# to derive from in-cluster kubernetes.default service (only works if
+# blades share the management cluster's pod/service network — they don't,
+# in practice).
+managementCluster:
+  apiUrl: ""
+  # CA bundle for the management API. Skip-tls-verify if empty (don't
+  # ship like this).
+  caBundle: ""
+  # Service account name + namespace used by the CP to patch its own
+  # Node CR. The chart creates the SA + Role + RoleBinding + token
+  # Secret (see templates/rbac.yaml) and reads the token at render time.
+  serviceAccountName: ""
+  serviceAccountNamespace: ""
+
+# Control plane — single node for MVP. HA control plane (N>1) is a
+# follow-up: render additional CP lifecycles gated on the first CP
+# having published the join command (same pattern as workers, but with
+# --control-plane and a separate cert-key publish step).
+controlPlane:
+  node:
+    nodeName:
+    nodeUuid:
+    parentNode:
+    driver: redfish
+    driver_info:
+    ports:
+
+# Workers — N of them. Each becomes one BaremetalLifecycle CR with
+# kubeadm-join userData, gated on the CP's spec.extra.kubeadm_join.
+workers:
+  nodes:

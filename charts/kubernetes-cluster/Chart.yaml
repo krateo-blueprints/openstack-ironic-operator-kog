@@ -1,0 +1,25 @@
+apiVersion: v2
+name: kubernetes-cluster
+description: |
+  Krateo blueprint that turns a set of Ironic-managed bare-metal nodes into a
+  vanilla kubeadm-bootstrapped Kubernetes cluster. Renders one BaremetalLifecycle
+  per cluster member (control plane + workers) and gates the join sequence on
+  the control plane having published its `kubeadm join` command into its own
+  Node CR's spec.extra.kubeadm_join (rendezvous via the existing Node KOG
+  primitive — no new CRDs, no new tools).
+
+  State machine:
+    cp:      lifecycle(deploy)  -> kubeadm init -> patch own Node.spec.extra
+    workers: gated on cp Node.spec.extra.kubeadm_join present
+             -> lifecycle(deploy) -> kubeadm join
+type: application
+version: 0.1.0
+appVersion: "1.0"
+keywords:
+  - kubernetes
+  - kubeadm
+  - bare-metal
+  - krateo
+  - ironic
+maintainers:
+  - name: openstack-ironic-operator

@@ -1,0 +1,92 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "KubernetesCluster Chart Values",
+  "type": "object",
+  "required": ["clusterName", "k8sVersion"],
+  "properties": {
+    "clusterName": {
+      "type": "string",
+      "description": "Logical cluster name. Used as a prefix for rendered BaremetalLifecycle CR names."
+    },
+    "k8sVersion": {
+      "type": "string",
+      "description": "kubelet/kubeadm package version, e.g. v1.31.4."
+    },
+    "cni": {
+      "type": ["object", "null"],
+      "properties": {
+        "install": {"type": "string"},
+        "manifestUrl": {"type": "string"}
+      }
+    },
+    "network": {
+      "type": ["object", "null"],
+      "properties": {
+        "podCIDR": {"type": "string"},
+        "serviceCIDR": {"type": "string"}
+      }
+    },
+    "image": {
+      "type": "object",
+      "properties": {
+        "source":   {"type": ["string", "null"]},
+        "checksum": {"type": ["string", "null"]}
+      }
+    },
+    "lifecycleNamespace": {"type": ["string", "null"]},
+    "configurationRef": {
+      "type": "object",
+      "properties": {
+        "name":      {"type": "string"},
+        "namespace": {"type": "string"}
+      }
+    },
+    "ironicApiUrl":     {"type": "string"},
+    "ironicApiVersion": {"type": "string"},
+    "managementCluster": {
+      "type": "object",
+      "description": "Endpoint + auth used by the CP cloud-init to kubectl-patch its own Node CR's spec.extra.kubeadm_join.",
+      "properties": {
+        "apiUrl":                  {"type": ["string", "null"]},
+        "caBundle":                {"type": ["string", "null"]},
+        "serviceAccountName":      {"type": ["string", "null"]},
+        "serviceAccountNamespace": {"type": ["string", "null"]}
+      }
+    },
+    "controlPlane": {
+      "type": "object",
+      "properties": {
+        "node": {
+          "type": "object",
+          "properties": {
+            "nodeName":    {"type": ["string", "null"]},
+            "nodeUuid":    {"type": ["string", "null"]},
+            "parentNode":  {"type": ["string", "null"]},
+            "driver":      {"type": ["string", "null"]},
+            "driver_info": {"type": ["object", "null"]},
+            "ports":       {"type": ["array", "null"]}
+          }
+        }
+      }
+    },
+    "workers": {
+      "type": ["object", "null"],
+      "properties": {
+        "nodes": {
+          "type": ["array", "null"],
+          "items": {
+            "type": "object",
+            "properties": {
+              "nodeName":    {"type": ["string", "null"]},
+              "nodeUuid":    {"type": ["string", "null"]},
+              "parentNode":  {"type": ["string", "null"]},
+              "driver":      {"type": ["string", "null"]},
+              "driver_info": {"type": ["object", "null"]},
+              "ports":       {"type": ["array", "null"]}
+            }
+          }
+        }
+      }
+    }
+  }
+}

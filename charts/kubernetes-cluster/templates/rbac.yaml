@@ -1,0 +1,62 @@
+# Scoped SA + Role + Token Secret used by the CP cloud-init to patch its
+# own Node CR's spec.extra.kubeadm_join. The Role grants ONLY the patch
+# verb on a single Node CR (the CP's), so the token leak surface is
+# minimised: a compromised CP can only DoS its own join-command publish.
+#
+# k8s 1.24+ doesn't auto-create tokens for ServiceAccounts; the manually
+# crafted Secret below requests one.
+{{- $mc     := default (dict) .Values.managementCluster -}}
+{{- $saName := $mc.serviceAccountName | default (printf "%s-cp-publisher" .Values.clusterName) -}}
+{{- $saNs   := $mc.serviceAccountNamespace | default .Release.Namespace -}}
+{{- $cpName := include "kubernetes-cluster.cpNodeName" . -}}
+{{- $lcNs   := include "kubernetes-cluster.lifecycleNamespace" . -}}
+{{- if $cpName -}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $saName | quote }}
+  namespace: {{ $saNs | quote }}
+  labels:
+    app.kubernetes.io/part-of: openstack-ironic-operator-kog
+    kubernetescluster.ogen.krateo.io/cluster: {{ .Values.clusterName | quote }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $saName | quote }}
+  namespace: {{ $lcNs | quote }}
+rules:
+  - apiGroups:
+      - baremetal.ogen.krateo.io
+    resources:
+      - nodes
+    resourceNames:
+      - {{ $cpName | quote }}
+    verbs:
+      - get
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $saName | quote }}
+  namespace: {{ $lcNs | quote }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $saName | quote }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $saName | quote }}
+    namespace: {{ $saNs | quote }}
+---
+apiVersion: v1
+kind: Secret
+type: kubernetes.io/service-account-token
+metadata:
+  name: {{ printf "%s-token" $saName | quote }}
+  namespace: {{ $saNs | quote }}
+  annotations:
+    kubernetes.io/service-account.name: {{ $saName | quote }}
+{{- end }}

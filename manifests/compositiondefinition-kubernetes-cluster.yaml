@@ -1,0 +1,17 @@
+# CompositionDefinition for the kubernetes-cluster chart. core-provider generates a
+# KubernetesCluster CRD from the chart's values.schema.json and runs a
+# composition-dynamic-controller that helm-installs the chart per instance.
+#
+# The url below points at the in-cluster chart server used by the local env
+# (`make composition-up` packages the chart and serves it). For a real cluster,
+# publish the .tgz (HTTP/OCI/Helm repo) and set spec.chart.url accordingly.
+---
+apiVersion: core.krateo.io/v1alpha1
+kind: CompositionDefinition
+metadata:
+  name: kubernetes-cluster
+  namespace: krateo-system
+spec:
+  chart:
+    url: http://chartrepo.openstack.svc.cluster.local/kubernetes-cluster-0.1.0.tgz
+    version: "0.1.0"
