@@ -248,6 +248,13 @@ write_files:
       apt-get install -y kubelet={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubeadm={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubectl={{ trimPrefix "v" .Values.k8sVersion }}-1.1 containerd
       apt-mark hold kubelet kubeadm kubectl
       systemctl enable --now containerd
+      # Debian 13 trixie's default iptables alternative is iptables-nft. With
+      # the bundled kube-proxy (v1.31, iptables mode), the proxy exits with
+      # code 2 right after caches sync — no error logged, no kernel panic.
+      # Pinning iptables-legacy avoids the silent crash. Track upstream
+      # adoption of `--proxy-mode=nftables` for a longer-term path.
+      update-alternatives --set iptables /usr/sbin/iptables-legacy
+      update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
       modprobe overlay
       modprobe br_netfilter
       printf 'overlay\nbr_netfilter\n' > /etc/modules-load.d/k8s.conf
@@ -410,6 +417,13 @@ write_files:
       apt-get install -y kubelet={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubeadm={{ trimPrefix "v" .Values.k8sVersion }}-1.1 containerd
       apt-mark hold kubelet kubeadm
       systemctl enable --now containerd
+      # Debian 13 trixie's default iptables alternative is iptables-nft. With
+      # the bundled kube-proxy (v1.31, iptables mode), the proxy exits with
+      # code 2 right after caches sync — no error logged, no kernel panic.
+      # Pinning iptables-legacy avoids the silent crash. Track upstream
+      # adoption of `--proxy-mode=nftables` for a longer-term path.
+      update-alternatives --set iptables /usr/sbin/iptables-legacy
+      update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
       modprobe overlay
       modprobe br_netfilter
       printf 'overlay\nbr_netfilter\n' > /etc/modules-load.d/k8s.conf
@@ -461,6 +475,13 @@ write_files:
       apt-get install -y kubelet={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubeadm={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubectl={{ trimPrefix "v" .Values.k8sVersion }}-1.1 containerd
       apt-mark hold kubelet kubeadm kubectl
       systemctl enable --now containerd
+      # Debian 13 trixie's default iptables alternative is iptables-nft. With
+      # the bundled kube-proxy (v1.31, iptables mode), the proxy exits with
+      # code 2 right after caches sync — no error logged, no kernel panic.
+      # Pinning iptables-legacy avoids the silent crash. Track upstream
+      # adoption of `--proxy-mode=nftables` for a longer-term path.
+      update-alternatives --set iptables /usr/sbin/iptables-legacy
+      update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
       modprobe overlay
       modprobe br_netfilter
       printf 'overlay\nbr_netfilter\n' > /etc/modules-load.d/k8s.conf
