@@ -222,6 +222,9 @@ write_files:
     content: |
       #!/bin/bash
       set -euo pipefail
+      exec >> /var/log/install-k8s.log 2>&1
+      set -x
+      date
       # Debian generic cloud doesn't ship gnupg / apt-transport-https.
       apt-get update
       apt-get install -y --no-install-recommends ca-certificates curl apt-transport-https
@@ -280,11 +283,24 @@ write_files:
       # token TTL). Also publishes /etc/kubernetes/cert-key into
       # extra.cert_key when present (HA bootstrap CP).
       set -uo pipefail
-      log() { logger -t kubeadm-token-refresh "$*"; }
-      JOIN_CMD=$(KUBECONFIG=/etc/kubernetes/admin.conf kubeadm token create --print-join-command --ttl 24h 2>/dev/null) || {
-        log "kubeadm token create failed; will retry on next timer fire"
+      # Diagnostic trail: when the script fails, we need to know which step.
+      # /var/log/publish-join.log is on disk; we virt-cat it from outside
+      # the running VM. set -x dumps every command + expansion.
+      exec >> /var/log/publish-join.log 2>&1
+      set -x
+      date
+      log() { logger -t kubeadm-token-refresh "$*"; echo "[$(date -Iseconds)] $*"; }
+
+      # Capture kubeadm-token-create stderr (was being swallowed with 2>/dev/null).
+      log "running kubeadm token create"
+      if ! JOIN_CMD=$(KUBECONFIG=/etc/kubernetes/admin.conf kubeadm token create --print-join-command --ttl 24h 2>/tmp/kubeadm-token.err); then
+        log "kubeadm token create FAILED (rc=$?); err:"
+        cat /tmp/kubeadm-token.err
+        log "check /etc/kubernetes/admin.conf exists + kubeadm init succeeded"
+        ls -la /etc/kubernetes/ 2>&1 || true
         exit 1
-      }
+      fi
+      log "kubeadm token create OK: ${JOIN_CMD:0:80}..."
 
       # Escape join command and (optional) cert-key into JSON-Patch ops.
       ESCAPED_JOIN=${JOIN_CMD//\"/\\\"}
@@ -297,22 +313,30 @@ write_files:
 
       KEYSTONE_URL="{{ .Values.ironicAuth.authUrl }}"
       IRONIC_URL="{{ .Values.ironicAuth.ironicUrl }}"
+      NODE_UUID="{{ include "kubernetes-cluster.bootstrapNodeUuid" . }}"
       AUTH_BODY='{"auth":{"identity":{"methods":["password"],"password":{"user":{"name":"{{ .Values.ironicAuth.username }}","password":"{{ .Values.ironicAuth.password }}","domain":{"name":"{{ .Values.ironicAuth.userDomain }}"}}}},"scope":{"system":{"all":true}}}}'
+      log "config: keystone=$KEYSTONE_URL ironic=$IRONIC_URL node=$NODE_UUID"
 
       for attempt in 1 2 3 4 5; do
-        TOKEN=$(curl -sS -i -H "Content-Type: application/json" -d "$AUTH_BODY" "${KEYSTONE_URL}/v3/auth/tokens" | grep -i '^X-Subject-Token:' | awk '{print $2}' | tr -d '\r')
+        log "attempt $attempt: requesting Keystone token"
+        KEYSTONE_OUT=$(curl -sS -i --max-time 15 -H "Content-Type: application/json" -d "$AUTH_BODY" "${KEYSTONE_URL}/v3/auth/tokens" 2>&1)
+        echo "--- keystone response (attempt $attempt) ---"
+        echo "$KEYSTONE_OUT" | head -30
+        TOKEN=$(echo "$KEYSTONE_OUT" | grep -i '^X-Subject-Token:' | awk '{print $2}' | tr -d '\r')
         if [ -z "$TOKEN" ]; then
           log "keystone auth failed (attempt ${attempt}); retrying in $((attempt * 10))s"
           sleep $((attempt * 10))
           continue
         fi
-        if curl -fsSL \
+        log "got token (len=${#TOKEN})"
+        log "attempt $attempt: PATCH Ironic /v1/nodes/${NODE_UUID}/extra"
+        if curl -fsSL --max-time 15 \
           -H "X-Auth-Token: ${TOKEN}" \
           -H "X-OpenStack-Ironic-API-Version: 1.109" \
           -H "Content-Type: application/json-patch+json" \
           --request PATCH \
           --data "$PATCH" \
-          "${IRONIC_URL}/v1/nodes/{{ include "kubernetes-cluster.bootstrapNodeUuid" . }}" > /tmp/publish-join.out 2>&1; then
+          "${IRONIC_URL}/v1/nodes/${NODE_UUID}" > /tmp/publish-join.out 2>&1; then
           log "join command published to Ironic (attempt ${attempt})"
           exit 0
         fi
@@ -374,6 +398,9 @@ write_files:
     content: |
       #!/bin/bash
       set -euo pipefail
+      exec >> /var/log/install-k8s.log 2>&1
+      set -x
+      date
       # Debian generic cloud doesn't ship gnupg / apt-transport-https.
       apt-get update
       apt-get install -y --no-install-recommends ca-certificates curl apt-transport-https
