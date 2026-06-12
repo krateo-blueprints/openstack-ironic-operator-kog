@@ -21,6 +21,13 @@
 {{- $bootstrap := dict -}}
 {{- if gt (len $cps) 0 -}}{{- $bootstrap = index $cps 0 -}}{{- end -}}
 {{- $caBundle := include "kubernetes-cluster.mgmtCaBundle" . -}}
+{{- /* Milestone 5a (k8s upgrade by-reimage): when the operator pins
+       controlPlane.upgrade.targetNode to this CP, flip render to
+       spec.undeploy: true. After Ironic walks back to available, the
+       operator clears upgrade.targetNode and the chart redeploys with
+       the new .Values.k8sVersion baked into cloud-init. */}}
+{{- $upgradeTarget := dig "upgrade" "targetNode" "" (default (dict) .Values.controlPlane) -}}
+{{- $undeployForUpgrade := and $upgradeTarget (eq $upgradeTarget $bootstrap.nodeName) -}}
 {{- if and $bootstrap.nodeName $caBundle -}}
 ---
 apiVersion: {{ include "kubernetes-cluster.lifecycleApiVersion" . }}
@@ -54,6 +61,10 @@ spec:
   online: true
   image:
     {{- include "kubernetes-cluster.image" . | nindent 4 }}
+  {{- if $undeployForUpgrade }}
+  undeploy: true
+  undeployMode: full
+  {{- else }}
   configDrive:
     metaData:
       hostname: {{ $bootstrap.nodeName | quote }}
@@ -62,6 +73,7 @@ spec:
       cluster: {{ .Values.clusterName | quote }}
     userData: |
       {{- include "kubernetes-cluster.cpUserData" . | nindent 6 }}
+  {{- end }}
   configurationRef:
     {{- toYaml .Values.configurationRef | nindent 4 }}
 {{- end }}

@@ -91,6 +91,33 @@
             "driver_info": {"type": ["object", "null"]},
             "ports":       {"type": ["array", "null"]}
           }
+        },
+        "upgrade": {
+          "type": ["object", "null"],
+          "description": "Milestone 5a day-2 lever for k8s upgrade by-reimage. Pin one CP nodeName at a time to drive it through undeploy -> redeploy.",
+          "properties": {
+            "targetNode": {"type": ["string", "null"]}
+          }
+        },
+        "recovery": {
+          "type": ["object", "null"],
+          "description": "Milestone 5c day-2 lever for failed CP recovery.",
+          "properties": {
+            "failedNodes": {
+              "type": ["array", "null"],
+              "items": {
+                "type": "object",
+                "properties": {
+                  "nodeName":     {"type": ["string", "null"]},
+                  "nodeUuid":     {"type": ["string", "null"]},
+                  "driver":       {"type": ["string", "null"]},
+                  "driver_info":  {"type": ["object", "null"]},
+                  "ports":        {"type": ["array", "null"]},
+                  "undeployMode": {"type": ["string", "null"], "enum": [null, "full", "none"]}
+                }
+              }
+            }
+          }
         }
       }
     },

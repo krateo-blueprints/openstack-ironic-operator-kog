@@ -787,6 +787,152 @@ was mid-deploy when the key expired, drive it through `spec.undeploy:
 true` → re-deploy (the v0.3.4 widened gate handles all the stuck
 states the failed join leaves).
 
+## k8s upgrade by-reimage
+
+Cloud-init only runs at first boot — there's no way for the chart to
+in-place upgrade a deployed node. Upgrade-by-reimage uses
+`baremetal-host`'s widened `spec.undeploy: true` gate (v0.3.4) to walk
+each CP/worker through `available` and back through deploy with new
+cloud-init carrying the bumped version.
+
+### Recipe (CP-by-CP, one at a time)
+
+From the kubeadm docs:
+
+> *"The upgrade workflow at high level is the following: 1. Upgrade a
+> primary control plane node. 2. Upgrade additional control plane nodes.
+> 3. Upgrade worker nodes."*
+
+> *"The upgrade procedure on control plane nodes should be executed one
+> node at a time."*
+
+```bash
+# 1. Bump the cluster's target version.
+kubectl patch kubernetescluster ettore --type=merge \
+  -p '{"spec":{"k8sVersion":"v1.31.5"}}'
+
+# 2. Pin the first CP for upgrade. The chart re-renders its
+#    BaremetalHost with spec.undeploy: true.
+kubectl patch kubernetescluster ettore --type=merge \
+  -p '{"spec":{"controlPlane":{"upgrade":{"targetNode":"blade06"}}}}'
+
+# 3. Wait for Ironic to walk the blade to available.
+watch "kubectl -n openstack get node.baremetal.ogen.krateo.io blade06 \
+  -o jsonpath='{.status.provision_state}'"
+# -> available
+
+# 4. Clear the upgrade target. The chart re-renders the BH for deploy,
+#    cloud-init runs with the new k8sVersion baked in.
+kubectl patch kubernetescluster ettore --type=merge \
+  -p '{"spec":{"controlPlane":{"upgrade":{"targetNode":""}}}}'
+
+# 5. Wait for the BH back at active and the node Ready in the workload
+#    cluster. Then move to the next CP.
+```
+
+### Worker upgrade
+
+Workers use the same model, via `workers.removed[]`: move the worker to
+`removed`, drain Job runs, undeploy walks it to `available`, then move
+back into `workers.nodes[]` so the chart redeploys with the new
+`k8sVersion`.
+
+### Caveats
+
+- **Single-CP clusters lose etcd state** every upgrade. Use HA
+  (3 CPs) to keep etcd up across CP reimages.
+- **Skew rule**: kubelet may lag apiserver by 3 minor versions. The
+  runbook enforces CP-before-worker ordering implicitly because workers'
+  cloud-init pulls the new version only on their own
+  undeploy/redeploy cycle.
+- **CNI re-init**: the bootstrap CP also re-applies the CNI manifest on
+  every fresh deploy (`KUBECONFIG=admin.conf kubectl apply -f
+  flannel.yaml`). Don't `spec.cni.manifestUrl`-version-lock to something
+  that disagrees with the new kubelet's CNI API.
+
+## Recovering a failed control plane
+
+Single-CP recovery means data loss (no etcd backup, no replicas to
+copy from). Don't run single-CP in production; use the HA shape from
+the previous section. For HA, the recovery flow leans on the v0.3.4
+widened `spec.undeploy: true` gate (covers `deploy failed`,
+`wait call-back`, `clean failed`, `deploying`).
+
+### Pre-flight: etcd member remove (manual)
+
+This MUST run before moving the entry into `recovery.failedNodes[]` —
+otherwise the rejoin will fail with "member already exists". From a
+healthy CP:
+
+```bash
+# inside any healthy CP container
+ETCDCTL_API=3 etcdctl --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/server.crt \
+  --key=/etc/kubernetes/pki/etcd/server.key \
+  member list
+
+# Find the member ID for the failed CP. Then:
+ETCDCTL_API=3 etcdctl member remove <member-id>
+```
+
+From the etcd docs:
+
+> *"Suppose the member ID to remove is a8266ecf031671f3. Use the `remove`
+> command to perform the removal: `etcdctl member remove a8266ecf031671f3`."*
+
+### Drive the BH through undeploy
+
+```bash
+# Move the failed CP entry from .nodes[] into .recovery.failedNodes[]
+kubectl patch kubernetescluster ettore --type=json -p '[
+  {"op":"remove","path":"/spec/controlPlane/nodes/2"},
+  {"op":"add","path":"/spec/controlPlane/recovery/failedNodes","value":[{
+    "nodeName":"blade08",
+    "driver":"redfish",
+    "driver_info":{"redfish_address":"http://172.19.74.11:8000"}
+  }]}
+]'
+
+# Chart renders the BH with spec.undeploy: true. Watch:
+kubectl -n openstack get node.baremetal.ogen.krateo.io blade08 \
+  -o jsonpath='{.status.provision_state}'
+# active -> deleted -> cleaning -> available
+```
+
+### Rejoin as a replica
+
+```bash
+# Move the entry back into .nodes[] at a REPLICA index (not 0 — the
+# bootstrap CP is still bootstrap; recovered nodes always rejoin as
+# replicas via --control-plane --certificate-key).
+kubectl patch kubernetescluster ettore --type=json -p '[
+  {"op":"replace","path":"/spec/controlPlane/recovery/failedNodes","value":[]},
+  {"op":"add","path":"/spec/controlPlane/nodes/-","value":{
+    "nodeName":"blade08",
+    "driver":"redfish",
+    "driver_info":{...},
+    "ports":[...]
+  }}
+]'
+```
+
+The chart's `lifecycle-cp-replicas.yaml` template renders a BH that
+runs `kubeadm join --control-plane --certificate-key <key>`. If
+cert-key TTL (2h) has expired since the bootstrap CP's last upload,
+rotate it (see "HA control plane" → "The 2-hour cert-key TTL" above).
+
+### Manual cert distribution alternative
+
+From kubeadm HA docs:
+
+> *"If instead, you prefer to copy certs across control-plane nodes
+> manually or using automation tools, please remove this flag and
+> refer to Manual certificate distribution section below."*
+
+The chart sticks with `--upload-certs` for simplicity; manual cert
+distribution would require a chart fork or out-of-band copy step.
+
 ## Deploying on the Ettore lab (real bare-metal recipe)
 
 A turn-key manifest for the Ettore lab lives at

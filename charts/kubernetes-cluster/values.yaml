@@ -65,6 +65,16 @@ network:
 #                --certificate-key, gated on Node.spec.extra.cert_key).
 #  - .node     — legacy single-CP shape, kept for back-compat. Ignored
 #                when .nodes[] is populated.
+#
+# Day-2 levers (Milestones 5a, 5c):
+#  - .upgrade.targetNode      — one CP at a time, drives it through
+#                                undeploy -> redeploy to pick up new
+#                                .Values.k8sVersion (USER-GUIDE.md
+#                                "k8s upgrade by-reimage").
+#  - .recovery.failedNodes[]  — recover a failed CP. Each entry gets
+#                                rendered with spec.undeploy: true; once
+#                                Ironic walks to available, move the
+#                                entry back into .nodes[] for re-join.
 controlPlane:
   # Stable address kubeadm advertises as the cluster's apiserver. Empty
   # for single-CP (kubeadm uses the node's primary IP). REQUIRED for HA
@@ -91,6 +101,19 @@ controlPlane:
     driver: redfish
     driver_info:
     ports:
+  # Day-2 — rolling k8s upgrade (Milestone 5a). Set this to one CP
+  # nodeName at a time to drive it through undeploy -> redeploy so it
+  # picks up a new .Values.k8sVersion. Clear (or move to the next node)
+  # once Ironic reports the BH back at active.
+  upgrade:
+    targetNode:
+  # Day-2 — failed CP recovery (Milestone 5c). Move an entry from
+  # .nodes[] to here when a CP is stuck in deploy failed / wait call-back
+  # / etc. Chart renders the BH with spec.undeploy: true; once available,
+  # move the entry back into .nodes[] (as a replica index, not 0) and
+  # the chart re-renders as a join.
+  recovery:
+    failedNodes:
 
 # Workers — N of them. Each becomes one BaremetalHost CR with
 # kubeadm-join userData, gated on the CP's spec.extra.kubeadm_join.
