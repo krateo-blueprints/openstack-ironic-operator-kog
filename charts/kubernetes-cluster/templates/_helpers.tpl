@@ -216,6 +216,16 @@ services:
      `kubernetes-cluster.cpToken` pulls the token via lookup. */}}
 {{- define "kubernetes-cluster.cpUserData" -}}
 #cloud-config
+ssh_pwauth: true
+chpasswd:
+  expire: false
+users:
+  - name: ironic
+    plain_text_passwd: baremetal
+    lock-passwd: false
+    shell: /bin/bash
+    sudo:
+      - "ALL=(ALL) NOPASSWD:ALL"
 write_files:
   - path: /etc/kubernetes/install-k8s.sh
     permissions: "0755"
@@ -366,6 +376,16 @@ runcmd:
 {{- define "kubernetes-cluster.workerUserData" -}}
 {{- $jc := include "kubernetes-cluster.joinCommand" . -}}
 #cloud-config
+ssh_pwauth: true
+chpasswd:
+  expire: false
+users:
+  - name: ironic
+    plain_text_passwd: baremetal
+    lock-passwd: false
+    shell: /bin/bash
+    sudo:
+      - "ALL=(ALL) NOPASSWD:ALL"
 write_files:
   - path: /etc/kubernetes/install-k8s.sh
     permissions: "0755"
@@ -392,6 +412,16 @@ runcmd:
 {{- $jc := include "kubernetes-cluster.joinCommand" . -}}
 {{- $ck := include "kubernetes-cluster.certKey"     . -}}
 #cloud-config
+ssh_pwauth: true
+chpasswd:
+  expire: false
+users:
+  - name: ironic
+    plain_text_passwd: baremetal
+    lock-passwd: false
+    shell: /bin/bash
+    sudo:
+      - "ALL=(ALL) NOPASSWD:ALL"
 write_files:
   - path: /etc/kubernetes/install-k8s.sh
     permissions: "0755"
