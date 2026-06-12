@@ -254,7 +254,13 @@ write_files:
       # never gets a sandbox. Override before starting containerd.
       mkdir -p /etc/containerd
       containerd config default | sed 's|/usr/lib/cni|/opt/cni/bin|g' > /etc/containerd/config.toml
-      systemctl enable --now containerd
+      # systemctl enable --now doesn't restart a unit that's already
+      # running; Debian's containerd apt-package enables+starts on
+      # install, so without an explicit restart the new config.toml is
+      # ignored and kubelet errors with `failed to find plugin "flannel"
+      # in path [/usr/lib/cni]`.
+      systemctl enable containerd
+      systemctl restart containerd
       # Debian 13 trixie's default iptables alternative is iptables-nft. With
       # the bundled kube-proxy (v1.31, iptables mode), the proxy exits with
       # code 2 right after caches sync — no error logged, no kernel panic.
@@ -430,7 +436,13 @@ write_files:
       # never gets a sandbox. Override before starting containerd.
       mkdir -p /etc/containerd
       containerd config default | sed 's|/usr/lib/cni|/opt/cni/bin|g' > /etc/containerd/config.toml
-      systemctl enable --now containerd
+      # systemctl enable --now doesn't restart a unit that's already
+      # running; Debian's containerd apt-package enables+starts on
+      # install, so without an explicit restart the new config.toml is
+      # ignored and kubelet errors with `failed to find plugin "flannel"
+      # in path [/usr/lib/cni]`.
+      systemctl enable containerd
+      systemctl restart containerd
       # Debian 13 trixie's default iptables alternative is iptables-nft. With
       # the bundled kube-proxy (v1.31, iptables mode), the proxy exits with
       # code 2 right after caches sync — no error logged, no kernel panic.
@@ -495,7 +507,13 @@ write_files:
       # never gets a sandbox. Override before starting containerd.
       mkdir -p /etc/containerd
       containerd config default | sed 's|/usr/lib/cni|/opt/cni/bin|g' > /etc/containerd/config.toml
-      systemctl enable --now containerd
+      # systemctl enable --now doesn't restart a unit that's already
+      # running; Debian's containerd apt-package enables+starts on
+      # install, so without an explicit restart the new config.toml is
+      # ignored and kubelet errors with `failed to find plugin "flannel"
+      # in path [/usr/lib/cni]`.
+      systemctl enable containerd
+      systemctl restart containerd
       # Debian 13 trixie's default iptables alternative is iptables-nft. With
       # the bundled kube-proxy (v1.31, iptables mode), the proxy exits with
       # code 2 right after caches sync — no error logged, no kernel panic.
