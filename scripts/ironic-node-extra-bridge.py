@@ -64,18 +64,33 @@ def k8s_request(method, path, body=None):
 
 
 def ironic_get_node(uuid):
-    req = urllib.request.Request(
-        f"{IRONIC_URL}/v1/nodes/{uuid}",
-        headers={"X-OpenStack-Ironic-API-Version": IRONIC_VER},
-    )
-    with urllib.request.urlopen(req, timeout=10) as r:
-        return json.loads(r.read())
+    # The keystone-ironic-proxy in the same pod sometimes drops the next
+    # request when called back-to-back during a tight reconcile loop —
+    # appears as ECONNREFUSED or timeout. One quick retry + a small
+    # inter-request sleep absorbs that without changing reconcile cadence.
+    last = None
+    for attempt in range(3):
+        try:
+            req = urllib.request.Request(
+                f"{IRONIC_URL}/v1/nodes/{uuid}",
+                headers={"X-OpenStack-Ironic-API-Version": IRONIC_VER},
+            )
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return json.loads(r.read())
+        except urllib.error.HTTPError:
+            raise
+        except Exception as e:
+            last = e
+            time.sleep(0.5)
+    raise last if last else RuntimeError("ironic_get_node failed")
 
 
 def reconcile_once(namespace):
     body = k8s_request("GET", f"/apis/{KOG_API}/namespaces/{namespace}/nodes")
     nodes = json.loads(body).get("items", [])
-    for n in nodes:
+    for idx, n in enumerate(nodes):
+        if idx > 0:
+            time.sleep(0.2)  # pace requests to the keystone-ironic-proxy
         name = n["metadata"]["name"]
         uuid = (n.get("spec") or {}).get("uuid")
         if not uuid:
