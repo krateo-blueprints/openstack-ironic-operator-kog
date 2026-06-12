@@ -24,7 +24,7 @@ lifecycleNamespace:
 
 # Ironic auth — same shape as BaremetalLifecycle.
 configurationRef:
-  name: ironic-config
+  name: ironic-endpoint
   namespace: openstack
 
 ironicApiUrl: http://ironic.openstack.svc.cluster.local:6385
