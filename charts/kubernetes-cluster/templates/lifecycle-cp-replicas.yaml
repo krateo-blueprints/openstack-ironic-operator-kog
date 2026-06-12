@@ -1,0 +1,75 @@
+# Render REPLICA control-plane BaremetalHost CRs (HA).
+#
+# Replica CPs join the cluster bootstrapped by index-0 (lifecycle-cp.yaml).
+# The FSM gate is the live presence of BOTH:
+#   - kubeadm_join command on the bootstrap CP's Node.spec.extra (token
+#     can be minted by any healthy CP; we just need a non-empty one)
+#   - cert_key on the bootstrap CP's Node.spec.extra (uploaded once via
+#     `kubeadm init --upload-certs --certificate-key=$KEY`)
+#
+# When either lookup is empty -> nothing renders here, cdc retries on
+# next reconcile. When both resolve, one BH is rendered per replica
+# (indices 1..N-1 of controlPlane.nodes[]).
+#
+# Cert-key TTL is 2h (kubeadm hard-coded). If replicas stall in Ironic
+# for >2h after bootstrap CP published, re-upload from any healthy CP:
+#   kubeadm init phase upload-certs --upload-certs \
+#     --certificate-key=$(read from bootstrap CP Node.spec.extra.cert_key)
+# Then patch the bootstrap CP's Node.spec.extra.cert_key with the same
+# (or a fresh) key so the next chart render picks it up.
+{{- $cps := fromYamlArray (include "kubernetes-cluster.cpNodes" .) -}}
+{{- $jc  := include "kubernetes-cluster.joinCommand" . -}}
+{{- $ck  := include "kubernetes-cluster.certKey"     . -}}
+{{- if and (gt (len $cps) 1) $jc $ck -}}
+{{- $caBundle := include "kubernetes-cluster.mgmtCaBundle" . -}}
+{{- if $caBundle -}}
+{{- $lcNs := include "kubernetes-cluster.lifecycleNamespace" . -}}
+{{- $cluster := .Values.clusterName -}}
+{{- range $idx, $cp := $cps }}
+{{- if gt $idx 0 }}
+---
+apiVersion: {{ include "kubernetes-cluster.lifecycleApiVersion" $ }}
+kind: {{ include "kubernetes-cluster.lifecycleKind" $ }}
+metadata:
+  name: {{ printf "%s-cp-%s" $cluster $cp.nodeName | quote }}
+  namespace: {{ $lcNs | quote }}
+  labels:
+    kubernetescluster.ogen.krateo.io/cluster: {{ $cluster | quote }}
+    kubernetescluster.ogen.krateo.io/role: control-plane
+    kubernetescluster.ogen.krateo.io/cp-role: replica
+spec:
+  nodeName: {{ $cp.nodeName | quote }}
+  nodeNamespace: {{ $lcNs | quote }}
+  {{- with $cp.nodeUuid }}
+  nodeUuid: {{ . | quote }}
+  {{- end }}
+  {{- with $cp.parentNode }}
+  parentNode: {{ . | quote }}
+  {{- end }}
+  driver: {{ $cp.driver | quote }}
+  {{- with $cp.driver_info }}
+  driver_info:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $cp.ports }}
+  ports:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  enableInspection: false
+  online: true
+  image:
+    {{- include "kubernetes-cluster.image" $ | nindent 4 }}
+  configDrive:
+    metaData:
+      hostname: {{ $cp.nodeName | quote }}
+      role: control-plane
+      cp-role: replica
+      cluster: {{ $cluster | quote }}
+    userData: |
+      {{- include "kubernetes-cluster.cpReplicaUserData" $ | nindent 6 }}
+  configurationRef:
+    {{- toYaml $.Values.configurationRef | nindent 4 }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

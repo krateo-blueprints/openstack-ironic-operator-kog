@@ -10,6 +10,9 @@
 {{- $saNs   := $mc.serviceAccountNamespace | default .Release.Namespace -}}
 {{- $cpName := include "kubernetes-cluster.cpNodeName" . -}}
 {{- $lcNs   := include "kubernetes-cluster.lifecycleNamespace" . -}}
+{{- $cps    := fromYamlArray (include "kubernetes-cluster.cpNodes" .) -}}
+{{- $cpNames := list -}}
+{{- range $cp := $cps }}{{- $cpNames = append $cpNames $cp.nodeName -}}{{- end -}}
 {{- if $cpName -}}
 ---
 apiVersion: v1
@@ -31,8 +34,15 @@ rules:
       - baremetal.ogen.krateo.io
     resources:
       - nodes
+    # All CPs in controlPlane.nodes[] are granted patch on their own Node
+    # CR's spec.extra (kubeadm_join, and for HA also cert_key). Bootstrap
+    # CP needs this in the normal path; replicas need it for cert-key
+    # rotation if the 2h TTL expires (any healthy CP can re-upload via
+    # `kubeadm init phase upload-certs` and republish).
     resourceNames:
-      - {{ $cpName | quote }}
+      {{- range $n := $cpNames }}
+      - {{ $n | quote }}
+      {{- end }}
     verbs:
       - get
       - patch
