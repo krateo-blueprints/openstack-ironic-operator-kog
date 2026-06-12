@@ -78,7 +78,7 @@ spec:
         app: wg-ironic-proxy
       annotations:
         # bumps with the bridge script so the pod rolls when the script changes
-        kubernetescluster.ogen.krateo.io/bridge-revision: "1"
+        kubernetescluster.ogen.krateo.io/bridge-revision: "2"
     spec:
       serviceAccountName: wg-ironic-proxy
       containers:
