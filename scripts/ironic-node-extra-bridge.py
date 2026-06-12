@@ -85,6 +85,29 @@ def ironic_get_node(uuid):
     raise last if last else RuntimeError("ironic_get_node failed")
 
 
+# Ironic provision states during which a published kubeadm_join can be
+# trusted to belong to the CURRENT deploy. Outside these, the value is
+# stale data left over from a previous run — Ironic preserves node.extra
+# across undeploys — and propagating it lets the worker render gate open
+# on a CA hash that no longer matches the (next) bootstrap CP.
+ACTIVE_LIKE_STATES = {"active", "deploying", "wait call-back"}
+
+
+def ironic_patch_node(uuid, ops):
+    body = json.dumps(ops).encode()
+    req = urllib.request.Request(
+        f"{IRONIC_URL}/v1/nodes/{uuid}",
+        method="PATCH",
+        headers={
+            "X-OpenStack-Ironic-API-Version": IRONIC_VER,
+            "Content-Type": "application/json-patch+json",
+        },
+        data=body,
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return r.read()
+
+
 def reconcile_once(namespace):
     body = k8s_request("GET", f"/apis/{KOG_API}/namespaces/{namespace}/nodes")
     nodes = json.loads(body).get("items", [])
@@ -107,9 +130,39 @@ def reconcile_once(namespace):
 
         ir_extra = ir.get("extra") or {}
         cr_extra = ((n.get("spec") or {}).get("extra")) or {}
+        ir_state = ir.get("provision_state", "")
 
-        # Are any of the bridge-managed keys present in Ironic but
-        # missing/different in the CR?
+        if ir_state not in ACTIVE_LIKE_STATES:
+            # Between deploys: clear stale managed keys from BOTH sides so
+            # the next deploy's publish-join.sh starts from a clean slate
+            # and the chart's joinCommand lookup gate stays closed until
+            # the FRESH PATCH lands.
+            ironic_to_clear = [k for k in EXTRA_KEYS if k in ir_extra]
+            if ironic_to_clear:
+                try:
+                    ironic_patch_node(
+                        uuid,
+                        [{"op": "remove", "path": f"/extra/{k}"} for k in ironic_to_clear],
+                    )
+                    log(f"cleared Ironic.extra keys {ironic_to_clear} on {name} (state={ir_state})")
+                except Exception as e:
+                    log(f"clear Ironic.extra {name}: {e}")
+            cr_to_clear = [k for k in EXTRA_KEYS if k in cr_extra]
+            if cr_to_clear:
+                merged = {k: v for k, v in cr_extra.items() if k not in cr_to_clear}
+                patch = json.dumps({"spec": {"extra": merged}}).encode()
+                try:
+                    k8s_request(
+                        "PATCH",
+                        f"/apis/{KOG_API}/namespaces/{namespace}/nodes/{name}",
+                        body=patch,
+                    )
+                    log(f"cleared CR.spec.extra keys {cr_to_clear} on {name}")
+                except Exception as e:
+                    log(f"clear CR.spec.extra {name}: {e}")
+            continue
+
+        # Active-like state: mirror Ironic.extra -> CR.spec.extra.
         deltas = {}
         for k in EXTRA_KEYS:
             ir_v = ir_extra.get(k)
