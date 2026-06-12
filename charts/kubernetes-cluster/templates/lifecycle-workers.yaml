@@ -55,6 +55,11 @@ spec:
       cluster: {{ $cluster | quote }}
     userData: |
       {{- include "kubernetes-cluster.workerUserData" $ | nindent 6 }}
+    {{- $nd := include "kubernetes-cluster.networkData" (dict "node" $w) }}
+    {{- if $nd }}
+    networkData:
+      {{- $nd | nindent 6 }}
+    {{- end }}
   configurationRef:
     {{- toYaml $.Values.configurationRef | nindent 4 }}
 {{- end }}
