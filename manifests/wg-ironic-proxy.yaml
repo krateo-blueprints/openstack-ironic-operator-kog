@@ -139,12 +139,11 @@ spec:
                 - NET_ADMIN
           env:
             - name: OS_CLOUD
-              # Project-scoped admin works for both node:create AND port:create when the
-              # microversion is recent enough (1.109+) — Ironic's RBAC matches the calling
-              # project against the node's `owner` field, so a project admin can create ports
-              # on nodes their own project owns. (Earlier tests at 1.99 returned 403 and
-              # forced a `system_scope: all` workaround; that's no longer needed.)
-              value: "ironic"
+              # Reverted to system-scoped (`ironic-system` in clouds.yaml) — the project-
+              # scoped path returned 403 on POST /v1/ports for fresh Nodes whose owner field
+              # wasn't yet set, breaking the kubernetes-cluster blueprint's deploy walk.
+              # See reference_ironic-system-scope-clouds memory for the policy detail.
+              value: "ironic-system"
             - name: OS_CLIENT_CONFIG_FILE
               value: /etc/openstack/clouds.yaml
             - name: OS_INTERFACE
