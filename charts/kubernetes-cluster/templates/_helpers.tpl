@@ -247,6 +247,13 @@ write_files:
       apt-get update
       apt-get install -y kubelet={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubeadm={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubectl={{ trimPrefix "v" .Values.k8sVersion }}-1.1 containerd
       apt-mark hold kubelet kubeadm kubectl
+      # Debian 13 trixie's containerd ships with bin_dir = "/usr/lib/cni" by
+      # default. Flannel's install-cni-plugin initContainer (and kubeadm)
+      # drop CNI binaries at /opt/cni/bin instead, so kubelet errors with
+      # `failed to find plugin "flannel" in path [/usr/lib/cni]` and coredns
+      # never gets a sandbox. Override before starting containerd.
+      mkdir -p /etc/containerd
+      containerd config default | sed 's|/usr/lib/cni|/opt/cni/bin|g' > /etc/containerd/config.toml
       systemctl enable --now containerd
       # Debian 13 trixie's default iptables alternative is iptables-nft. With
       # the bundled kube-proxy (v1.31, iptables mode), the proxy exits with
@@ -416,6 +423,13 @@ write_files:
       apt-get update
       apt-get install -y kubelet={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubeadm={{ trimPrefix "v" .Values.k8sVersion }}-1.1 containerd
       apt-mark hold kubelet kubeadm
+      # Debian 13 trixie's containerd ships with bin_dir = "/usr/lib/cni" by
+      # default. Flannel's install-cni-plugin initContainer (and kubeadm)
+      # drop CNI binaries at /opt/cni/bin instead, so kubelet errors with
+      # `failed to find plugin "flannel" in path [/usr/lib/cni]` and coredns
+      # never gets a sandbox. Override before starting containerd.
+      mkdir -p /etc/containerd
+      containerd config default | sed 's|/usr/lib/cni|/opt/cni/bin|g' > /etc/containerd/config.toml
       systemctl enable --now containerd
       # Debian 13 trixie's default iptables alternative is iptables-nft. With
       # the bundled kube-proxy (v1.31, iptables mode), the proxy exits with
@@ -474,6 +488,13 @@ write_files:
       apt-get update
       apt-get install -y kubelet={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubeadm={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubectl={{ trimPrefix "v" .Values.k8sVersion }}-1.1 containerd
       apt-mark hold kubelet kubeadm kubectl
+      # Debian 13 trixie's containerd ships with bin_dir = "/usr/lib/cni" by
+      # default. Flannel's install-cni-plugin initContainer (and kubeadm)
+      # drop CNI binaries at /opt/cni/bin instead, so kubelet errors with
+      # `failed to find plugin "flannel" in path [/usr/lib/cni]` and coredns
+      # never gets a sandbox. Override before starting containerd.
+      mkdir -p /etc/containerd
+      containerd config default | sed 's|/usr/lib/cni|/opt/cni/bin|g' > /etc/containerd/config.toml
       systemctl enable --now containerd
       # Debian 13 trixie's default iptables alternative is iptables-nft. With
       # the bundled kube-proxy (v1.31, iptables mode), the proxy exits with
