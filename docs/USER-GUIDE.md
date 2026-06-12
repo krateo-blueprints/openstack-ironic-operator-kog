@@ -943,11 +943,28 @@ baremetalhost-blade10-inspect-fail.yaml fixtures.
 
 ### Pre-deploy
 
-1. **Pick the management API reachability** (`external-lb` / `metallb`
-   / `kube-vip` / `nodeport-dns`) and set `spec.managementCluster.apiUrl`
-   to the matching address the blades can actually reach. The
-   placeholder in the manifest assumes `nodeport-dns` on the lab
-   gateway (`172.19.74.1:30443`); replace with the real value.
+1. **The management apiserver is reached via the wg-ironic-proxy pod.**
+   That pod's wireguard interface holds `198.51.100.5` (from
+   `local/wireguard/ironic-lab.conf`), and the lab's `AllowedIPs` route
+   `198.51.100.0/28` through the tunnel. A `kubectl proxy` sidecar
+   (`mgmt-api-proxy` container in `wg-ironic-proxy`, added by the
+   wg-ironic-proxy manifest) binds on `198.51.100.5:8443` and forwards
+   to the in-cluster apiserver using its own scoped ServiceAccount
+   (RBAC: patch `nodes.baremetal.ogen.krateo.io`, create+get Secrets
+   in `openstack`).
+
+   The Ettore manifest's `spec.managementCluster.apiUrl` is
+   `http://198.51.100.5:8443` — plain HTTP, because the kubectl-proxy
+   sidecar terminates auth at the cluster edge with its SA token. The
+   blade's publish-join.sh sends an Authorization header from the
+   chart-rendered SA token; the proxy replaces it with its own. CA
+   bundle isn't needed for the http path (chart gate honors http
+   without CA).
+
+   If you want to point at a different address (real LB / NodePort /
+   etc.), change `spec.managementCluster.apiUrl` and pick the matching
+   `spec.network.managementApiReachability` option from the matrix
+   above.
 
 2. **Delete the existing BHs that fight on `nodeName`.** The chart's
    BHs are named `ettore-cp-blade06` and `ettore-worker-blade10`, but

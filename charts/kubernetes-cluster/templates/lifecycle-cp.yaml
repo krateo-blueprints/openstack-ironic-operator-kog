@@ -21,6 +21,10 @@
 {{- $bootstrap := dict -}}
 {{- if gt (len $cps) 0 -}}{{- $bootstrap = index $cps 0 -}}{{- end -}}
 {{- $caBundle := include "kubernetes-cluster.mgmtCaBundle" . -}}
+{{/* When managementCluster.apiUrl is http://, no CA bundle is needed
+     (typical for the lab path through wg-ironic-proxy's mgmt-api-proxy
+     kubectl-proxy sidecar). Pass the gate so the CP renders. */}}
+{{- $isHttp := hasPrefix "http://" (default "" (default (dict) .Values.managementCluster).apiUrl) -}}
 {{- /* Milestone 5a (k8s upgrade by-reimage): when the operator pins
        controlPlane.upgrade.targetNode to this CP, flip render to
        spec.undeploy: true. After Ironic walks back to available, the
@@ -28,7 +32,7 @@
        the new .Values.k8sVersion baked into cloud-init. */}}
 {{- $upgradeTarget := dig "upgrade" "targetNode" "" (default (dict) .Values.controlPlane) -}}
 {{- $undeployForUpgrade := and $upgradeTarget (eq $upgradeTarget $bootstrap.nodeName) -}}
-{{- if and $bootstrap.nodeName $caBundle -}}
+{{- if and $bootstrap.nodeName (or $caBundle $isHttp) -}}
 ---
 apiVersion: {{ include "kubernetes-cluster.lifecycleApiVersion" . }}
 kind: {{ include "kubernetes-cluster.lifecycleKind" . }}
