@@ -93,6 +93,41 @@ source:   {{ .Values.image.source   | quote }}
 checksum: {{ .Values.image.checksum | quote }}
 {{- end -}}
 
+{{/* networkData generator. Without this, cloud-init only DHCPs the
+     first detected interface — which on the Ettore lab is `enp1s0`
+     bridged to oob0 (BMC network, no internet). The data NIC
+     (`enp2s0`, lan0-bridged with default route to internet) stays
+     DOWN and apt/kubeadm install fails.
+
+     We render one link + DHCP network per port in ports[]. Naming
+     follows the existing fixtures' enp1s0/enp2s0 convention (positional;
+     cloud-init resolves by MAC).
+
+     If the caller passed an explicit networkData, use it verbatim. */}}
+{{- define "kubernetes-cluster.networkData" -}}
+{{- $node := .node -}}
+{{- if $node.networkData -}}
+{{- toYaml $node.networkData -}}
+{{- else if $node.ports -}}
+links:
+{{- range $i, $p := $node.ports }}
+  - id: {{ printf "enp%ds0" (add $i 1) }}
+    type: phy
+    ethernet_mac_address: {{ $p.address | quote }}
+{{- end }}
+networks:
+{{- range $i, $p := $node.ports }}
+  - id: {{ printf "enp%ds0" (add $i 1) }}
+    network_id: {{ printf "enp%ds0" (add $i 1) }}
+    type: ipv4_dhcp
+    link: {{ printf "enp%ds0" (add $i 1) }}
+{{- end }}
+services:
+  - type: dns
+    address: "8.8.8.8"
+{{- end -}}
+{{- end -}}
+
 {{/* Workers explicitly marked for removal in spec.workers.removed[]. */}}
 {{- define "kubernetes-cluster.removedWorkers" -}}
 {{- $workers := default (dict) .Values.workers -}}
@@ -175,6 +210,9 @@ write_files:
     content: |
       #!/bin/bash
       set -euo pipefail
+      # Debian generic cloud doesn't ship gnupg or apt-transport-https.
+      apt-get update
+      apt-get install -y --no-install-recommends gnupg ca-certificates curl apt-transport-https
       curl -fsSL https://pkgs.k8s.io/core:/stable:/{{ regexReplaceAll "^(v[0-9]+\\.[0-9]+).*" .Values.k8sVersion "${1}" }}/deb/Release.key | gpg --dearmor -o /usr/share/keyrings/kubernetes-archive-keyring.gpg
       echo "deb [signed-by=/usr/share/keyrings/kubernetes-archive-keyring.gpg] https://pkgs.k8s.io/core:/stable:/{{ regexReplaceAll "^(v[0-9]+\\.[0-9]+).*" .Values.k8sVersion "${1}" }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
       apt-get update
@@ -351,6 +389,9 @@ write_files:
     content: |
       #!/bin/bash
       set -euo pipefail
+      # Debian generic cloud doesn't ship gnupg or apt-transport-https.
+      apt-get update
+      apt-get install -y --no-install-recommends gnupg ca-certificates curl apt-transport-https
       curl -fsSL https://pkgs.k8s.io/core:/stable:/{{ regexReplaceAll "^(v[0-9]+\\.[0-9]+).*" .Values.k8sVersion "${1}" }}/deb/Release.key | gpg --dearmor -o /usr/share/keyrings/kubernetes-archive-keyring.gpg
       echo "deb [signed-by=/usr/share/keyrings/kubernetes-archive-keyring.gpg] https://pkgs.k8s.io/core:/stable:/{{ regexReplaceAll "^(v[0-9]+\\.[0-9]+).*" .Values.k8sVersion "${1}" }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
       apt-get update
