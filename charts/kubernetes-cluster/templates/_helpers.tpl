@@ -248,6 +248,11 @@ write_files:
       apt-get install -y kubelet={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubeadm={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubectl={{ trimPrefix "v" .Values.k8sVersion }}-1.1 containerd
       apt-mark hold kubelet kubeadm kubectl
       systemctl enable --now containerd
+      modprobe overlay
+      modprobe br_netfilter
+      printf 'overlay\nbr_netfilter\n' > /etc/modules-load.d/k8s.conf
+      printf 'net.bridge.bridge-nf-call-iptables = 1\nnet.bridge.bridge-nf-call-ip6tables = 1\nnet.ipv4.ip_forward = 1\n' > /etc/sysctl.d/99-kubernetes.conf
+      sysctl --system
   - path: /etc/systemd/system/kubeadm-token-refresh.service
     permissions: "0644"
     content: |
@@ -398,6 +403,11 @@ write_files:
       apt-get install -y kubelet={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubeadm={{ trimPrefix "v" .Values.k8sVersion }}-1.1 containerd
       apt-mark hold kubelet kubeadm
       systemctl enable --now containerd
+      modprobe overlay
+      modprobe br_netfilter
+      printf 'overlay\nbr_netfilter\n' > /etc/modules-load.d/k8s.conf
+      printf 'net.bridge.bridge-nf-call-iptables = 1\nnet.bridge.bridge-nf-call-ip6tables = 1\nnet.ipv4.ip_forward = 1\n' > /etc/sysctl.d/99-kubernetes.conf
+      sysctl --system
 runcmd:
   - /etc/kubernetes/install-k8s.sh
   - {{ $jc | quote }}
@@ -444,6 +454,11 @@ write_files:
       apt-get install -y kubelet={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubeadm={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubectl={{ trimPrefix "v" .Values.k8sVersion }}-1.1 containerd
       apt-mark hold kubelet kubeadm kubectl
       systemctl enable --now containerd
+      modprobe overlay
+      modprobe br_netfilter
+      printf 'overlay\nbr_netfilter\n' > /etc/modules-load.d/k8s.conf
+      printf 'net.bridge.bridge-nf-call-iptables = 1\nnet.bridge.bridge-nf-call-ip6tables = 1\nnet.ipv4.ip_forward = 1\n' > /etc/sysctl.d/99-kubernetes.conf
+      sysctl --system
 runcmd:
   - /etc/kubernetes/install-k8s.sh
   # Replica CP join: --control-plane + --certificate-key decrypts the
