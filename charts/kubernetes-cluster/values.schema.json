@@ -48,6 +48,17 @@
     },
     "ironicApiUrl":     {"type": "string"},
     "ironicApiVersion": {"type": "string"},
+    "ironicAuth": {
+      "type": ["object", "null"],
+      "description": "Keystone credentials baked into the CP cloud-init so publish-join.sh can PATCH Ironic node.extra directly.",
+      "properties": {
+        "authUrl":    {"type": ["string", "null"]},
+        "ironicUrl":  {"type": ["string", "null"]},
+        "username":   {"type": ["string", "null"]},
+        "password":   {"type": ["string", "null"]},
+        "userDomain": {"type": ["string", "null"]}
+      }
+    },
     "managementCluster": {
       "type": "object",
       "description": "Endpoint + auth used by the CP cloud-init to kubectl-patch its own Node CR's spec.extra.kubeadm_join.",

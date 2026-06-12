@@ -76,9 +76,41 @@ spec:
     metadata:
       labels:
         app: wg-ironic-proxy
+      annotations:
+        # bumps with the bridge script so the pod rolls when the script changes
+        kubernetescluster.ogen.krateo.io/bridge-revision: "1"
     spec:
       serviceAccountName: wg-ironic-proxy
       containers:
+        - name: ironic-extra-bridge
+          # Ironic node.extra -> k8s Node CR spec.extra bridge.
+          # The blade (which can reach Ironic over its OOB network but
+          # NOT our wg-tunnel-side mgmt API) publishes its kubeadm_join
+          # into Ironic node.extra. This sidecar polls Ironic via the
+          # same-pod keystone proxy (127.0.0.1:8080) and propagates
+          # to Node.spec.extra so the kubernetes-cluster chart's lookup
+          # sees the join command. See
+          # scripts/ironic-node-extra-bridge.py for the loop logic.
+          image: python:3.13-slim
+          command:
+            - python3
+            - /scripts/ironic-node-extra-bridge.py
+          env:
+            - name: IRONIC_API_VERSION
+              value: "1.109"
+            - name: BRIDGE_INTERVAL
+              value: "10"
+          volumeMounts:
+            - name: bridge-script
+              mountPath: /scripts
+              readOnly: true
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
         - name: mgmt-api-proxy
           # kubectl proxy bound on the wg pod's tunnel interface
           # (198.51.100.5 inside the pod netns). The bare-metal blades
@@ -187,6 +219,9 @@ spec:
           secret:
             secretName: ironic-clouds
             defaultMode: 0400
+        - name: bridge-script
+          configMap:
+            name: ironic-extra-bridge-script
 ---
 apiVersion: v1
 kind: Service

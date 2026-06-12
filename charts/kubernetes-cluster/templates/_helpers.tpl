@@ -47,6 +47,18 @@
 {{- end -}}
 {{- end -}}
 
+{{/* Bootstrap CP's nodeUuid — sibling to cpNodeName. Used by
+     publish-join.sh to target the right Ironic node. */}}
+{{- define "kubernetes-cluster.bootstrapNodeUuid" -}}
+{{- $cp := default (dict) .Values.controlPlane -}}
+{{- $nodes := default (list) $cp.nodes -}}
+{{- if gt (len $nodes) 0 -}}
+{{- (index $nodes 0).nodeUuid -}}
+{{- else if $cp.node -}}
+{{- $cp.node.nodeUuid -}}
+{{- end -}}
+{{- end -}}
+
 {{/* The bootstrap CP's certificate-key, read live from the CP Node CR's
      spec.extra.cert_key. Empty until the bootstrap CP's cloud-init has
      finished `kubeadm init --upload-certs --certificate-key=$KEY` AND
@@ -223,10 +235,6 @@ write_files:
       apt-get install -y kubelet={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubeadm={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubectl={{ trimPrefix "v" .Values.k8sVersion }}-1.1 containerd
       apt-mark hold kubelet kubeadm kubectl
       systemctl enable --now containerd
-  - path: /etc/kubernetes/mgmt-ca.crt
-    permissions: "0644"
-    content: |
-      {{- include "kubernetes-cluster.mgmtCaBundle" . | nindent 6 }}
   - path: /etc/systemd/system/kubeadm-token-refresh.service
     permissions: "0644"
     content: |
@@ -259,86 +267,60 @@ write_files:
     permissions: "0755"
     content: |
       #!/bin/bash
-      # Mint a fresh kubeadm join token (24h TTL) and publish it onto our
-      # Node CR's spec.extra.kubeadm_join. Called once from cloud-init at
-      # boot, then every 12h by kubeadm-token-refresh.timer. The 12h
-      # cadence is a 50% margin against the 24h TTL —
-      # https://kubernetes.io/docs/reference/setup-tools/kubeadm/kubeadm-token/
-      # — so a refresher miss still leaves a valid window before workers
-      # see InvalidToken.
+      # Mint a fresh kubeadm join token (24h TTL) and PATCH it into the
+      # Ironic node's `extra.kubeadm_join`. The bare-metal blade can
+      # reach the lab Ironic API over its OOB network, but CANNOT reach
+      # the management cluster's API (wg tunnel routes one direction
+      # only on this lab). The ironic-extra-bridge sidecar in
+      # wg-ironic-proxy propagates extra back into the k8s Node CR's
+      # spec.extra, where the chart's lookup picks it up.
       #
-      # When CERT_KEY file exists (HA bootstrap CP), also publishes the
-      # cert_key so replica CPs can join with --certificate-key. The
-      # cert_key has a 2h TTL upstream of kubeadm; renew via
-      # `kubeadm init phase upload-certs --upload-certs --certificate-key=<key>`.
+      # Called once from cloud-init at boot, then every 12h by
+      # kubeadm-token-refresh.timer (50%% margin over the 24h kubeadm
+      # token TTL). Also publishes /etc/kubernetes/cert-key into
+      # extra.cert_key when present (HA bootstrap CP).
       set -uo pipefail
       log() { logger -t kubeadm-token-refresh "$*"; }
       JOIN_CMD=$(KUBECONFIG=/etc/kubernetes/admin.conf kubeadm token create --print-join-command --ttl 24h 2>/dev/null) || {
         log "kubeadm token create failed; will retry on next timer fire"
         exit 1
       }
-      MGMT_API="{{ .Values.managementCluster.apiUrl }}"
-      MGMT_TOKEN="{{ include "kubernetes-cluster.cpToken" . }}"
-      # When apiUrl is http://, the request goes via the kubectl-proxy
-      # sidecar in wg-ironic-proxy (lab path). The sidecar re-auths with
-      # its own SA token; the Authorization header below is harmless.
-      # --cacert is also harmless on http (curl ignores it).
-      # Build the patch body. Include cert_key only if /etc/kubernetes/cert-key
-      # exists (HA bootstrap CP wrote it before kubeadm init).
+
+      # Escape join command and (optional) cert-key into JSON-Patch ops.
       ESCAPED_JOIN=${JOIN_CMD//\"/\\\"}
+      PATCH='[{"op":"add","path":"/extra/kubeadm_join","value":"'$ESCAPED_JOIN'"}'
       if [ -f /etc/kubernetes/cert-key ]; then
         CERT_KEY=$(cat /etc/kubernetes/cert-key)
-        PATCH_BODY="{\"spec\":{\"extra\":{\"kubeadm_join\":\"${ESCAPED_JOIN}\",\"cert_key\":\"${CERT_KEY}\"}}}"
-      else
-        PATCH_BODY="{\"spec\":{\"extra\":{\"kubeadm_join\":\"${ESCAPED_JOIN}\"}}}"
+        PATCH+=',{"op":"add","path":"/extra/cert_key","value":"'$CERT_KEY'"}'
       fi
+      PATCH+=']'
+
+      KEYSTONE_URL="{{ .Values.ironicAuth.authUrl }}"
+      IRONIC_URL="{{ .Values.ironicAuth.ironicUrl }}"
+      AUTH_BODY='{"auth":{"identity":{"methods":["password"],"password":{"user":{"name":"{{ .Values.ironicAuth.username }}","password":"{{ .Values.ironicAuth.password }}","domain":{"name":"{{ .Values.ironicAuth.userDomain }}"}}}},"scope":{"system":{"all":true}}}}'
+
       for attempt in 1 2 3 4 5; do
+        TOKEN=$(curl -sS -i -H "Content-Type: application/json" -d "$AUTH_BODY" "${KEYSTONE_URL}/v3/auth/tokens" | grep -i '^X-Subject-Token:' | awk '{print $2}' | tr -d '\r')
+        if [ -z "$TOKEN" ]; then
+          log "keystone auth failed (attempt ${attempt}); retrying in $((attempt * 10))s"
+          sleep $((attempt * 10))
+          continue
+        fi
         if curl -fsSL \
-          -H "Authorization: Bearer ${MGMT_TOKEN}" \
-          -H "Content-Type: application/merge-patch+json" \
-          --cacert /etc/kubernetes/mgmt-ca.crt \
+          -H "X-Auth-Token: ${TOKEN}" \
+          -H "X-OpenStack-Ironic-API-Version: 1.109" \
+          -H "Content-Type: application/json-patch+json" \
           --request PATCH \
-          --data "${PATCH_BODY}" \
-          "${MGMT_API}/apis/baremetal.ogen.krateo.io/v1alpha1/namespaces/{{ include "kubernetes-cluster.lifecycleNamespace" . }}/nodes/{{ include "kubernetes-cluster.cpNodeName" . }}" > /tmp/publish-join.out 2>&1; then
-          log "join command published (attempt ${attempt})"
+          --data "$PATCH" \
+          "${IRONIC_URL}/v1/nodes/{{ include "kubernetes-cluster.bootstrapNodeUuid" . }}" > /tmp/publish-join.out 2>&1; then
+          log "join command published to Ironic (attempt ${attempt})"
           exit 0
         fi
-        log "publish attempt ${attempt} failed; sleeping $((attempt * 10))s before retry"
+        log "publish attempt ${attempt} failed; sleeping $((attempt * 10))s"
         sleep $((attempt * 10))
       done
       log "publish failed after 5 attempts — see /tmp/publish-join.out"
       exit 1
-  - path: /etc/kubernetes/publish-workload-kubeconfig.sh
-    permissions: "0755"
-    content: |
-      #!/bin/bash
-      # One-shot: stash the workload cluster's admin.conf into a Secret on
-      # the management cluster so drain Jobs (Milestone 5b) can talk to
-      # the workload apiserver. Idempotent — POST returns 409 if the
-      # Secret already exists, which we treat as success.
-      set -uo pipefail
-      log() { logger -t kubeadm-workload-kubeconfig "$*"; }
-      MGMT_API="{{ .Values.managementCluster.apiUrl }}"
-      MGMT_TOKEN="{{ include "kubernetes-cluster.cpToken" . }}"
-      # When apiUrl is http://, the request goes via the kubectl-proxy
-      # sidecar in wg-ironic-proxy (lab path). The sidecar re-auths with
-      # its own SA token; the Authorization header below is harmless.
-      # --cacert is also harmless on http (curl ignores it).
-      SECRET_NS="{{ include "kubernetes-cluster.lifecycleNamespace" . }}"
-      SECRET_NAME="{{ include "kubernetes-cluster.workloadKubeconfigSecretName" . }}"
-      KCFG_B64=$(base64 -w0 /etc/kubernetes/admin.conf)
-      RC=$(curl -sS -o /tmp/wkc.out -w "%{http_code}" \
-        -H "Authorization: Bearer ${MGMT_TOKEN}" \
-        -H "Content-Type: application/json" \
-        --cacert /etc/kubernetes/mgmt-ca.crt \
-        --request POST \
-        --data "{\"apiVersion\":\"v1\",\"kind\":\"Secret\",\"metadata\":{\"name\":\"${SECRET_NAME}\",\"namespace\":\"${SECRET_NS}\"},\"data\":{\"kubeconfig\":\"${KCFG_B64}\"}}" \
-        "${MGMT_API}/api/v1/namespaces/${SECRET_NS}/secrets") || RC=000
-      case "$RC" in
-        201) log "workload kubeconfig Secret created" ;;
-        409) log "workload kubeconfig Secret already exists — idempotent skip" ;;
-        *)   log "publish failed (HTTP $RC) — see /tmp/wkc.out"; exit 1 ;;
-      esac
 runcmd:
   - /etc/kubernetes/install-k8s.sh
   # Mint a fresh certificate-key locally. Stored at /etc/kubernetes/cert-key
@@ -351,7 +333,6 @@ runcmd:
   - mkdir -p /root/.kube && cp /etc/kubernetes/admin.conf /root/.kube/config
   - KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f {{ .Values.cni.manifestUrl }}
   - /etc/kubernetes/publish-join.sh
-  - /etc/kubernetes/publish-workload-kubeconfig.sh
   - systemctl daemon-reload
   - systemctl enable --now kubeadm-token-refresh.timer
 {{- end -}}
