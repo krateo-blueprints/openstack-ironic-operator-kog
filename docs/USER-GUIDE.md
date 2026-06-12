@@ -707,3 +707,81 @@ FSM-via-`lookup` idiom, no new rendezvous keys.
   workload kubelet is down it'll fail. Operator-level decision: skip
   the drain (manually delete the Job) and let the BH `spec.undeploy: true`
   fire anyway. The chart doesn't force the drain step.
+
+## Deploying on the Ettore lab (real bare-metal recipe)
+
+A turn-key manifest for the Ettore lab lives at
+[`manifests/kubernetescluster-ettore-lab.yaml`](../manifests/kubernetescluster-ettore-lab.yaml)
+— CP on blade06 + worker on blade10, with the real Redfish credentials
+and UUIDs from the existing baremetalhost-blade06-power-flip.yaml and
+baremetalhost-blade10-inspect-fail.yaml fixtures.
+
+### Pre-deploy
+
+1. **Pick the management API reachability** (`external-lb` / `metallb`
+   / `kube-vip` / `nodeport-dns`) and set `spec.managementCluster.apiUrl`
+   to the matching address the blades can actually reach. The
+   placeholder in the manifest assumes `nodeport-dns` on the lab
+   gateway (`172.19.74.1:30443`); replace with the real value.
+
+2. **Delete the existing BHs that fight on `nodeName`.** The chart's
+   BHs are named `ettore-cp-blade06` and `ettore-worker-blade10`, but
+   they share `spec.nodeName` with whatever fixtures are already
+   managing those blades:
+
+   ```bash
+   kubectl --kubeconfig local/kubeconfig.ironic-lab \
+     --context kind-ironic-lab -n openstack \
+     delete baremetalhost blade06 blade10 --wait=true
+   ```
+
+3. **Do NOT touch blade04** — Gap-9 24h soak in progress.
+
+### Deploy
+
+```bash
+kubectl --kubeconfig local/kubeconfig.ironic-lab \
+  --context kind-ironic-lab \
+  apply -f manifests/kubernetescluster-ettore-lab.yaml
+```
+
+Then watch:
+
+```bash
+kubectl -n openstack get kubernetescluster ettore -o jsonpath='{.status.conditions}'
+kubectl -n openstack get baremetalhost -l \
+  kubernetescluster.ogen.krateo.io/cluster=ettore
+kubectl -n openstack get node.baremetal.ogen.krateo.io blade06 \
+  -o jsonpath='{.status.provision_state}{"\n"}'
+kubectl -n openstack get node.baremetal.ogen.krateo.io blade06 \
+  -o jsonpath='{.spec.extra.kubeadm_join}{"\n"}'
+```
+
+### What the smoke test validated (commit `<this>`)
+
+A short fake-hardware smoke against the same chart confirmed end-to-end:
+
+- KubernetesCluster CR accepted by core-provider → CRD `v0-4-0` served.
+- cdc reconciled, helm-installed chart 0.4.0 from the in-cluster
+  chartrepo.
+- All 5 chart-managed resources rendered: ServiceAccount, token
+  Secret, Role, RoleBinding, and the CP `BaremetalHost`.
+- baremetal-host's cdc reconciled the rendered BH → created the Node
+  CR + a `NodePower` for "power-on-from-unknown".
+- The Node CR's `lookup` of `kube-root-ca.crt` returned the projected
+  CA (Milestone 3 working).
+
+The smoke stopped at Ironic POST because the production Ironic in this
+lab has only `redfish`/`ipmi` enabled — the `fake-hardware` driver is
+not in the enabled-drivers list. That's a lab config detail, not a
+chart bug; the Ettore-lab manifest uses `redfish` end-to-end.
+
+### What still needs validation on real hardware
+
+- CP cloud-init reaching `managementCluster.apiUrl` for the publish
+  steps (Milestone 2 network plumbing).
+- `kubeadm init` actually forming a cluster (depends on image,
+  containerd availability, kernel modules).
+- Workers' `lookup` of `spec.extra.kubeadm_join` firing the join-flow.
+- The `kubeadm-token-refresh.timer` cadence on a long-running CP.
+- Drain Job's reachability to the workload apiserver.
