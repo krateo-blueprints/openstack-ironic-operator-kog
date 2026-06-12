@@ -255,6 +255,8 @@ lab-tunnel-up: # apply the wg+proxy Deployment+Service + Secrets/ConfigMap (kube
 		--from-file=clouds.yaml="$(CLOUDS_FILE)" --dry-run=client -o yaml | $(KUBECTL) apply -f -
 	$(KUBECTL) -n $(IRONIC_NS) create configmap keystone-ironic-proxy-script \
 		--from-file=keystone-ironic-proxy.py=scripts/keystone-ironic-proxy.py --dry-run=client -o yaml | $(KUBECTL) apply -f -
+	$(KUBECTL) -n $(IRONIC_NS) create configmap ironic-extra-bridge-script \
+		--from-file=ironic-node-extra-bridge.py=scripts/ironic-node-extra-bridge.py --dry-run=client -o yaml | $(KUBECTL) apply -f -
 	$(KUBECTL) -n $(IRONIC_NS) set env deploy/wg-ironic-proxy OS_CLOUD=$(OS_CLOUD)
 	$(KUBECTL) -n $(IRONIC_NS) rollout restart deploy/wg-ironic-proxy
 	$(KUBECTL) -n $(IRONIC_NS) rollout status deploy/wg-ironic-proxy --timeout=300s
