@@ -159,10 +159,12 @@ provision-demo:
 LIFECYCLE_CHART_VERSION ?= $(shell awk '/^version:/ {print $$2; exit}' charts/baremetal-lifecycle/Chart.yaml)
 DISCOVERY_CHART_VERSION ?= $(shell awk '/^version:/ {print $$2; exit}' charts/baremetal-discovery/Chart.yaml)
 HOST_CHART_VERSION      ?= $(shell awk '/^version:/ {print $$2; exit}' charts/baremetal-host/Chart.yaml)
-chart-host:   # package all three charts (baremetal-lifecycle + baremetal-discovery + baremetal-host) and serve them
+CLUSTER_CHART_VERSION   ?= $(shell awk '/^version:/ {print $$2; exit}' charts/kubernetes-cluster/Chart.yaml)
+chart-host:   # package all four charts (baremetal-lifecycle + baremetal-discovery + baremetal-host + kubernetes-cluster) and serve them
 	helm package charts/baremetal-lifecycle -d dist/
 	helm package charts/baremetal-discovery -d dist/
 	helm package charts/baremetal-host      -d dist/
+	helm package charts/kubernetes-cluster  -d dist/
 	$(KUBECTL) -n $(IRONIC_NS) create deployment chartrepo --image=nginx:1.27-alpine --dry-run=client -o yaml | $(KUBECTL) apply -f -
 	$(KUBECTL) -n $(IRONIC_NS) expose deployment chartrepo --port=80 --dry-run=client -o yaml | $(KUBECTL) apply -f - 2>/dev/null || true
 	$(KUBECTL) -n $(IRONIC_NS) rollout status deploy/chartrepo --timeout=120s
@@ -172,14 +174,18 @@ chart-host:   # package all three charts (baremetal-lifecycle + baremetal-discov
 		$$($(KUBECTL) -n $(IRONIC_NS) get pod -l app=chartrepo -o jsonpath='{.items[0].metadata.name}'):/usr/share/nginx/html/baremetal-discovery-$(DISCOVERY_CHART_VERSION).tgz
 	$(KUBECTL) -n $(IRONIC_NS) cp dist/baremetal-host-$(HOST_CHART_VERSION).tgz \
 		$$($(KUBECTL) -n $(IRONIC_NS) get pod -l app=chartrepo -o jsonpath='{.items[0].metadata.name}'):/usr/share/nginx/html/baremetal-host-$(HOST_CHART_VERSION).tgz
+	$(KUBECTL) -n $(IRONIC_NS) cp dist/kubernetes-cluster-$(CLUSTER_CHART_VERSION).tgz \
+		$$($(KUBECTL) -n $(IRONIC_NS) get pod -l app=chartrepo -o jsonpath='{.items[0].metadata.name}'):/usr/share/nginx/html/kubernetes-cluster-$(CLUSTER_CHART_VERSION).tgz
 
-composition-up: chart-host   # install all three CompositionDefinitions
+composition-up: chart-host   # install all four CompositionDefinitions
 	$(KUBECTL) apply -f manifests/compositiondefinition-baremetal-lifecycle.yaml
 	$(KUBECTL) apply -f manifests/compositiondefinition-baremetal-discovery.yaml
 	$(KUBECTL) apply -f manifests/compositiondefinition-baremetal-host.yaml
+	$(KUBECTL) apply -f manifests/compositiondefinition-kubernetes-cluster.yaml
 	$(KUBECTL) -n krateo-system wait --for=condition=Ready compositiondefinition/baremetal-lifecycle --timeout=180s
 	$(KUBECTL) -n krateo-system wait --for=condition=Ready compositiondefinition/baremetal-discovery --timeout=180s
 	$(KUBECTL) -n krateo-system wait --for=condition=Ready compositiondefinition/baremetal-host --timeout=180s
+	$(KUBECTL) -n krateo-system wait --for=condition=Ready compositiondefinition/kubernetes-cluster --timeout=180s
 
 composition-demo: # create a BaremetalLifecycle instance; composition-dynamic-controller walks it enroll -> active
 	$(KUBECTL) apply -f manifests/baremetallifecycle-example.yaml
