@@ -18,6 +18,29 @@ more of the three existing Krateo charts/compositions wherever possible:
 All five MVP gaps fill via chart templates + values schema changes + cloud-init
 extensions; no new KOG primitives are needed.
 
+## Landed status
+
+| # | Milestone | Chart version | Commit |
+|---|---|---|---|
+| 2 | Network plumbing (endpoint + reachability hint) | 0.2.0 | `20205be` |
+| 3 | CA bundle hardening (`kube-root-ca.crt` lookup) | 0.2.0 | `20205be` |
+| 4 | Token rotation (systemd timer, 12h cadence) | 0.3.0 | `e5bfb02` |
+| 5b | Drain & delete worker (BL→BH migration, drain Job) | 0.4.0 | `2bacc7d` |
+| 1 | HA control plane (stacked etcd, cert-key rendezvous) | 0.5.0 | `45f4fe0` |
+| 5a | k8s upgrade by-reimage (`upgrade.targetNode`) | 0.6.0 | `a133577` |
+| 5c | Failed CP recovery (`recovery.failedNodes[]`) | 0.6.0 | `a133577` |
+
+Recommended landing order (`2 → 3 → 4 → 5b → 1 → 5a → 5c`) was followed
+end-to-end. Chart at `0.6.0`, CompositionDefinition repointed.
+
+Real Ettore-lab deployable manifest is at
+[`manifests/kubernetescluster-ettore-lab.yaml`](../manifests/kubernetescluster-ettore-lab.yaml)
+— CP on blade06 + worker on blade10, real Redfish credentials and
+UUIDs. Two pre-deploy operator steps documented in
+[`docs/USER-GUIDE.md`](USER-GUIDE.md): plumb the management apiserver
+to the blade network, and delete the existing `blade06` + `blade10`
+BHs so the new chart's BHs can take ownership.
+
 ---
 
 ## 1. HA control plane (stacked etcd)
