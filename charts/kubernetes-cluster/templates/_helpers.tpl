@@ -455,9 +455,33 @@ write_files:
       printf 'overlay\nbr_netfilter\n' > /etc/modules-load.d/k8s.conf
       printf 'net.bridge.bridge-nf-call-iptables = 1\nnet.bridge.bridge-nf-call-ip6tables = 1\nnet.ipv4.ip_forward = 1\n' > /etc/sysctl.d/99-kubernetes.conf
       sysctl --system
+  - path: /etc/kubernetes/join.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      # Retry kubeadm join. The bootstrap CP's apiserver may flap right
+      # after kubeadm init while etcd / kube-proxy / cm stabilise; if the
+      # join lands in one of those gaps it errors with
+      #   `connect: connection refused` against <cp>:6443
+      # and cloud-init's runcmd doesn't retry. 30 × 20s gives ~10min of
+      # retry — long enough to catch a healthy window without burning a
+      # whole BH-redeploy cycle.
+      exec >> /var/log/join.log 2>&1
+      set -x
+      for i in $(seq 1 30); do
+        echo "[$(date -Iseconds)] join attempt $i"
+        if {{ $jc }}; then
+          echo "[$(date -Iseconds)] join succeeded on attempt $i"
+          exit 0
+        fi
+        echo "[$(date -Iseconds)] attempt $i failed; sleeping 20s"
+        sleep 20
+      done
+      echo "[$(date -Iseconds)] all 30 attempts exhausted"
+      exit 1
 runcmd:
   - /etc/kubernetes/install-k8s.sh
-  - {{ $jc | quote }}
+  - /etc/kubernetes/join.sh
 {{- end -}}
 
 {{/* Cloud-init userData for a REPLICA CP node (HA). Installs kubeadm
@@ -526,16 +550,36 @@ write_files:
       printf 'overlay\nbr_netfilter\n' > /etc/modules-load.d/k8s.conf
       printf 'net.bridge.bridge-nf-call-iptables = 1\nnet.bridge.bridge-nf-call-ip6tables = 1\nnet.ipv4.ip_forward = 1\n' > /etc/sysctl.d/99-kubernetes.conf
       sysctl --system
+  - path: /etc/kubernetes/join.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      # Replica CP join with retry. --control-plane + --certificate-key
+      # decrypts the kubeadm-certs Secret uploaded by the bootstrap CP's
+      # `kubeadm init --upload-certs --certificate-key=...`. The bootstrap
+      # CP's apiserver may flap right after kubeadm init while etcd /
+      # kube-proxy / cm stabilise; without retry, a join into a downtime
+      # window leaves cloud-final failed and no auto-recovery. 30 × 20s.
+      # Cert-key has a 2h TTL upstream; if every attempt fails with
+      # `unable to fetch the certs`, re-upload from any healthy CP via:
+      #   kubeadm init phase upload-certs --upload-certs \
+      #     --certificate-key=<key-from-Node.spec.extra.cert_key>
+      exec >> /var/log/join.log 2>&1
+      set -x
+      for i in $(seq 1 30); do
+        echo "[$(date -Iseconds)] join attempt $i"
+        if {{ $jc }} --control-plane --certificate-key {{ $ck }}; then
+          echo "[$(date -Iseconds)] join succeeded on attempt $i"
+          exit 0
+        fi
+        echo "[$(date -Iseconds)] attempt $i failed; sleeping 20s"
+        sleep 20
+      done
+      echo "[$(date -Iseconds)] all 30 attempts exhausted"
+      exit 1
 runcmd:
   - /etc/kubernetes/install-k8s.sh
-  # Replica CP join: --control-plane + --certificate-key decrypts the
-  # kubeadm-certs Secret uploaded by the bootstrap CP's
-  # `kubeadm init --upload-certs --certificate-key=...`. Cert-key has a
-  # 2h TTL upstream; if join fails with `unable to fetch the certs`,
-  # re-upload from any healthy CP via:
-  #   kubeadm init phase upload-certs --upload-certs \
-  #     --certificate-key=<key-from-Node.spec.extra.cert_key>
-  - {{ $jc }} --control-plane --certificate-key {{ $ck }}
+  - /etc/kubernetes/join.sh
 {{- end -}}
 
 {{/* The Bearer token used by the CP to PATCH its own Node CR. Read live
