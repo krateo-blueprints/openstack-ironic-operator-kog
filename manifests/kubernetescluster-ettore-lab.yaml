@@ -43,8 +43,9 @@ spec:
   network:
     podCIDR: 10.244.0.0/16
     serviceCIDR: 10.96.0.0/12
-    # Pin one of the four options once you settle on it (see
-    # docs/USER-GUIDE.md "Cluster ingress"):
+    # Lab path: kubectl-proxy sidecar in wg-ironic-proxy. Not an
+    # ingress option from the matrix; documented as the lab-specific
+    # wg-tunnel path in the wg-ironic-proxy manifest.
     managementApiReachability: nodeport-dns
   image:
     source: http://172.19.74.1:8089/debian-13-genericcloud-amd64.qcow2
@@ -55,15 +56,14 @@ spec:
   ironicApiUrl: http://ironic.openstack.svc.cluster.local:6385
   ironicApiVersion: "1.81"
   managementCluster:
-    # CRITICAL: replace with the address the blades can actually reach.
-    # Examples:
-    #   external-lb:    https://lab-api.example.com:6443
-    #   metallb:        https://10.0.20.5:6443         (MetalLB-advertised VIP)
-    #   nodeport-dns:   https://172.19.74.1:30443      (NodePort on lab gateway)
-    apiUrl: https://172.19.74.1:30443
-    # CA bundle is OPTIONAL — chart `lookup`s kube-root-ca.crt in the SA
-    # namespace by default. Uncomment only if root-ca-cert-publisher is
-    # disabled on the management cluster.
+    # http://198.51.100.5:8443 — the kubectl-proxy sidecar inside the
+    # wg-ironic-proxy pod, bound on the wireguard interface so the
+    # bare-metal blades reach it through the lab's wg tunnel.
+    # See docs/USER-GUIDE.md "Cluster ingress" and the wg-ironic-proxy
+    # manifest for the architecture; this is the only address the
+    # blades can actually reach the management apiserver on.
+    apiUrl: http://198.51.100.5:8443
+    # CA bundle not needed for the http path — chart skips the gate.
     # caBundle: |
     #   -----BEGIN CERTIFICATE-----
     #   ...PEM...

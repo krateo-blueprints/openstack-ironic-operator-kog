@@ -13,6 +13,53 @@ kind: Namespace
 metadata:
   name: openstack
 ---
+# ServiceAccount + RBAC for the kubectl-proxy sidecar inside
+# wg-ironic-proxy. Scoped to JUST what the kubernetescluster blueprint's
+# bootstrap CP needs to do: patch any Node CR's spec.extra
+# (publish kubeadm_join / cert_key) and create+get Secrets in openstack
+# (workload kubeconfig delivery). NOT cluster-admin.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: wg-ironic-proxy
+  namespace: openstack
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: wg-ironic-proxy
+  namespace: openstack
+rules:
+  - apiGroups:
+      - baremetal.ogen.krateo.io
+    resources:
+      - nodes
+    verbs:
+      - get
+      - patch
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - create
+      - get
+      - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: wg-ironic-proxy
+  namespace: openstack
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: wg-ironic-proxy
+subjects:
+  - kind: ServiceAccount
+    name: wg-ironic-proxy
+    namespace: openstack
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -30,7 +77,31 @@ spec:
       labels:
         app: wg-ironic-proxy
     spec:
+      serviceAccountName: wg-ironic-proxy
       containers:
+        - name: mgmt-api-proxy
+          # kubectl proxy bound on the wg pod's tunnel interface
+          # (198.51.100.5 inside the pod netns). The bare-metal blades
+          # reach the management apiserver as http://198.51.100.5:8443
+          # via the wg tunnel; this sidecar forwards their requests to
+          # the in-cluster kubernetes.default.svc:443 using its own SA
+          # token. Auth model: the SA is RBAC-scoped to JUST what the
+          # kubernetescluster chart needs the CPs to do (patch the CP's
+          # own Node CR's spec.extra, create+get Secrets in openstack
+          # ns for the workload-kubeconfig delivery).
+          #
+          # kubectl proxy default port is 8001; --address binds on the
+          # wg interface specifically.
+          image: rancher/kubectl:v1.31.4
+          args:
+            - proxy
+            - --address=198.51.100.5
+            - --port=8443
+            - --accept-hosts=.*
+            - --accept-paths=.*
+            - --reject-paths=^$
+            - --disable-filter=true
+          # No volumeMounts — uses the projected SA token automatically.
         - name: proxy
           image: quay.io/airshipit/openstack-client:2026.1-ubuntu_noble
           command:
@@ -132,3 +203,21 @@ spec:
     - name: api
       port: 6385
       targetPort: 8080
+---
+# Reachable from inside the cluster as
+# http://mgmt-api.openstack.svc.cluster.local:8443. From the blade
+# network it's http://198.51.100.5:8443 (the wg-bound sidecar).
+apiVersion: v1
+kind: Service
+metadata:
+  name: mgmt-api
+  namespace: openstack
+  labels:
+    app: wg-ironic-proxy
+spec:
+  selector:
+    app: wg-ironic-proxy
+  ports:
+    - name: kubectl-proxy
+      port: 8443
+      targetPort: 8443

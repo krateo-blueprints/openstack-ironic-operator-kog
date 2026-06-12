@@ -237,6 +237,10 @@ write_files:
       }
       MGMT_API="{{ .Values.managementCluster.apiUrl }}"
       MGMT_TOKEN="{{ include "kubernetes-cluster.cpToken" . }}"
+      # When apiUrl is http://, the request goes via the kubectl-proxy
+      # sidecar in wg-ironic-proxy (lab path). The sidecar re-auths with
+      # its own SA token; the Authorization header below is harmless.
+      # --cacert is also harmless on http (curl ignores it).
       # Build the patch body. Include cert_key only if /etc/kubernetes/cert-key
       # exists (HA bootstrap CP wrote it before kubeadm init).
       ESCAPED_JOIN=${JOIN_CMD//\"/\\\"}
@@ -274,6 +278,10 @@ write_files:
       log() { logger -t kubeadm-workload-kubeconfig "$*"; }
       MGMT_API="{{ .Values.managementCluster.apiUrl }}"
       MGMT_TOKEN="{{ include "kubernetes-cluster.cpToken" . }}"
+      # When apiUrl is http://, the request goes via the kubectl-proxy
+      # sidecar in wg-ironic-proxy (lab path). The sidecar re-auths with
+      # its own SA token; the Authorization header below is harmless.
+      # --cacert is also harmless on http (curl ignores it).
       SECRET_NS="{{ include "kubernetes-cluster.lifecycleNamespace" . }}"
       SECRET_NAME="{{ include "kubernetes-cluster.workloadKubeconfigSecretName" . }}"
       KCFG_B64=$(base64 -w0 /etc/kubernetes/admin.conf)
