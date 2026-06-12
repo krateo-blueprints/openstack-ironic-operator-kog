@@ -5,7 +5,7 @@
      on the v0.3.4 widened `spec.undeploy` gate for drain & undeploy
      (Milestone 5b) and image swaps (Milestone 5a). Single CR per node
      throughout its lifecycle. */}}
-{{- define "kubernetes-cluster.lifecycleApiVersion" -}}composition.krateo.io/v0-3-4{{- end -}}
+{{- define "kubernetes-cluster.lifecycleApiVersion" -}}composition.krateo.io/v0-3-5{{- end -}}
 {{- define "kubernetes-cluster.lifecycleKind" -}}BaremetalHost{{- end -}}
 
 {{- define "kubernetes-cluster.lifecycleNamespace" -}}
