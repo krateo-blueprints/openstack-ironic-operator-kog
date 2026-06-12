@@ -708,6 +708,85 @@ FSM-via-`lookup` idiom, no new rendezvous keys.
   the drain (manually delete the Job) and let the BH `spec.undeploy: true`
   fire anyway. The chart doesn't force the drain step.
 
+## HA control plane (stacked etcd)
+
+Single-CP is fine for dev / lab. Production wants 3 (or 5) CPs with
+stacked etcd. Chart v0.5.0 supports this via `spec.controlPlane.nodes[]`:
+
+```yaml
+spec:
+  controlPlane:
+    # Stable apiserver endpoint — REQUIRED for HA, must point at a
+    # load-balanced VIP (see "Cluster ingress" above for options).
+    endpoint: lab-api.example.com:6443
+    nodes:
+      # Index 0 = bootstrap CP. Runs `kubeadm init --upload-certs
+      # --certificate-key=<key>` and publishes BOTH kubeadm_join AND
+      # cert_key into its own Node.spec.extra.
+      - nodeName: blade06
+        nodeUuid: 2f05176e-4531-4a90-a3bd-eda84b517d57
+        driver: redfish
+        driver_info: {...}
+      # Indices 1..N-1 = replica CPs. Gated by Helm `lookup` on both
+      # the bootstrap's `Node.spec.extra.kubeadm_join` and
+      # `Node.spec.extra.cert_key`. Render `kubeadm join <endpoint>
+      # --control-plane --certificate-key <key>`.
+      - nodeName: blade07
+        nodeUuid: ...
+        driver: redfish
+        driver_info: {...}
+      - nodeName: blade08
+        nodeUuid: ...
+        driver: redfish
+        driver_info: {...}
+```
+
+The legacy `controlPlane.node` shape is still accepted for single-CP
+back-compat (ignored when `nodes[]` is set).
+
+### Why bootstrap-CP always uses `--upload-certs`
+
+Even for single-CP, the chart runs `kubeadm init --upload-certs
+--certificate-key=$(openssl rand -hex 32)`. Reason: promoting to HA
+later becomes a pure values change (add entries to
+`spec.controlPlane.nodes[]`) rather than rebuilding the CP. The
+uploaded certs are stored in the `kubeadm-certs` Secret on the workload
+cluster; the CP's `publish-join.sh` also writes `cert_key` into the
+bootstrap's `Node.spec.extra.cert_key` so the chart's `certKey` lookup
+can find it.
+
+### The 2-hour cert-key TTL
+
+From the kubeadm HA docs:
+
+> *"Please note that the certificate-key gives access to cluster
+> sensitive data, keep it secret! As a safeguard, uploaded-certs will
+> be deleted in two hours; If necessary, you can use `kubeadm init
+> phase upload-certs` to reload certs afterward."*
+
+If a replica CP `BaremetalHost` doesn't deploy within 2h of the
+bootstrap CP publishing, the `kubeadm join --control-plane` will fail
+with "unable to fetch the kubeadm-certs Secret". Recovery (any healthy
+CP, manual today, automatable in a follow-up):
+
+```bash
+# On a healthy CP
+NEW_KEY=$(openssl rand -hex 32)
+kubeadm init phase upload-certs --upload-certs \
+  --certificate-key="$NEW_KEY"
+
+# Patch the bootstrap CP's Node CR (the rendezvous) so the chart
+# `lookup` picks up the new key on next reconcile
+kubectl -n openstack patch node.baremetal.ogen.krateo.io blade06 \
+  --type=merge \
+  -p "{\"spec\":{\"extra\":{\"cert_key\":\"$NEW_KEY\"}}}"
+```
+
+Then cdc re-renders the replica CP BHs with the new key. If a replica
+was mid-deploy when the key expired, drive it through `spec.undeploy:
+true` → re-deploy (the v0.3.4 widened gate handles all the stuck
+states the failed join leaves).
+
 ## Deploying on the Ettore lab (real bare-metal recipe)
 
 A turn-key manifest for the Ettore lab lives at

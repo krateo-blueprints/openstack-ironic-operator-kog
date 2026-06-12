@@ -17,9 +17,57 @@
 {{- .nodeName -}}
 {{- end -}}
 
-{{/* CP node name shortcut. */}}
+{{/* Effective list of control-plane node specs. HA support: prefer
+     spec.controlPlane.nodes[] when populated; fall back to the legacy
+     single-node spec.controlPlane.node for back-compat with single-CP
+     deployments. Index 0 is the BOOTSTRAP CP — the one that runs
+     `kubeadm init --upload-certs` and publishes both kubeadm_join and
+     cert_key on its own Node CR. Replica CPs (index 1..N-1) join via
+     `kubeadm join --control-plane --certificate-key`. */}}
+{{- define "kubernetes-cluster.cpNodes" -}}
+{{- $cp := default (dict) .Values.controlPlane -}}
+{{- $nodes := default (list) $cp.nodes -}}
+{{- if gt (len $nodes) 0 -}}
+{{- toYaml $nodes -}}
+{{- else if and $cp.node $cp.node.nodeName -}}
+{{- toYaml (list $cp.node) -}}
+{{- end -}}
+{{- end -}}
+
+{{/* CP node name shortcut. Returns the BOOTSTRAP CP's nodeName
+     (.controlPlane.nodes[0].nodeName OR legacy .controlPlane.node.nodeName).
+     Used by the rendezvous lookups (joinCommand, certKey, cpToken). */}}
 {{- define "kubernetes-cluster.cpNodeName" -}}
-{{- .Values.controlPlane.node.nodeName -}}
+{{- $cp := default (dict) .Values.controlPlane -}}
+{{- $nodes := default (list) $cp.nodes -}}
+{{- if gt (len $nodes) 0 -}}
+{{- (index $nodes 0).nodeName -}}
+{{- else if $cp.node -}}
+{{- $cp.node.nodeName -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The bootstrap CP's certificate-key, read live from the CP Node CR's
+     spec.extra.cert_key. Empty until the bootstrap CP's cloud-init has
+     finished `kubeadm init --upload-certs --certificate-key=$KEY` AND
+     patched its own Node CR. This is the gate that controls whether
+     replica CPs render — without the key they can't decrypt the
+     uploaded kubeadm-certs Secret. The TTL is 2h (kubeadm hard-coded).
+
+     https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/high-availability/
+     "Please note that the certificate-key gives access to cluster
+      sensitive data, keep it secret! As a safeguard, uploaded-certs will
+      be deleted in two hours; If necessary, you can use kubeadm init
+      phase upload-certs to reload certs afterward." */}}
+{{- define "kubernetes-cluster.certKey" -}}
+{{- $ns  := include "kubernetes-cluster.lifecycleNamespace" . -}}
+{{- $cp  := include "kubernetes-cluster.cpNodeName"          . -}}
+{{- $node := lookup (include "kubernetes-cluster.nodeApiVersion" .) "Node" $ns $cp -}}
+{{- if $node -}}
+{{- $extra := dig "spec" "extra" (dict) $node -}}
+{{- $ck    := index $extra "cert_key" -}}
+{{- if $ck -}}{{- $ck -}}{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/* The captured `kubeadm join` command, read live from the CP Node CR's
@@ -176,6 +224,11 @@ write_files:
       # https://kubernetes.io/docs/reference/setup-tools/kubeadm/kubeadm-token/
       # — so a refresher miss still leaves a valid window before workers
       # see InvalidToken.
+      #
+      # When CERT_KEY file exists (HA bootstrap CP), also publishes the
+      # cert_key so replica CPs can join with --certificate-key. The
+      # cert_key has a 2h TTL upstream of kubeadm; renew via
+      # `kubeadm init phase upload-certs --upload-certs --certificate-key=<key>`.
       set -uo pipefail
       log() { logger -t kubeadm-token-refresh "$*"; }
       JOIN_CMD=$(KUBECONFIG=/etc/kubernetes/admin.conf kubeadm token create --print-join-command --ttl 24h 2>/dev/null) || {
@@ -184,13 +237,22 @@ write_files:
       }
       MGMT_API="{{ .Values.managementCluster.apiUrl }}"
       MGMT_TOKEN="{{ include "kubernetes-cluster.cpToken" . }}"
+      # Build the patch body. Include cert_key only if /etc/kubernetes/cert-key
+      # exists (HA bootstrap CP wrote it before kubeadm init).
+      ESCAPED_JOIN=${JOIN_CMD//\"/\\\"}
+      if [ -f /etc/kubernetes/cert-key ]; then
+        CERT_KEY=$(cat /etc/kubernetes/cert-key)
+        PATCH_BODY="{\"spec\":{\"extra\":{\"kubeadm_join\":\"${ESCAPED_JOIN}\",\"cert_key\":\"${CERT_KEY}\"}}}"
+      else
+        PATCH_BODY="{\"spec\":{\"extra\":{\"kubeadm_join\":\"${ESCAPED_JOIN}\"}}}"
+      fi
       for attempt in 1 2 3 4 5; do
         if curl -fsSL \
           -H "Authorization: Bearer ${MGMT_TOKEN}" \
           -H "Content-Type: application/merge-patch+json" \
           --cacert /etc/kubernetes/mgmt-ca.crt \
           --request PATCH \
-          --data "{\"spec\":{\"extra\":{\"kubeadm_join\":\"${JOIN_CMD//\"/\\\"}\"}}}" \
+          --data "${PATCH_BODY}" \
           "${MGMT_API}/apis/baremetal.ogen.krateo.io/v1alpha1/namespaces/{{ include "kubernetes-cluster.lifecycleNamespace" . }}/nodes/{{ include "kubernetes-cluster.cpNodeName" . }}" > /tmp/publish-join.out 2>&1; then
           log "join command published (attempt ${attempt})"
           exit 0
@@ -229,7 +291,13 @@ write_files:
       esac
 runcmd:
   - /etc/kubernetes/install-k8s.sh
-  - kubeadm init --pod-network-cidr={{ .Values.network.podCIDR }} --service-cidr={{ .Values.network.serviceCIDR }} --kubernetes-version={{ .Values.k8sVersion }}{{ with include "kubernetes-cluster.controlPlaneEndpoint" . }} --control-plane-endpoint={{ . }}{{ end }}
+  # Mint a fresh certificate-key locally. Stored at /etc/kubernetes/cert-key
+  # so publish-join.sh picks it up and publishes alongside the join command.
+  # Always done — even for single-CP — so promoting to HA later is a values
+  # change, not an OS-level reconfiguration.
+  - openssl rand -hex 32 > /etc/kubernetes/cert-key
+  - chmod 0600 /etc/kubernetes/cert-key
+  - kubeadm init --upload-certs --certificate-key=$(cat /etc/kubernetes/cert-key) --pod-network-cidr={{ .Values.network.podCIDR }} --service-cidr={{ .Values.network.serviceCIDR }} --kubernetes-version={{ .Values.k8sVersion }}{{ with include "kubernetes-cluster.controlPlaneEndpoint" . }} --control-plane-endpoint={{ . }}{{ end }}
   - mkdir -p /root/.kube && cp /etc/kubernetes/admin.conf /root/.kube/config
   - KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f {{ .Values.cni.manifestUrl }}
   - /etc/kubernetes/publish-join.sh
@@ -258,6 +326,39 @@ write_files:
 runcmd:
   - /etc/kubernetes/install-k8s.sh
   - {{ $jc | quote }}
+{{- end -}}
+
+{{/* Cloud-init userData for a REPLICA CP node (HA). Installs kubeadm
+     and runs `kubeadm join ... --control-plane --certificate-key`. The
+     join command and cert_key were both published by the bootstrap CP
+     onto its own Node CR's spec.extra. Replica CPs render only when
+     both lookups resolve (see lifecycle-cp-replicas.yaml gate). */}}
+{{- define "kubernetes-cluster.cpReplicaUserData" -}}
+{{- $jc := include "kubernetes-cluster.joinCommand" . -}}
+{{- $ck := include "kubernetes-cluster.certKey"     . -}}
+#cloud-config
+write_files:
+  - path: /etc/kubernetes/install-k8s.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      curl -fsSL https://pkgs.k8s.io/core:/stable:/{{ regexReplaceAll "^(v[0-9]+\\.[0-9]+).*" .Values.k8sVersion "${1}" }}/deb/Release.key | gpg --dearmor -o /usr/share/keyrings/kubernetes-archive-keyring.gpg
+      echo "deb [signed-by=/usr/share/keyrings/kubernetes-archive-keyring.gpg] https://pkgs.k8s.io/core:/stable:/{{ regexReplaceAll "^(v[0-9]+\\.[0-9]+).*" .Values.k8sVersion "${1}" }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
+      apt-get update
+      apt-get install -y kubelet={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubeadm={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubectl={{ trimPrefix "v" .Values.k8sVersion }}-1.1 containerd
+      apt-mark hold kubelet kubeadm kubectl
+      systemctl enable --now containerd
+runcmd:
+  - /etc/kubernetes/install-k8s.sh
+  # Replica CP join: --control-plane + --certificate-key decrypts the
+  # kubeadm-certs Secret uploaded by the bootstrap CP's
+  # `kubeadm init --upload-certs --certificate-key=...`. Cert-key has a
+  # 2h TTL upstream; if join fails with `unable to fetch the certs`,
+  # re-upload from any healthy CP via:
+  #   kubeadm init phase upload-certs --upload-certs \
+  #     --certificate-key=<key-from-Node.spec.extra.cert_key>
+  - {{ $jc }} --control-plane --certificate-key {{ $ck }}
 {{- end -}}
 
 {{/* The Bearer token used by the CP to PATCH its own Node CR. Read live

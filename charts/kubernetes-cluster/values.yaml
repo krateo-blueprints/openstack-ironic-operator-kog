@@ -58,15 +58,32 @@ network:
   serviceCIDR: 10.96.0.0/12
   managementApiReachability: external-lb
 
-# Control plane — single node for MVP. HA control plane (N>1) is a
-# follow-up: render additional CP lifecycles gated on the first CP
-# having published the join command (same pattern as workers, but with
-# --control-plane and a separate cert-key publish step).
+# Control plane. Two shapes accepted:
+#  - .nodes[]  — preferred, supports 1 / 3 / 5 entries. Index 0 is the
+#                BOOTSTRAP CP (runs kubeadm init --upload-certs). Indices
+#                1..N-1 are REPLICA CPs (join via --control-plane
+#                --certificate-key, gated on Node.spec.extra.cert_key).
+#  - .node     — legacy single-CP shape, kept for back-compat. Ignored
+#                when .nodes[] is populated.
 controlPlane:
   # Stable address kubeadm advertises as the cluster's apiserver. Empty
   # for single-CP (kubeadm uses the node's primary IP). REQUIRED for HA
-  # (replicas > 1): point at a load-balanced VIP — see USER-GUIDE.md.
+  # (more than one entry in nodes[]): point at a load-balanced VIP —
+  # see docs/USER-GUIDE.md "Cluster ingress" for the option matrix.
   endpoint: ""
+  # HA shape — uncomment + fill in with 1, 3, or 5 entries:
+  # nodes:
+  #   - nodeName: blade06        # bootstrap CP
+  #     nodeUuid: 2f05176e-...
+  #     driver: redfish
+  #     driver_info: {...}
+  #     ports: [...]
+  #   - nodeName: blade07        # replica CP
+  #     nodeUuid: ...
+  #     driver: redfish
+  #     driver_info: {...}
+  #     ports: [...]
+  # Legacy single-CP shape:
   node:
     nodeName:
     nodeUuid:
