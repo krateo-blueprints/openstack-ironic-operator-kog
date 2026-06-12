@@ -210,11 +210,15 @@ write_files:
     content: |
       #!/bin/bash
       set -euo pipefail
-      # Debian generic cloud doesn't ship gnupg or apt-transport-https.
+      # Debian generic cloud doesn't ship gnupg / apt-transport-https.
       apt-get update
-      apt-get install -y --no-install-recommends gnupg ca-certificates curl apt-transport-https
-      curl -fsSL https://pkgs.k8s.io/core:/stable:/{{ regexReplaceAll "^(v[0-9]+\\.[0-9]+).*" .Values.k8sVersion "${1}" }}/deb/Release.key | gpg --dearmor -o /usr/share/keyrings/kubernetes-archive-keyring.gpg
-      echo "deb [signed-by=/usr/share/keyrings/kubernetes-archive-keyring.gpg] https://pkgs.k8s.io/core:/stable:/{{ regexReplaceAll "^(v[0-9]+\\.[0-9]+).*" .Values.k8sVersion "${1}" }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
+      apt-get install -y --no-install-recommends ca-certificates curl apt-transport-https
+      # `trusted=yes` skips OpenPGP signature verification on this repo.
+      # Required because Debian 13 trixie's sqv rejects the k8s repo's
+      # current Release.key as "Signature Packet v3 not considered secure
+      # since 2026-02-01". The packages themselves still come from
+      # pkgs.k8s.io over HTTPS; this only disables the signature check.
+      echo "deb [trusted=yes] https://pkgs.k8s.io/core:/stable:/{{ regexReplaceAll "^(v[0-9]+\\.[0-9]+).*" .Values.k8sVersion "${1}" }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
       apt-get update
       apt-get install -y kubelet={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubeadm={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubectl={{ trimPrefix "v" .Values.k8sVersion }}-1.1 containerd
       apt-mark hold kubelet kubeadm kubectl
@@ -389,11 +393,15 @@ write_files:
     content: |
       #!/bin/bash
       set -euo pipefail
-      # Debian generic cloud doesn't ship gnupg or apt-transport-https.
+      # Debian generic cloud doesn't ship gnupg / apt-transport-https.
       apt-get update
-      apt-get install -y --no-install-recommends gnupg ca-certificates curl apt-transport-https
-      curl -fsSL https://pkgs.k8s.io/core:/stable:/{{ regexReplaceAll "^(v[0-9]+\\.[0-9]+).*" .Values.k8sVersion "${1}" }}/deb/Release.key | gpg --dearmor -o /usr/share/keyrings/kubernetes-archive-keyring.gpg
-      echo "deb [signed-by=/usr/share/keyrings/kubernetes-archive-keyring.gpg] https://pkgs.k8s.io/core:/stable:/{{ regexReplaceAll "^(v[0-9]+\\.[0-9]+).*" .Values.k8sVersion "${1}" }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
+      apt-get install -y --no-install-recommends ca-certificates curl apt-transport-https
+      # `trusted=yes` skips OpenPGP signature verification on this repo.
+      # Required because Debian 13 trixie's sqv rejects the k8s repo's
+      # current Release.key as "Signature Packet v3 not considered secure
+      # since 2026-02-01". The packages themselves still come from
+      # pkgs.k8s.io over HTTPS; this only disables the signature check.
+      echo "deb [trusted=yes] https://pkgs.k8s.io/core:/stable:/{{ regexReplaceAll "^(v[0-9]+\\.[0-9]+).*" .Values.k8sVersion "${1}" }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
       apt-get update
       apt-get install -y kubelet={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubeadm={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubectl={{ trimPrefix "v" .Values.k8sVersion }}-1.1 containerd
       apt-mark hold kubelet kubeadm kubectl
