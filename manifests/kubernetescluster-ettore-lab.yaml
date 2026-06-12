@@ -29,7 +29,7 @@
 #   kubectl --kubeconfig local/kubeconfig.ironic-lab --context kind-ironic-lab \
 #     apply -f manifests/kubernetescluster-ettore-lab.yaml
 ---
-apiVersion: composition.krateo.io/v0-4-0
+apiVersion: composition.krateo.io/v0-10-0
 kind: KubernetesCluster
 metadata:
   name: ettore
@@ -55,6 +55,18 @@ spec:
     namespace: openstack
   ironicApiUrl: http://ironic.openstack.svc.cluster.local:6385
   ironicApiVersion: "1.81"
+  # Keystone admin creds baked into the CP cloud-init so publish-join.sh
+  # can PATCH Ironic node.extra over the OOB network. The
+  # ironic-extra-bridge sidecar in wg-ironic-proxy mirrors that into the
+  # k8s Node CR's spec.extra (where the chart's lookup picks it up).
+  # Used because this lab routes the wg tunnel one direction only —
+  # blades can reach Ironic, but not the management cluster's apiserver.
+  ironicAuth:
+    authUrl:    http://172.19.74.1:5000
+    ironicUrl:  http://172.19.74.1:6385
+    username:   admin
+    password:   ***REMOVED***
+    userDomain: Default
   managementCluster:
     # http://198.51.100.5:8443 — the kubectl-proxy sidecar inside the
     # wg-ironic-proxy pod, bound on the wireguard interface so the

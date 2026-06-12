@@ -30,6 +30,19 @@ configurationRef:
 ironicApiUrl: http://ironic.openstack.svc.cluster.local:6385
 ironicApiVersion: "1.81"
 
+# Keystone credentials baked into the CP cloud-init so publish-join.sh
+# can PATCH Ironic's node.extra directly from the blade. This is the
+# rendezvous path for labs where the blade can reach Ironic but NOT the
+# management cluster's apiserver (which the chart's mgmtCluster.apiUrl
+# was designed for). See scripts/ironic-node-extra-bridge.py for the
+# cluster-side propagation back into k8s Node CR spec.extra.
+ironicAuth:
+  authUrl:    ""           # e.g. http://172.19.74.1:5000
+  ironicUrl:  ""           # e.g. http://172.19.74.1:6385
+  username:   ""           # e.g. admin
+  password:   ""           # plaintext — lab use; rotate after
+  userDomain: Default      # keystone user domain
+
 # Management-cluster API the CP cloud-init kubectl-patches to publish
 # the join token. URL is reachable from the bare-metal blade's network —
 # this is a network design constraint, not a chart concern. See
