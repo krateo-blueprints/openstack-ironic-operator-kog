@@ -30,14 +30,23 @@ metadata:
   name: wg-ironic-proxy
   namespace: openstack
 rules:
+  # Bridge mirrors Ironic.node.extra into Node CR.spec.extra (kubeadm_join,
+  # cert_key). Reaper also touches ports / nodeprovisions / nodepowers when
+  # a half-failed helm install leaves them stranded with a stale
+  # meta.helm.sh/release-name annotation; patch is needed to strip the
+  # finalizer before deleting.
   - apiGroups:
       - baremetal.ogen.krateo.io
     resources:
       - nodes
+      - ports
+      - nodeprovisions
+      - nodepowers
     verbs:
       - get
       - list
       - patch
+      - delete
   - apiGroups:
       - ""
     resources:
@@ -79,7 +88,7 @@ spec:
         app: wg-ironic-proxy
       annotations:
         # bumps with the bridge script so the pod rolls when the script changes
-        kubernetescluster.ogen.krateo.io/bridge-revision: "3"
+        kubernetescluster.ogen.krateo.io/bridge-revision: "4"
     spec:
       serviceAccountName: wg-ironic-proxy
       containers:
