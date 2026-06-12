@@ -196,7 +196,12 @@ composition-demo: # create a BaremetalLifecycle instance; composition-dynamic-co
 # operator: a proxy authenticates with your clouds.yaml and the `ironic` Service is repointed
 # at it. The OAS server URL never changes.
 CLOUDS_FILE ?= clouds.yaml
-OS_CLOUD ?= openstack
+# Default cloud entry name used by wg-ironic-proxy / keystone-ironic-proxy when
+# authenticating to the lab Keystone. Must match an entry in clouds.yaml.
+# `ironic-system` is the system-scoped admin entry used in the Ettore lab
+# (see reference_ironic-system-scope-clouds memory: project-scoped admin
+# returns 403 on baremetal:port:create at the deploy walk).
+OS_CLOUD ?= ironic-system
 
 keystone-up: # deploy the Keystone-auth proxy and point the `ironic` Service at your real Ironic
 	@test -f "$(CLOUDS_FILE)" || { echo "ERROR: set CLOUDS_FILE=<path to clouds.yaml> (got '$(CLOUDS_FILE)')"; exit 1; }
@@ -238,7 +243,7 @@ WG_CONF     ?= local/wireguard/ironic-lab.conf
 # Project-scoped admin works at microversion 1.109+ for both node:create and port:create
 # (Ironic's RBAC matches the caller's project against node.owner). At 1.99 it returned 403
 # and needed a system_scope:all workaround; that's no longer the default.
-OS_CLOUD    ?= ironic
+# OS_CLOUD default lives near the keystone-up target (currently `ironic-system`).
 
 lab-tunnel-up: # apply the wg+proxy Deployment+Service + Secrets/ConfigMap (kubeconfig from caller)
 	@test -f "$(WG_CONF)" || { echo "ERROR: set WG_CONF (got '$(WG_CONF)')"; exit 1; }
