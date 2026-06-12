@@ -1,0 +1,54 @@
+# Render BaremetalHost CRs for control-plane nodes in
+# spec.controlPlane.recovery.failedNodes[] (Milestone 5c).
+#
+# Each entry gets a BH with spec.undeploy: true (using baremetal-host's
+# v0.3.4 widened gate — covers deploy failed, clean failed, wait
+# call-back, deploying as well as active). Once Ironic walks the blade
+# back to available, the operator moves the entry out of failedNodes[]
+# and into controlPlane.nodes[] at a REPLICA index (not 0) — the chart
+# then re-renders the node via lifecycle-cp-replicas.yaml with
+# `kubeadm join ... --control-plane --certificate-key`.
+#
+# IMPORTANT: this template does NOT pre-flight etcd. The operator MUST
+# manually run `etcdctl member remove <id>` on a healthy CP before
+# moving an entry here, or the rejoin will fail with "member already
+# exists". See USER-GUIDE.md "Recovering a failed control plane".
+{{- $cp := default (dict) .Values.controlPlane -}}
+{{- $recovery := default (dict) $cp.recovery -}}
+{{- $failed := default (list) $recovery.failedNodes -}}
+{{- $lcNs := include "kubernetes-cluster.lifecycleNamespace" . -}}
+{{- $cluster := .Values.clusterName -}}
+{{- range $idx, $f := $failed }}
+---
+apiVersion: {{ include "kubernetes-cluster.lifecycleApiVersion" $ }}
+kind: {{ include "kubernetes-cluster.lifecycleKind" $ }}
+metadata:
+  name: {{ printf "%s-cp-%s" $cluster $f.nodeName | quote }}
+  namespace: {{ $lcNs | quote }}
+  labels:
+    kubernetescluster.ogen.krateo.io/cluster: {{ $cluster | quote }}
+    kubernetescluster.ogen.krateo.io/role: control-plane
+    kubernetescluster.ogen.krateo.io/cp-role: recovering
+spec:
+  nodeName: {{ $f.nodeName | quote }}
+  nodeNamespace: {{ $lcNs | quote }}
+  {{- with $f.nodeUuid }}
+  nodeUuid: {{ . | quote }}
+  {{- end }}
+  driver: {{ $f.driver | quote }}
+  {{- with $f.driver_info }}
+  driver_info:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $f.ports }}
+  ports:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  enableInspection: false
+  image:
+    {{- include "kubernetes-cluster.image" $ | nindent 4 }}
+  undeploy: true
+  undeployMode: {{ default "full" $f.undeployMode | quote }}
+  configurationRef:
+    {{- toYaml $.Values.configurationRef | nindent 4 }}
+{{- end }}
