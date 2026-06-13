@@ -438,9 +438,80 @@ write_files:
       mkdir -p /root/.kube
       cp /etc/kubernetes/admin.conf /root/.kube/config
       KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f {{ .Values.cni.manifestUrl }}
+  - path: /etc/kubernetes/publish-workload-kubeconfig.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      # Push the freshly-minted /etc/kubernetes/admin.conf as a Secret in
+      # the management cluster's openstack namespace, so external users
+      # (the chart's drain Jobs, an operator like Ettore, …) can kubectl
+      # into the new workload cluster without SSH-scping the file off
+      # blade06.
+      #
+      # Authenticates as the chart's `<clusterName>-cp-publisher` SA — the
+      # same SA used by publish-join.sh for the Node CR patch. Its Role
+      # grants `secrets: create, get` in {{ default .Release.Namespace .Values.managementCluster.serviceAccountNamespace }}
+      # (see templates/rbac.yaml).
+      set -uo pipefail
+      exec >> /var/log/publish-workload-kubeconfig.log 2>&1
+      set -x
+      date
+      log() { echo "[$(date -Iseconds)] $*"; }
+
+      MGMT_API="{{ .Values.managementCluster.apiUrl }}"
+      MGMT_NS="{{ default .Release.Namespace .Values.managementCluster.serviceAccountNamespace }}"
+      SECRET_NAME="{{ include "kubernetes-cluster.workloadKubeconfigSecretName" . }}"
+      BEARER="{{ include "kubernetes-cluster.cpToken" . }}"
+
+      if [ -z "$BEARER" ]; then
+        log "no SA token rendered — chart's rbac.yaml has not produced the secret yet"
+        exit 1
+      fi
+
+      KCFG_B64=$(base64 -w0 < /etc/kubernetes/admin.conf)
+      PAYLOAD=$(cat <<EOF
+      {"apiVersion":"v1","kind":"Secret","metadata":{"name":"${SECRET_NAME}","namespace":"${MGMT_NS}","labels":{"kubernetescluster.ogen.krateo.io/cluster":"{{ .Values.clusterName }}"}},"type":"Opaque","data":{"kubeconfig":"${KCFG_B64}"}}
+      EOF
+      )
+      # merge-patch body for the update path (no resourceVersion required).
+      PATCH_PAYLOAD="{\"data\":{\"kubeconfig\":\"${KCFG_B64}\"}}"
+
+      for attempt in 1 2 3 4 5; do
+        log "attempt $attempt: POST ${MGMT_API}/api/v1/namespaces/${MGMT_NS}/secrets"
+        HTTP=$(curl -sS -o /tmp/pwk.out -w "%{http_code}" --max-time 15 \
+          -H "Authorization: Bearer $BEARER" \
+          -H "Content-Type: application/json" \
+          --data "$PAYLOAD" \
+          "${MGMT_API}/api/v1/namespaces/${MGMT_NS}/secrets")
+        log "POST returned HTTP=$HTTP"
+        if [ "$HTTP" = "201" ]; then
+          log "workload-kubeconfig Secret created"
+          exit 0
+        fi
+        if [ "$HTTP" = "409" ]; then
+          log "Secret already exists; PATCH to update"
+          HTTP=$(curl -sS -o /tmp/pwk.out -w "%{http_code}" --max-time 15 \
+            -X PATCH \
+            -H "Authorization: Bearer $BEARER" \
+            -H "Content-Type: application/merge-patch+json" \
+            --data "$PATCH_PAYLOAD" \
+            "${MGMT_API}/api/v1/namespaces/${MGMT_NS}/secrets/${SECRET_NAME}")
+          log "PATCH returned HTTP=$HTTP"
+          if [ "$HTTP" = "200" ]; then
+            log "workload-kubeconfig Secret updated"
+            exit 0
+          fi
+        fi
+        cat /tmp/pwk.out 2>/dev/null | head -3
+        log "attempt $attempt failed; sleeping $((attempt * 10))s"
+        sleep $((attempt * 10))
+      done
+      log "publish-workload-kubeconfig failed after 5 attempts"
+      exit 1
 runcmd:
   - /etc/kubernetes/install-k8s.sh
   - /etc/kubernetes/cp-init.sh
+  - /etc/kubernetes/publish-workload-kubeconfig.sh
   - /etc/kubernetes/publish-join.sh
   - systemctl daemon-reload
   - systemctl enable --now kubeadm-token-refresh.timer
