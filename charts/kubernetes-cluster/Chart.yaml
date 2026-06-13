@@ -13,7 +13,7 @@ description: |
     workers: gated on cp Node.spec.extra.kubeadm_join present
              -> lifecycle(deploy) -> kubeadm join
 type: application
-version: 0.10.12
+version: 0.10.13
 appVersion: "1.0"
 keywords:
   - kubernetes

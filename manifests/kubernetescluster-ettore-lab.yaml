@@ -29,7 +29,7 @@
 #   kubectl --kubeconfig local/kubeconfig.ironic-lab --context kind-ironic-lab \
 #     apply -f manifests/kubernetescluster-ettore-lab.yaml
 ---
-apiVersion: composition.krateo.io/v0-10-12
+apiVersion: composition.krateo.io/v0-10-13
 kind: KubernetesCluster
 metadata:
   name: ettore
