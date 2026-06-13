@@ -245,7 +245,12 @@ write_files:
       # pkgs.k8s.io over HTTPS; this only disables the signature check.
       echo "deb [trusted=yes] https://pkgs.k8s.io/core:/stable:/{{ regexReplaceAll "^(v[0-9]+\\.[0-9]+).*" .Values.k8sVersion "${1}" }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
       apt-get update
-      apt-get install -y kubelet={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubeadm={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubectl={{ trimPrefix "v" .Values.k8sVersion }}-1.1 containerd
+      # Resolve the full Debian package version including the upstream
+      # revision suffix (older minors ship -1.1, v1.36+ ships -2.1, etc.)
+      # by querying apt-cache rather than hard-coding `-1.1`.
+      K8S_PKG_VER=$(apt-cache madison kubelet | awk -v v="{{ trimPrefix "v" .Values.k8sVersion }}" '$3 ~ "^"v"-" {print $3; exit}')
+      test -n "$K8S_PKG_VER"
+      apt-get install -y kubelet="$K8S_PKG_VER" kubeadm="$K8S_PKG_VER" kubectl="$K8S_PKG_VER" containerd
       apt-mark hold kubelet kubeadm kubectl
       # Debian 13 trixie's containerd ships with bin_dir = "/usr/lib/cni" by
       # default. Flannel's install-cni-plugin initContainer (and kubeadm)
@@ -459,7 +464,12 @@ write_files:
       # secure since 2026-02-01. Packages still come from pkgs.k8s.io over HTTPS.
       echo "deb [trusted=yes] https://pkgs.k8s.io/core:/stable:/{{ regexReplaceAll "^(v[0-9]+\\.[0-9]+).*" .Values.k8sVersion "${1}" }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
       apt-get update
-      apt-get install -y kubelet={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubeadm={{ trimPrefix "v" .Values.k8sVersion }}-1.1 containerd
+      # Resolve the full Debian package version including upstream revision
+      # suffix (older minors -1.1, v1.36+ -2.1, etc.) via apt-cache instead
+      # of hard-coding `-1.1`.
+      K8S_PKG_VER=$(apt-cache madison kubelet | awk -v v="{{ trimPrefix "v" .Values.k8sVersion }}" '$3 ~ "^"v"-" {print $3; exit}')
+      test -n "$K8S_PKG_VER"
+      apt-get install -y kubelet="$K8S_PKG_VER" kubeadm="$K8S_PKG_VER" containerd
       apt-mark hold kubelet kubeadm
       # Debian 13 trixie's containerd ships with bin_dir = "/usr/lib/cni" by
       # default. Flannel's install-cni-plugin initContainer (and kubeadm)
@@ -554,7 +564,12 @@ write_files:
       # pkgs.k8s.io over HTTPS; this only disables the signature check.
       echo "deb [trusted=yes] https://pkgs.k8s.io/core:/stable:/{{ regexReplaceAll "^(v[0-9]+\\.[0-9]+).*" .Values.k8sVersion "${1}" }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
       apt-get update
-      apt-get install -y kubelet={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubeadm={{ trimPrefix "v" .Values.k8sVersion }}-1.1 kubectl={{ trimPrefix "v" .Values.k8sVersion }}-1.1 containerd
+      # Resolve the full Debian package version including the upstream
+      # revision suffix (older minors ship -1.1, v1.36+ ships -2.1, etc.)
+      # by querying apt-cache rather than hard-coding `-1.1`.
+      K8S_PKG_VER=$(apt-cache madison kubelet | awk -v v="{{ trimPrefix "v" .Values.k8sVersion }}" '$3 ~ "^"v"-" {print $3; exit}')
+      test -n "$K8S_PKG_VER"
+      apt-get install -y kubelet="$K8S_PKG_VER" kubeadm="$K8S_PKG_VER" kubectl="$K8S_PKG_VER" containerd
       apt-mark hold kubelet kubeadm kubectl
       # Debian 13 trixie's containerd ships with bin_dir = "/usr/lib/cni" by
       # default. Flannel's install-cni-plugin initContainer (and kubeadm)
