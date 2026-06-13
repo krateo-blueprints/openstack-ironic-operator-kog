@@ -380,17 +380,49 @@ write_files:
       done
       log "publish failed after 5 attempts — see /tmp/publish-join.out"
       exit 1
+  - path: /etc/kubernetes/cp-init.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      # Bootstrap the control plane in ONE script with a single diagnostic
+      # log, instead of scattering openssl/kubeadm/kubectl across runcmd
+      # entries where any silent failure leaves us guessing at which
+      # phase died.
+      set -euo pipefail
+      exec >> /var/log/cp-init.log 2>&1
+      set -x
+      date
+      # Pin --apiserver-advertise-address to the default-route source IP
+      # so kube-apiserver doesn't autodetect at startup. With dual-NIC
+      # blades the autodetection occasionally races the route table and
+      # binds to the wrong interface, which then has etcd advertising on
+      # one IP and apiserver on another. publish-join.sh embeds the SAME
+      # IP in the join command (kubeadm read it back from apiserver's
+      # config), so workers and CP agree on the endpoint.
+      ADVERTISE_IP=$(ip route get 8.8.8.8 2>/dev/null | awk '/src/ {for (i=1;i<=NF;i++) if ($i=="src") print $(i+1)}' | head -1)
+      echo "ADVERTISE_IP=$ADVERTISE_IP"
+      test -n "$ADVERTISE_IP"
+      # Mint a fresh certificate-key locally. Stored at /etc/kubernetes/cert-key
+      # so publish-join.sh picks it up and publishes alongside the join command.
+      # Always done — even for single-CP — so promoting to HA later is a values
+      # change, not an OS-level reconfiguration.
+      openssl rand -hex 32 > /etc/kubernetes/cert-key
+      chmod 0600 /etc/kubernetes/cert-key
+      kubeadm init \
+        --upload-certs \
+        --certificate-key=$(cat /etc/kubernetes/cert-key) \
+        --pod-network-cidr={{ .Values.network.podCIDR }} \
+        --service-cidr={{ .Values.network.serviceCIDR }} \
+        --kubernetes-version={{ .Values.k8sVersion }} \
+        --apiserver-advertise-address=$ADVERTISE_IP \
+        --apiserver-bind-port=6443{{ with include "kubernetes-cluster.controlPlaneEndpoint" . }} \
+        --control-plane-endpoint={{ . }}{{ end }}
+      mkdir -p /root/.kube
+      cp /etc/kubernetes/admin.conf /root/.kube/config
+      KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f {{ .Values.cni.manifestUrl }}
 runcmd:
   - /etc/kubernetes/install-k8s.sh
-  # Mint a fresh certificate-key locally. Stored at /etc/kubernetes/cert-key
-  # so publish-join.sh picks it up and publishes alongside the join command.
-  # Always done — even for single-CP — so promoting to HA later is a values
-  # change, not an OS-level reconfiguration.
-  - openssl rand -hex 32 > /etc/kubernetes/cert-key
-  - chmod 0600 /etc/kubernetes/cert-key
-  - kubeadm init --upload-certs --certificate-key=$(cat /etc/kubernetes/cert-key) --pod-network-cidr={{ .Values.network.podCIDR }} --service-cidr={{ .Values.network.serviceCIDR }} --kubernetes-version={{ .Values.k8sVersion }}{{ with include "kubernetes-cluster.controlPlaneEndpoint" . }} --control-plane-endpoint={{ . }}{{ end }}
-  - mkdir -p /root/.kube && cp /etc/kubernetes/admin.conf /root/.kube/config
-  - KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f {{ .Values.cni.manifestUrl }}
+  - /etc/kubernetes/cp-init.sh
   - /etc/kubernetes/publish-join.sh
   - systemctl daemon-reload
   - systemctl enable --now kubeadm-token-refresh.timer
