@@ -258,7 +258,20 @@ write_files:
       # `failed to find plugin "flannel" in path [/usr/lib/cni]` and coredns
       # never gets a sandbox. Override before starting containerd.
       mkdir -p /etc/containerd
-      containerd config default | sed 's|/usr/lib/cni|/opt/cni/bin|g' > /etc/containerd/config.toml
+      # Two patches to the default config:
+      # 1. CNI bin_dir: Debian 13's containerd defaults to /usr/lib/cni;
+      #    flannel + kubeadm install at /opt/cni/bin.
+      # 2. SystemdCgroup: Debian 13's containerd defaults to false (i.e.
+      #    cgroupfs), but kubelet defaults to cgroupDriver: systemd since
+      #    k8s 1.22. The mismatch causes kubelet to see containers in
+      #    unexpected cgroup paths and terminate them roughly every 11s
+      #    after start — observed empirically as etcd /apiserver flapping
+      #    14-28 times in a fresh cluster bringup. Aligning to systemd on
+      #    both sides eliminates the flap.
+      containerd config default \
+        | sed -e 's|/usr/lib/cni|/opt/cni/bin|g' \
+              -e 's|SystemdCgroup = false|SystemdCgroup = true|g' \
+        > /etc/containerd/config.toml
       # systemctl enable --now doesn't restart a unit that's already
       # running; Debian's containerd apt-package enables+starts on
       # install, so without an explicit restart the new config.toml is
@@ -477,7 +490,20 @@ write_files:
       # `failed to find plugin "flannel" in path [/usr/lib/cni]` and coredns
       # never gets a sandbox. Override before starting containerd.
       mkdir -p /etc/containerd
-      containerd config default | sed 's|/usr/lib/cni|/opt/cni/bin|g' > /etc/containerd/config.toml
+      # Two patches to the default config:
+      # 1. CNI bin_dir: Debian 13's containerd defaults to /usr/lib/cni;
+      #    flannel + kubeadm install at /opt/cni/bin.
+      # 2. SystemdCgroup: Debian 13's containerd defaults to false (i.e.
+      #    cgroupfs), but kubelet defaults to cgroupDriver: systemd since
+      #    k8s 1.22. The mismatch causes kubelet to see containers in
+      #    unexpected cgroup paths and terminate them roughly every 11s
+      #    after start — observed empirically as etcd /apiserver flapping
+      #    14-28 times in a fresh cluster bringup. Aligning to systemd on
+      #    both sides eliminates the flap.
+      containerd config default \
+        | sed -e 's|/usr/lib/cni|/opt/cni/bin|g' \
+              -e 's|SystemdCgroup = false|SystemdCgroup = true|g' \
+        > /etc/containerd/config.toml
       # systemctl enable --now doesn't restart a unit that's already
       # running; Debian's containerd apt-package enables+starts on
       # install, so without an explicit restart the new config.toml is
@@ -577,7 +603,20 @@ write_files:
       # `failed to find plugin "flannel" in path [/usr/lib/cni]` and coredns
       # never gets a sandbox. Override before starting containerd.
       mkdir -p /etc/containerd
-      containerd config default | sed 's|/usr/lib/cni|/opt/cni/bin|g' > /etc/containerd/config.toml
+      # Two patches to the default config:
+      # 1. CNI bin_dir: Debian 13's containerd defaults to /usr/lib/cni;
+      #    flannel + kubeadm install at /opt/cni/bin.
+      # 2. SystemdCgroup: Debian 13's containerd defaults to false (i.e.
+      #    cgroupfs), but kubelet defaults to cgroupDriver: systemd since
+      #    k8s 1.22. The mismatch causes kubelet to see containers in
+      #    unexpected cgroup paths and terminate them roughly every 11s
+      #    after start — observed empirically as etcd /apiserver flapping
+      #    14-28 times in a fresh cluster bringup. Aligning to systemd on
+      #    both sides eliminates the flap.
+      containerd config default \
+        | sed -e 's|/usr/lib/cni|/opt/cni/bin|g' \
+              -e 's|SystemdCgroup = false|SystemdCgroup = true|g' \
+        > /etc/containerd/config.toml
       # systemctl enable --now doesn't restart a unit that's already
       # running; Debian's containerd apt-package enables+starts on
       # install, so without an explicit restart the new config.toml is
