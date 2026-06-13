@@ -1,141 +1,395 @@
 # `kubernetes-cluster` composition
 
-Provision a real Kubernetes cluster on Ironic-managed bare-metal nodes by applying **one** Custom Resource. No Go operator, no extra controllers — just a layered Krateo composition that decomposes into well-known primitives.
+Provision a real Kubernetes cluster on Ironic-managed bare-metal nodes by applying **one** Custom Resource. No Go operator, no extra controllers — a layered Krateo composition that decomposes into well-known primitives and ends up calling Ironic's REST API.
+
+## Table of contents
+
+- [Layered architecture](#layered-architecture)
+- [Ironic provision-state FSM](#ironic-provision-state-fsm)
+- [Cluster bringup — sequence diagram](#cluster-bringup--sequence-diagram)
+- [The rendezvous: how the worker finds the CP](#the-rendezvous-how-the-worker-finds-the-cp)
+- [Bridge sidecar — state machine](#bridge-sidecar--state-machine)
+- [Workload kubeconfig delivery (v0.10.13)](#workload-kubeconfig-delivery-v01013)
+- [What each embedded script does](#what-each-embedded-script-does)
+- [Spec reference](#spec-reference)
+- [Day-2 operations](#day-2-operations)
+- [Accessing the provisioned cluster](#accessing-the-provisioned-cluster)
+- [Troubleshooting playbook](#troubleshooting-playbook)
+- [Related docs](#related-docs)
+
+---
+
+## Layered architecture
+
+Every box below is a Helm chart shipping its own [`CompositionDefinition`](https://docs.krateo.io/key-concepts/composition-definition/). Krateo's `composition-dynamic-controller` (cdc) turns each CR into a Helm release at the next layer down.
 
 ```
-KubernetesCluster CR        ← what the user applies
-        │
-        │ kubernetes-cluster chart renders
-        ▼
-BaremetalHost CR  (one per blade)
-        │
-        │ baremetal-host chart renders
-        ▼
-Node + Port + NodeProvision + NodePower  (KOG primitives)
-        │
-        │ KOG rest-dynamic-controller calls
-        ▼
-Ironic REST API
+┌──────────────────────────────────────────────────────────────────────────┐
+│ L4    KubernetesCluster CR             (what the user applies)            │
+│       └─ kubernetes-cluster chart                                         │
+│          ├── lifecycle-cp.yaml         → BaremetalHost  (bootstrap CP)    │
+│          ├── lifecycle-cp-replicas.yaml→ BaremetalHost  (HA replica CPs)  │
+│          ├── lifecycle-cp-recovery.yaml→ BaremetalHost  (failed-CP rebuild)│
+│          ├── lifecycle-workers.yaml    → BaremetalHost  (workers)         │
+│          ├── drain-jobs.yaml           → Job            (worker drain)    │
+│          └── rbac.yaml                 → SA + Role + Token Secret         │
+├──────────────────────────────────────────────────────────────────────────┤
+│ L3    BaremetalHost CR  (one per blade — the full lifecycle)              │
+│       └─ baremetal-host chart                                             │
+│          ├── node.yaml                 → Node           (KOG primitive)   │
+│          ├── ports.yaml                → Port × N       (KOG primitive)   │
+│          ├── transition-manage.yaml    → NodeProvision  (manage)          │
+│          ├── transition-provide.yaml   → NodeProvision  (provide)         │
+│          ├── transition-deploy.yaml    → NodeProvision  (active)          │
+│          ├── transition-undeploy.yaml  → NodeProvision  (deleted)         │
+│          ├── transition-inspect.yaml   → NodeProvision  (inspect)         │
+│          ├── transition-clean.yaml     → NodeProvision  (clean)           │
+│          └── transition-power.yaml     → NodePower      (on/off)          │
+│                                                                          │
+│       siblings (not used by kubernetes-cluster):                          │
+│        • BaremetalLifecycle CR — slim enroll→active without ports/rebuild │
+│        • BaremetalDiscovery CR — inventory pass, surfaces hw in status    │
+├──────────────────────────────────────────────────────────────────────────┤
+│ L2    KOG primitives                                                      │
+│       Node / Port / NodeProvision / NodePower / Allocation / DeployTemplate│
+│       Each CRD is generated from oas/ironic-*.yaml by Krateo's            │
+│       oasgen-provider; each has a rest-dynamic-controller (rdc) that      │
+│       maps "create/get/patch/delete CR" to a REST call.                   │
+│                                                                          │
+│       Endpoint singletons (applied once by `make restdef-up`):            │
+│        • NodeConfiguration   — Ironic API URL + microversion              │
+│        • PortConfiguration   — same, for the Port rdc                     │
+├──────────────────────────────────────────────────────────────────────────┤
+│ L1    Ironic REST API                                                     │
+│       POST /v1/nodes                  PUT /v1/nodes/{id}/states/provision │
+│       POST /v1/ports                  PUT /v1/nodes/{id}/states/power     │
+│       PATCH /v1/nodes/{id}            DELETE /v1/nodes/{id}               │
+└──────────────────────────────────────────────────────────────────────────┘
 ```
 
-## The four-layer composition stack
+The siblings (`BaremetalLifecycle`, `BaremetalDiscovery`) solve the same general problem at narrower scopes. `kubernetes-cluster` only renders `BaremetalHost` — full state machine, full power.
 
-Every box in the diagram above is a Helm chart that ships its own [`CompositionDefinition`](https://docs.krateo.io/key-concepts/composition-definition/). Krateo's `composition-dynamic-controller` (cdc) turns each CR into a Helm release at the next layer down.
+---
 
-| Layer | Chart | CRD | What 1 CR represents |
-|---|---|---|---|
-| L4 (top) | `kubernetes-cluster` | `KubernetesCluster` | a whole k8s cluster (1 bootstrap CP + N replicas + M workers) |
-| L3 | `baremetal-host` | `BaremetalHost` | one bare-metal blade managed by Ironic |
-| L3 (sibling) | `baremetal-lifecycle` | `BaremetalLifecycle` | one blade driven `enroll → active` (no ports, no rebuild lifecycle) |
-| L3 (sibling) | `baremetal-discovery` | `BaremetalDiscovery` | inventory pass — `enroll → manageable → inspecting` then read CPUs / RAM / NICs into status |
-| L2 | (KOG primitives) | `Node` / `Port` / `NodeProvision` / `NodePower` | one Ironic-API REST call (`POST /v1/nodes`, `PUT /v1/nodes/{id}/states/provision`, …) |
-| L1 | (Ironic) | — | the actual hardware |
+## Ironic provision-state FSM
 
-`kubernetes-cluster` only renders `BaremetalHost` directly. `baremetal-lifecycle` and `baremetal-discovery` are sibling compositions that solve the same problem at different scopes — useful when you want a one-off lifecycle or a discovery pass without committing to a full cluster.
+KOG's `NodeProvision` rdc drives Ironic through this state machine by `PUT`ing `target` on `/v1/nodes/{id}/states/provision`. The `baremetal-host` chart renders one `NodeProvision` CR per transition, gated on the current `provision_state`.
 
-### L2 — KOG primitives (the "ironic-operator-kog" layer)
+```
+            ┌────────┐                                                ┌────────┐
+            │ enroll │  (POST /v1/nodes)                              │ error  │
+            └────┬───┘                                                └────────┘
+                 │ target=manage                                         ▲
+                 ▼                                                       │
+            ┌─────────────┐                                              │ (any failure)
+            │ verifying   │   (Ironic verifies driver_info)              │
+            └────┬────────┘                                              │
+                 │ ok                                                    │
+                 ▼                                                       │
+            ┌──────────────┐                                             │
+   ┌────────│ manageable   │◄─────┐                                     │
+   │        └────┬─────────┘      │                                      │
+   │             │ target=provide │ target=manage                        │
+   │ target=     ▼                │ (undeploy back to manageable)        │
+   │ inspect ┌──────────┐          │                                     │
+   │         │ cleaning │          │                                     │
+   │         └────┬─────┘          │                                     │
+   │              │ ok             │                                     │
+   │              ▼                │                                     │
+   │         ┌────────────┐        │                                     │
+   ▼         │ available  │◄───────┤                                     │
+┌───────────┐└────┬───────┘        │                                     │
+│inspecting │     │ target=active   │                                     │
+│           │     │                │                                     │
+└─────┬─────┘     ▼                │                                     │
+      │      ┌─────────────┐       │                                     │
+      └──►   │ deploying   │       │                                     │
+             └────┬────────┘       │                                     │
+                  │ image written  │                                     │
+                  ▼                │                                     │
+             ┌────────────────┐    │                                     │
+             │ wait call-back │    │                                     │
+             └────┬───────────┘    │                                     │
+                  │ ramdisk done   │ target=deleted                      │
+                  ▼                │ (undeploy)                          │
+             ┌─────────┐           │                                     │
+             │ active  │───────────┘                                     │
+             └─────────┘                                                 │
+                                                                         │
+              all transitions emit error → ────────────────────────────►─┘
+```
 
-The lowest layer is generated from Ironic's OpenAPI spec by Krateo's `oasgen-provider`. From the spec we declare `RestDefinition` CRs (`manifests/restdefinition-*.yaml`); KOG generates one CRD + one `rest-dynamic-controller` (rdc) per resource:
+The chart's `lifecycle-cp.yaml` template renders the BH with `spec.image`, `configDrive`, and `online: true`. KOG walks `enroll → manageable → available → deploying → wait call-back → active` automatically; the chart only re-renders to inject the right `NodeProvision` per state.
 
-| CRD | Backed by | Maps to |
+---
+
+## Cluster bringup — sequence diagram
+
+End-to-end on a fresh apply of `KubernetesCluster ettore`. Real timing measured on the Ettore lab, Debian 13 trixie, k8s 1.36.2:
+
+```
+USER                MGMT CLUSTER (kind)             LAB / IRONIC          BLADE 06 (CP)        BLADE 10 (worker)
+  │                       │                              │                     │                    │
+  │ kubectl apply         │                              │                     │                    │
+  │  KubernetesCluster    │                              │                     │                    │
+  ├──────────────────────►│                              │                     │                    │
+  │                       │ cdc helm-installs            │                     │                    │
+  │                       │  kubernetes-cluster chart    │                     │                    │
+  │                       │                              │                     │                    │
+  │                       │ renders ettore-cp-blade06    │                     │                    │
+  │                       │  BaremetalHost CR            │                     │                    │
+  │                       │   ↓                          │                     │                    │
+  │                       │ cdc-bh helm-installs         │                     │                    │
+  │                       │  baremetal-host chart        │                     │                    │
+  │                       │   ↓                          │                     │                    │
+  │                       │ Node + Port × 2 + NodeProv  │                     │                    │
+  │                       │   ↓                          │                     │                    │
+  │                       │ KOG rdc                      │                     │                    │
+  │                       │ POST /v1/nodes  ─────────────►                     │                    │
+  │                       │ POST /v1/ports  ─────────────►                     │                    │
+  │                       │                              │ enroll              │                    │
+  │                       │ PUT manage ──────────────────► verifying           │                    │
+  │                       │                              │ manageable          │                    │
+  │                       │ PUT provide ─────────────────► cleaning            │                    │
+  │                       │                              │ available           │                    │
+  │                       │ PUT active  ─────────────────► deploying           │                    │
+  │                       │                              │  ↓ writes qcow2     │                    │
+  │                       │                              │ wait call-back      │                    │
+  │                       │                              │  ↓ boot complete    │                    │
+  │                       │                              │ active ─────────────► T+10 install-k8s.sh│
+  │                       │                              │                     │ → cp-init.sh       │
+  │                       │                              │                     │   kubeadm init     │
+  │                       │                              │                     │   kubectl apply CNI│
+  │                       │                              │                     │ → publish-         │
+  │                       │                              │                     │   workload-kc.sh   │
+  │                       │   ◄──── POST Secret ─────────┼─────────────────────┤                    │
+  │                       │ (mgmt-api proxy in wg-pod)   │                     │                    │
+  │                       │                              │                     │ → publish-join.sh  │
+  │                       │                              │ ◄─ PATCH node.extra ┤                    │
+  │                       │                              │                     │   {kubeadm_join,   │
+  │                       │                              │                     │    cert_key}       │
+  │                       │                              │                     │                    │
+  │                       │ bridge sidecar in wg-pod     │                     │                    │
+  │                       │ polls Ironic every 10s       │                     │                    │
+  │                       │ ◄─ GET /v1/nodes/blade06 ────┤                     │                    │
+  │                       │ PATCH Node.spec.extra ←──────┤                     │                    │
+  │                       │                              │                     │                    │
+  │                       │ cdc re-renders ettore CR     │                     │                    │
+  │                       │ (joinCommand lookup matches) │                     │                    │
+  │                       │ renders ettore-worker-blade10│                     │                    │
+  │                       │   ↓ same baremetal-host path │                     │                    │
+  │                       │ POST /v1/nodes  ─────────────►                     │                    │
+  │                       │ PUT active  ─────────────────►                     │ enroll → … active ►│
+  │                       │                              │                     │                    │ install-k8s.sh
+  │                       │                              │                     │                    │ → join.sh
+  │                       │                              │                     │                    │   kubeadm join
+  │                       │                              │                     │ ◄── ─── ─── ─── ───┤   192.168.0.206
+  │                       │                              │                     │   joined           │
+  │                       │                              │                     │                    │
+  │                       │                              │                     │ blade06 Ready      │
+  │                       │                              │                     │ blade10 Ready      │
+  │                       │                              │                     │                    │
+  │◄──────────────────────┼──────────────────────────────┼─────────────────────┴────────────────────┤
+  │  kubectl get nodes via ettore-workload-kubeconfig Secret                                         │
+  │   → blade06 Ready  blade10 Ready                                                                 │
+
+Total: ~23-24 min hands-off, 0 pod restarts (since v0.10.12).
+```
+
+---
+
+## The rendezvous: how the worker finds the CP
+
+The bare-metal blade can reach Ironic on the lab's OOB network, but it CAN'T reach the management cluster directly (the WG tunnel routes mgmt → lab, not the reverse). So we can't have the CP write to a k8s Secret and let the worker read it — the worker's userData has to embed the join command at chart-render time.
+
+That creates a chicken-and-egg: the worker BH needs the join command in its userData, but the join command doesn't exist until the CP has run `kubeadm init`.
+
+The chart resolves it through **Ironic `node.extra` as a publish-board**, plus a bridge sidecar that mirrors back into the management cluster:
+
+```
+┌─────────────┐                                             ┌──────────────────┐
+│  blade06    │   1. publish-join.sh PATCHes                │ Ironic           │
+│  (CP)       ├─────────────────────────────────────────────►  /v1/nodes/blade06│
+└─────────────┘   { extra: { kubeadm_join, cert_key } }     │  .extra = {…}    │
+                                                            └────────┬─────────┘
+                                                                     │
+                                                                     │ 2. bridge sidecar
+                                                                     │    polls every 10s
+                                                                     │    (GET via keystone proxy)
+                                                                     ▼
+                                                            ┌──────────────────────┐
+                                                            │ kind mgmt cluster    │
+                                                            │                      │
+                                                            │ Node CR              │
+                                                            │  blade06             │
+                                                            │  .spec.extra = {…}   │
+                                                            └────────┬─────────────┘
+                                                                     │
+                                                                     │ 3. cdc-kubernetes-cluster
+                                                                     │    re-renders ettore CR;
+                                                                     │    `joinCommand` lookup
+                                                                     │    on Node.spec.extra
+                                                                     │    now resolves.
+                                                                     ▼
+                                                            ┌──────────────────────┐
+                                                            │ ettore-worker-blade10│
+                                                            │  BaremetalHost CR    │
+                                                            │  spec.configDrive    │
+                                                            │   .userData =        │
+                                                            │   "...kubeadm join   │
+                                                            │    192.168.0.206:6443│
+                                                            │    --token …"       │
+                                                            └──────────────────────┘
+```
+
+The publish-board pattern means the worker BH simply doesn't render until the CP has published. The cdc's natural reconcile cadence picks up the bridged value within ~30s of it landing.
+
+For HA the same pattern carries `cert_key` (the encryption key for kubeadm's `kubeadm-certs` Secret, so replica CPs can `kubeadm join --control-plane`).
+
+---
+
+## Bridge sidecar — state machine
+
+`scripts/ironic-node-extra-bridge.py` runs in the `wg-ironic-proxy` pod alongside the keystone proxy. Two responsibilities:
+
+```
+                         ┌────────────────────────────┐
+              every 10s  │ list Node CRs in openstack │
+                         │  (mgmt-api SA list)        │
+                         └────────────┬───────────────┘
+                                      │
+                ┌─────────────────────┼─────────────────────────────────────┐
+                │                     │                                     │
+                ▼ for each Node       │                                     ▼ for each KOG primitive
+        ┌────────────────────┐         │                            ┌────────────────────────────┐
+        │ GET /v1/nodes/uuid │         │                            │ has annotation             │
+        │  via keystone      │         │                            │  meta.helm.sh/release-name │
+        │  proxy (127:8080)  │         │                            └──────────────┬─────────────┘
+        └────────┬───────────┘         │                                           │
+                 │                     │                                           ▼
+                 ▼                     │                                  ┌─────────────────────┐
+        ┌────────────────────┐         │                                  │ secret with that    │
+        │ provision_state in │         │                                  │ release name in ns? │
+        │ {active, deploying,│         │                                  └────────┬────────────┘
+        │  wait call-back}?  │         │                                           │
+        └─┬──────────────────┘         │                                           │ no, and CR is
+          │yes                         │                                           ▼ ≥ 60s old
+          ▼                            │                                  ┌─────────────────────┐
+   ┌──────────────────┐                │                                  │ strip finalizer +    │
+   │ if Ironic.extra  │                │                                  │ DELETE the CR        │
+   │  ≠ Node.spec     │                │                                  │ (orphan reaper)      │
+   │  → PATCH         │                │                                  └─────────────────────┘
+   │ Node.spec.extra  │                │
+   └──────────────────┘                │
+          ▲                            │
+          │no                          │
+          ▼                            │
+   ┌──────────────────────────────┐    │
+   │ clear managed keys from BOTH │    │
+   │  • Ironic.extra              │    │
+   │    (PATCH /v1/nodes/uuid)    │    │
+   │  • Node CR.spec.extra        │    │
+   │    (merge-patch)             │    │
+   │ stops stale CA hashes from   │    │
+   │ leaking into next deploy     │    │
+   └──────────────────────────────┘    │
+```
+
+The bridge logs every action: `bridged extra keys [...] from Ironic to CR <name>`, `cleared Ironic.extra keys [...] on <name> (state=available)`, `reaped orphan ports/<name> (release=... not tracked)`. Read with `kubectl -n openstack logs <wg-pod> -c ironic-extra-bridge -f`.
+
+---
+
+## Workload kubeconfig delivery (v0.10.13)
+
+The CP's cloud-init publishes `/etc/kubernetes/admin.conf` as a Secret in the management cluster, so external users get the workload kubeconfig with one `kubectl` call instead of SSH-scping it from the blade.
+
+```
+┌─────────────┐                                          ┌──────────────────────┐
+│  blade06    │  publish-workload-kubeconfig.sh           │ mgmt-api proxy in    │
+│  (CP)       │                                           │ wg-ironic-proxy pod  │
+│             │  POST                                     │                      │
+│ admin.conf  │    /api/v1/namespaces/openstack/secrets  │ kubectl-proxy        │
+│  base64─────┼─────────────────────────────────────────► │ on 198.51.100.5:8443 │
+│  encoded    │  (Authorization: Bearer <cp-publisher>)   │  ↓ forwards to       │
+│             │  Content-Type: application/json           │   in-cluster k8s API │
+│             │                                           │  with the wg pod's   │
+│ on 409:     │  PATCH                                    │  SA token            │
+│ application │    .../secrets/ettore-workload-kubeconfig │                      │
+│ /merge-     │  (no resourceVersion needed)              │ K8s API stores       │
+│  patch+json │                                           │  Secret              │
+│             │                                           └──────────┬───────────┘
+│ 5x retry,   │                                                      │
+│ /var/log/   │                                                      │
+│ publish-    │                                                      │
+│ workload-   │                                                      │
+│ kubeconfig  │                                                      │
+│ .log         │                                                      │
+└─────────────┘                                                      │
+                                                                     │
+USER ($ kubectl -n openstack get secret ettore-workload-kubeconfig)  │
+                                                                     │
+                ◄────────────────────────────────────────────────────┘
+```
+
+The `<clusterName>-cp-publisher` SA is created by the chart's `rbac.yaml` with `secrets: create, get` in the openstack namespace. Token is read at helm-template time via `lookup` and baked into the userData — same machinery used by the join-publish path.
+
+The Secret carries:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ettore-workload-kubeconfig
+  namespace: openstack
+  labels:
+    kubernetescluster.ogen.krateo.io/cluster: ettore
+type: Opaque
+data:
+  kubeconfig: <base64 admin.conf>
+```
+
+The decoded `admin.conf` server URL is `https://192.168.0.206:6443` (the CP's data-network IP that kubeadm pinned via `--apiserver-advertise-address` since v0.10.10).
+
+---
+
+## What each embedded script does
+
+Generated by the chart into the CP's cloud-init `write_files:` and called from `runcmd:`. The CP runcmd order is:
+
+```
+install-k8s.sh → cp-init.sh → publish-workload-kubeconfig.sh → publish-join.sh → systemctl enable kubeadm-token-refresh.timer
+```
+
+| Script | Logs to | What it does |
 |---|---|---|
-| `nodes.baremetal.ogen.krateo.io` | `ironic-node-controller` | CRUD on `/v1/nodes` |
-| `ports.baremetal.ogen.krateo.io` | `ironic-port-controller` | CRUD on `/v1/ports` |
-| `nodeprovisions.baremetal.ogen.krateo.io` | `ironic-node-provision-controller` | one `PUT /v1/nodes/{id}/states/provision` (fires once per CR) |
-| `nodepowers.baremetal.ogen.krateo.io` | `ironic-node-power-controller` | one `PUT /v1/nodes/{id}/states/power` (fires once per CR) |
-| `portgroups`, `allocations`, `deploytemplates` | (generated) | the corresponding Ironic resources |
+| `install-k8s.sh` | `/var/log/install-k8s.log` | apt-install `kubeadm`/`kubelet`/`kubectl`/`containerd`; rewrite `/etc/containerd/config.toml` (`bin_dir=/opt/cni/bin`, **`SystemdCgroup=true`** — fixes the etcd-flap, see v0.10.12); restart containerd; switch iptables/ip6tables to `legacy`; `modprobe overlay br_netfilter` + sysctls (`net.ipv4.ip_forward=1`, bridge-nf-call*) |
+| `cp-init.sh` | `/var/log/cp-init.log` | detect `ADVERTISE_IP` from `ip route get 8.8.8.8`; `openssl rand -hex 32 > /etc/kubernetes/cert-key`; `kubeadm init --apiserver-advertise-address=$ADVERTISE_IP` (pinned in v0.10.10 to remove dual-NIC autodetect race); copy `admin.conf` to `/root/.kube/config`; `kubectl apply` flannel |
+| `publish-workload-kubeconfig.sh` | `/var/log/publish-workload-kubeconfig.log` | base64 `admin.conf` → POST Secret (or PATCH on 409) to mgmt cluster's openstack namespace as `<clusterName>-workload-kubeconfig`; 5× retry on transient failures (v0.10.13) |
+| `publish-join.sh` | `/var/log/publish-join.log` | `kubeadm token create --print-join-command` (24h TTL); Keystone v3 password auth to lab Keystone (system_scope); PATCH `/v1/nodes/<uuid>` with JSON-Patch `add` of `/extra/kubeadm_join` and `/extra/cert_key`; 5× retry |
+| `kubeadm-token-refresh.timer` (systemd) | journal | Re-runs `publish-join.sh` every 12h (50% margin under the 24h token TTL) so workers joining beyond day 1 get a valid token |
 
-Two endpoint singletons resolve **how** to call Ironic:
+The worker's `runcmd` is simpler — `install-k8s.sh` (same chart helper, sans `kubectl`), then `join.sh`:
 
-- `NodeConfiguration` — Ironic API URL + microversion the `Node` rdc uses
-- `PortConfiguration` — same, for the `Port` rdc
+| Script | Logs to | What it does |
+|---|---|---|
+| `join.sh` | `/var/log/join.log` | 30 × 20s retry loop running the join command embedded by the chart at render time. Survives bootstrap apiserver flap windows. Was added in v0.10.9 (before v0.10.12 made the flap go away entirely; still useful for any future transient unreachability). |
 
-Both are applied once per cluster by `make restdef-up` and referenced from the higher-layer charts as `configurationRef`.
+---
 
-### L3 — the three blade compositions
-
-These three Krateo blueprints all sit on top of the same KOG primitives but cover different lifecycles. Each is a stateless template — the `composition-dynamic-controller` re-renders on every reconcile and the right transition CR is rendered when its gates match live Ironic state.
-
-#### `baremetal-host`
-
-The most complete blade composition. One `BaremetalHost` CR → a `Node` + `Port`(s) + a per-state `NodeProvision`/`NodePower`/transition CR. Covers the full state machine:
-
-```
-enroll → verifying → manageable → cleaning → available
-                                              │
-                                              │ deploy
-                                              ▼
-                         deploying → wait call-back → active
-                                                       │
-                                                       │ undeploy
-                                                       ▼
-                                                  available
-```
-
-Spec covers: identity + BMC (`driver`, `driver_info`), `ports`, optional inspection, `image`, `configDrive` (metadata + userData + networkData), `undeploy`, `online`, `maintenance`, `cleanSteps`. See [USER-GUIDE.md](USER-GUIDE.md) for the full spec walk-through.
-
-This is what `kubernetes-cluster` renders for every blade.
-
-#### `baremetal-lifecycle`
-
-Smaller, focused on the `enroll → active` happy path. No ports management, no rebuild, no clean steps. Use it when you want a one-shot provisioning step without the full BaremetalHost surface area. Not used by `kubernetes-cluster`.
-
-#### `baremetal-discovery`
-
-A discovery pass — drives `enroll → manageable → inspecting → manageable` and surfaces inventory (`cpus`, `memory_mb`, `disks`, `nics`, capabilities) in the `Node` CR's status. The output is meant to be **input** for `baremetal-lifecycle` or `baremetal-host`: a higher-level operator reads inventory and decides which blade gets a lifecycle spec. No deploy, no ports.
-
-### L4 — `kubernetes-cluster`
-
-Takes a logical cluster spec and emits one `BaremetalHost` per node, gated correctly so the state machine plays out in the right order:
-
-| Template | Renders when |
-|---|---|
-| `lifecycle-cp.yaml` | always (bootstrap CP — index 0 of `controlPlane.nodes[]`) |
-| `lifecycle-cp-replicas.yaml` | join command and cert-key both present in bootstrap CP's `Node.spec.extra` |
-| `lifecycle-cp-recovery.yaml` | nodeName listed in `spec.controlPlane.recovery.failedNodes` |
-| `lifecycle-workers.yaml` | join command present in bootstrap CP's `Node.spec.extra` |
-| `drain-jobs.yaml` | worker entry moved from `workers.nodes[]` to `workers.removed[]` |
-| `rbac.yaml` | always — minimal SA + Role used by the CP's cloud-init to patch its own Node CR and create the workload-kubeconfig Secret |
-
-Bootstrap behaviour is encoded directly in the rendered `BaremetalHost.spec.configDrive.userData` (the chart's `cpUserData` / `workerUserData` / `cpReplicaUserData` helpers):
-
-- `install-k8s.sh` — apt install of `kubeadm`/`kubelet`/`kubectl`/`containerd`, containerd config rewrite (`bin_dir=/opt/cni/bin`, `SystemdCgroup=true`), `iptables` switched to legacy, sysctls + br_netfilter loaded
-- `cp-init.sh` — `openssl rand` cert-key, `kubeadm init --apiserver-advertise-address=$(ip route get 8.8.8.8 | awk '/src/ {print $7}')`, `kubectl apply` flannel
-- `publish-join.sh` — kubeadm token create + `PATCH` Ironic `node.extra.kubeadm_join` + `cert_key`, retried on transient Keystone / Ironic failures, refreshed every 12h via systemd timer
-- `join.sh` — workers and replica CPs run `kubeadm join` with 30 × 20s retry
-
-The rendezvous between CP and workers/replicas relies on two side channels:
-
-- **Ironic `node.extra` as a publish-board** — the CP's cloud-init `PATCH`es its own join command into Ironic; this is OOB-network-reachable from the blade even when the management API isn't.
-- **`ironic-extra-bridge` sidecar** in the `wg-ironic-proxy` pod — polls Ironic and mirrors `extra.kubeadm_join` + `extra.cert_key` into the Node CR's `spec.extra` so the chart's `lookup` resolves and the worker BH renders. The same sidecar also reaps orphan KOG primitives whose `meta.helm.sh/release-name` annotation no longer matches any active helm release secret.
-
-## Bringing it up
-
-```sh
-# 1. kind + Krateo + WG/proxy + RestDefinitions
-make KIND_CLUSTER=ironic-lab lab-up
-
-# 2. all 4 charts → in-cluster chartrepo + all 4 CompositionDefinitions
-make KIND_CLUSTER=ironic-lab composition-up
-
-# 3. one CR creates the whole cluster
-kubectl apply -f manifests/kubernetescluster-ettore-lab.yaml
-```
-
-Expected duration on a 1-CP + 1-worker setup against the Ettore lab (Debian 13 trixie, k8s 1.36.2): **≈ 24 minutes** end-to-end, zero pod restarts. See [E2E.md](E2E.md) for the timing breakdown.
-
-## `KubernetesCluster` spec — one section at a time
+## Spec reference
 
 ### Identity + image
 
 ```yaml
 spec:
   clusterName: ettore
-  k8sVersion: v1.36.2          # any v1.30+ that pkgs.k8s.io publishes
+  k8sVersion: v1.36.2                   # any v1.30+ that pkgs.k8s.io publishes
   image:
     source: http://172.19.74.1:8089/debian-13-genericcloud-amd64.qcow2
     checksum: http://172.19.74.1:8089/CHECKSUM
 ```
+
+`k8sVersion` is matched to the latest `-X.X` Debian package suffix at install time via `apt-cache madison` (v0.10.11 fix — older minors ship `-1.1`, v1.36+ ships `-2.1`).
 
 ### CNI + network
 
@@ -147,47 +401,47 @@ spec:
   network:
     podCIDR: 10.244.0.0/16
     serviceCIDR: 10.96.0.0/12
-    managementApiReachability: nodeport-dns   # how blades reach the mgmt cluster API
+    managementApiReachability: nodeport-dns
 ```
 
 ### Ironic endpoint + auth
-
-`ironicAuth` is what the CP's `publish-join.sh` uses to `PATCH` Ironic over its OOB network. `configurationRef` is the singleton `NodeConfiguration` applied by `make restdef-up` — it tells the KOG `Node` controller which Ironic to talk to.
 
 ```yaml
 spec:
   ironicApiUrl: http://ironic.openstack.svc.cluster.local:6385
   ironicApiVersion: "1.81"
   ironicAuth:
-    authUrl: http://172.19.74.1:5000
-    ironicUrl: http://172.19.74.1:6385
-    username: admin
-    password: <password>
+    authUrl:    http://172.19.74.1:5000
+    ironicUrl:  http://172.19.74.1:6385
+    username:   admin
+    password:   <…>
     userDomain: Default
   configurationRef:
-    name: ironic-endpoint
+    name:      ironic-endpoint
     namespace: openstack
 ```
 
-### Management-cluster ingress
+`ironicApiUrl` + `configurationRef` are what the KOG primitives use. `ironicAuth` is what the CP's `publish-join.sh` uses to PATCH Ironic from the blade itself.
 
-The CP's cloud-init must reach **back** into the management cluster to (a) patch its own Node CR and (b) publish the workload kubeconfig as a Secret. `managementCluster.apiUrl` is what the blade calls; the SA that signs those calls is created by the chart's `rbac.yaml`.
+### Management-cluster ingress
 
 ```yaml
 spec:
   managementCluster:
-    apiUrl: http://198.51.100.5:8443          # the wg-pod's kubectl-proxy sidecar
-    serviceAccountName: ettore-cp-publisher
-    serviceAccountNamespace: openstack
+    apiUrl:                     http://198.51.100.5:8443
+    serviceAccountName:         ettore-cp-publisher
+    serviceAccountNamespace:    openstack
 ```
+
+`apiUrl` is the kubectl-proxy sidecar inside `wg-ironic-proxy`, reachable from the lab through the WG tunnel. The SA and its token-Secret are created by the chart's `rbac.yaml` with `secrets: create,get` + `nodes: get,patch` (the latter is for the CP's bridge-mediated extra publish).
 
 ### Control plane
 
 ```yaml
 spec:
   controlPlane:
-    endpoint: ""                               # set for HA (load-balancer hostname)
-    node:                                      # bootstrap CP — index 0
+    endpoint: ""                                # set for HA (LB hostname)
+    node:                                       # bootstrap CP (index 0)
       nodeName: blade06
       nodeUuid: 2f05176e-…
       driver: redfish
@@ -203,9 +457,9 @@ spec:
         - { address: "00:60:2f:36:81:02", pxe_enabled: false }
     # day-2 levers
     upgrade:
-      targetNode: ""                           # set to a CP nodeName to re-image it
+      targetNode: ""                            # set to CP nodeName to re-image
     recovery:
-      failedNodes: []                          # nodeNames to mark for chart-side recovery
+      failedNodes: []
 ```
 
 ### Workers
@@ -221,75 +475,94 @@ spec:
         driver_info: { … }
         parentNode: 5113ab44-…
         ports: [ … ]
-    removed: []                                # move an entry here to drain + undeploy
+    removed: []                                 # move entry here to drain+undeploy
 ```
+
+---
 
 ## Day-2 operations
 
-| Goal | What to change |
+| Goal | What to change in the CR |
 |---|---|
 | Add a worker | append to `spec.workers.nodes[]` |
-| Drain + remove a worker | move entry from `workers.nodes[]` to `workers.removed[]` (`drain-jobs.yaml` runs `kubectl drain` against the workload kubeconfig, then the BH gets `undeploy: true`) |
-| Add an HA replica CP | append to `spec.controlPlane.nodes[]` |
-| Reimage a CP for a k8s patch upgrade | set `spec.controlPlane.upgrade.targetNode` to the CP's nodeName; clear once Ironic walks it back to available |
+| Drain + remove a worker | move entry from `workers.nodes[]` to `workers.removed[]` — the chart renders a drain Job mounting `<cluster>-workload-kubeconfig` and then sets `spec.undeploy: true` on the BH once drain succeeds |
+| Add an HA replica CP | append to `spec.controlPlane.nodes[]` — gates on bootstrap CP's `cert_key` being present in the Node CR |
+| Reimage a CP for a k8s patch upgrade | set `spec.controlPlane.upgrade.targetNode` to the nodeName; chart re-renders BH with `undeploy: true, undeployMode: full`; clear once Ironic walks back to `available` |
 | Recover a failed CP | add nodeName to `spec.controlPlane.recovery.failedNodes` |
-| Refresh kubeadm join token | nothing — the CP's `kubeadm-token-refresh.timer` re-runs `publish-join.sh` every 12h |
+| Refresh kubeadm join token | nothing — `kubeadm-token-refresh.timer` re-runs `publish-join.sh` every 12h |
+| Rotate the workload-kubeconfig Secret | `kubectl -n openstack delete secret <cluster>-workload-kubeconfig` then `kubectl -n openstack annotate kubernetescluster <cluster> reconcile-nudge="$(date +%s)"` to nudge cdc; OR just wait for the next CP reboot |
+
+---
 
 ## Accessing the provisioned cluster
 
-The cluster's apiserver lives on the **bootstrap CP**, listening on its default-route source IP (the data network) at port 6443. Three ways to reach it:
-
-### Direct, from anywhere that routes to the data network (recommended)
-
-The blade is named exactly like the Ironic node (e.g. `blade06`). Pull its kubeconfig and use it:
+### Recommended — workload-kubeconfig Secret (v0.10.13)
 
 ```sh
-# from a workstation that can route to 192.168.0.0/24
-scp ironic@<blade06-OOB-ip>:/etc/kubernetes/admin.conf ./ettore.kubeconfig
-# fix the user account perm (Debian writes 0600 owned by root) — adjust:
-sudo chmod 600 ./ettore.kubeconfig
-KUBECONFIG=./ettore.kubeconfig kubectl get nodes -o wide
+kubectl -n openstack get secret <cluster>-workload-kubeconfig \
+  -o jsonpath='{.data.kubeconfig}' | base64 -d > my.kubeconfig
+sudo chmod 600 ./my.kubeconfig
+
+KUBECONFIG=./my.kubeconfig kubectl get nodes -o wide
 ```
 
-`admin.conf` already points at `https://<data-IP>:6443` (e.g. `192.168.0.206:6443`) which kubeadm pinned via `--apiserver-advertise-address`. **For Ettore on the lab this is the simplest path** — both `172.19.74.0/24` (OOB) and `192.168.0.0/24` (data) are reachable from the lab host.
+The decoded server URL is `https://<cp-data-ip>:6443`. Anyone with network access to the data network (the lab host, in our case) gets a working kubeconfig.
 
-### SSH-tunnelled, when you can only reach the OOB network
+### Fallback — SSH-tunnel from a workstation that only reaches OOB
 
 ```sh
-# tunnel local 6443 → blade06's apiserver
-ssh -L 6443:192.168.0.206:6443 ironic@<blade06-OOB-ip>
+ssh -L 6443:192.168.0.206:6443 ironic@<cp-OOB-ip>
 
-# rewrite the kubeconfig server URL once, in another shell
-kubectl --kubeconfig=./ettore.kubeconfig config set-cluster <cluster> \
+# in another shell — rewrite the server URL in the kubeconfig:
+kubectl --kubeconfig=./my.kubeconfig config set-cluster <cluster> \
   --server=https://127.0.0.1:6443 --insecure-skip-tls-verify=true
 ```
 
-The TLS SAN on the apiserver cert covers the IP it was advertised on; the tunnel breaks SAN verification so `--insecure-skip-tls-verify` is required for this shortcut.
+The TLS SAN covers the apiserver's actual IP, so the tunnel breaks SAN verification — `--insecure-skip-tls-verify` is required.
 
-### From inside the lab cluster itself, by SSH
+### On-blade — when you're already SSHed in for debugging
 
 ```sh
-ssh ironic@<blade06-OOB-ip>
+ssh ironic@<cp-OOB-ip>
 sudo KUBECONFIG=/etc/kubernetes/admin.conf kubectl get nodes
 ```
 
-`/root/.kube/config` is the same file — `cp-init.sh` mints it from `/etc/kubernetes/admin.conf` so `sudo kubectl` Just Works on the CP.
+`/root/.kube/config` is the same file (cp-init.sh `cp`'d it).
 
-## Where to look when something breaks
+---
 
-| Symptom | First place to read |
-|---|---|
-| `KubernetesCluster` stuck `Ready: False` | `kubectl -n krateo-system logs deploy/kubernetesclusters-vX-XX-XX-controller` |
-| `BaremetalHost` stuck `Synced: False` with "exists and cannot be imported" | orphan KOG primitives — the bridge reaper handles this within 60s, see [ORPHAN-RECOVERY.md](ORPHAN-RECOVERY.md) |
-| Worker never joins | SSH into blade06 (`172.19.74.X`), `sudo tail /var/log/cp-init.log` and `/var/log/publish-join.log`; SSH into the worker (`172.19.74.Y`) and `sudo tail /var/log/join.log` (30 × 20s retry log) |
-| etcd / apiserver flapping every ~11s | cgroup-driver mismatch — `grep cgroupDriver /var/lib/kubelet/config.yaml` and `grep SystemdCgroup /etc/containerd/config.toml` MUST agree. The chart aligns both to `systemd` since v0.10.12 |
-| Bridge log floods `HTTP Error 403` | the SA's Role is missing a verb — patch `manifests/wg-ironic-proxy.yaml` |
-| `kubectl get bh -o yaml` shows the OLD `kubeadm_join` after a redeploy | the chart's bridge clears `extra.kubeadm_join` and `extra.cert_key` from both Ironic and the Node CR while the node is NOT in `{active, deploying, wait call-back}` (since v0.10.8) — verify the bridge sidecar is reporting `cleared Ironic.extra keys` |
+## Troubleshooting playbook
+
+Order matters: top of the table = check first.
+
+| Symptom | Where to look | Often-true root cause |
+|---|---|---|
+| etcd / apiserver restart counter climbing every ~11s | `grep cgroupDriver /var/lib/kubelet/config.yaml` vs `grep SystemdCgroup /etc/containerd/config.toml` on the CP | cgroup-driver mismatch. Aligned to `systemd` since v0.10.12. If you see it again, the chart's containerd config rewrite was overridden by something. |
+| `KubernetesCluster` stuck `Ready: False` | `kubectl -n krateo-system logs deploy/kubernetesclusters-v0-X-X-controller` | core-provider regenerated the cdc; the ettore CR may be at an apiVersion no longer served. Re-apply the manifest with the latest `composition.krateo.io/v0-X-X`. |
+| `BaremetalHost` stuck `Synced: False` "exists and cannot be imported" | `kubectl -n openstack get port,nodeprovision,nodepower` for orphans | half-failed prior helm install. Bridge reaper deletes them after 60s (v0.10.8). If reaper isn't running, restart wg pod. |
+| Worker never joins, kubelet.conf missing on blade10 | `sudo tail /var/log/join.log` on blade10 | apiserver was flapping at join time (pre-v0.10.12) or worker has a stale join command (pre-v0.10.8 bridge clear-on-non-active). |
+| Worker has kubelet.conf but says `connect: connection refused` | check the CP's apiserver | same etcd-flap cluster of symptoms. v0.10.12 fix should hold. |
+| `<cluster>-workload-kubeconfig` Secret missing | `sudo tail /var/log/publish-workload-kubeconfig.log` on CP | SA token wasn't rendered (rbac.yaml race) — re-render BH by annotating the KubernetesCluster CR. |
+| `<cluster>-workload-kubeconfig` exists but points at the wrong IP | decode it: `... | base64 -d \| grep server:` | `--apiserver-advertise-address` resolved to an unexpected NIC. Check `ip route get 8.8.8.8` on CP — should print the data network IP. |
+| Bridge log spams `HTTP Error 403` | the SA's Role is missing a verb | patch `manifests/wg-ironic-proxy.yaml` Role; re-`make lab-tunnel-up`. The bridge needs `get,list,patch,delete` on `nodes,ports,nodeprovisions,nodepowers`. |
+| `kubectl get bh -o yaml` shows the OLD `kubeadm_join` after a redeploy | check Ironic node.provision_state | bridge clears extra only when state is NOT `{active, deploying, wait call-back}` (v0.10.8). If clearing isn't happening, restart the wg pod. |
+| New worker BH never renders even though blade06 is Ready | check Node CR | `Node.spec.extra.kubeadm_join` is the gate. Verify bridge mirrored it; if not, `kubectl -n openstack logs <wg-pod> -c ironic-extra-bridge --tail=30`. |
+
+### Data-driven debug discipline
+
+When a symptom survives one chart cut, the next move is **diagnostics on the live cluster, not the next chart cut**.
+
+Concretely: SSH into the CP, run the relevant `grep`/`journalctl`/`crictl` commands, read the output. The 11-second etcd kill that started this whole journey was visible from `grep cgroupDriver` + `grep SystemdCgroup` in under a minute — we'd burned nine chart cuts speculating before doing that. Don't repeat that mistake.
+
+---
 
 ## Related docs
 
 - [USER-GUIDE.md](USER-GUIDE.md) — the `BaremetalHost` spec, transition-by-transition
-- [E2E.md](E2E.md) — end-to-end timing, fixture manifests
-- [KUBERNETES-CLUSTER-PLAN.md](KUBERNETES-CLUSTER-PLAN.md) — design rationale and milestone breakdown
-- [REAL-IRONIC.md](REAL-IRONIC.md) — how to point the operator at a real, Keystone-protected Ironic
-- [ORPHAN-RECOVERY.md](ORPHAN-RECOVERY.md) — the orphan KOG primitive cleanup story
+- [E2E.md](E2E.md) — end-to-end timing breakdown + fixture manifests
+- [KUBERNETES-CLUSTER-PLAN.md](KUBERNETES-CLUSTER-PLAN.md) — design rationale, milestones
+- [REAL-IRONIC.md](REAL-IRONIC.md) — pointing the operator at a Keystone-protected Ironic
+- [ORPHAN-RECOVERY.md](ORPHAN-RECOVERY.md) — the orphan KOG primitive story
+- [BIFROST.md](BIFROST.md) — pointing the operator at a remote Bifrost
+- [VS-METAL3.md](VS-METAL3.md) — comparison with Metal3
+- [quickstart.md](quickstart.md) — bring up the local stack in 5 minutes
