@@ -29,14 +29,14 @@
 #   kubectl --kubeconfig local/kubeconfig.ironic-lab --context kind-ironic-lab \
 #     apply -f manifests/kubernetescluster-ettore-lab.yaml
 ---
-apiVersion: composition.krateo.io/v0-10-10
+apiVersion: composition.krateo.io/v0-10-11
 kind: KubernetesCluster
 metadata:
   name: ettore
   namespace: openstack
 spec:
   clusterName: ettore
-  k8sVersion: v1.30.10
+  k8sVersion: v1.36.2
   cni:
     install: flannel
     manifestUrl: https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
