@@ -194,6 +194,16 @@ services:
 {{- if $cp.endpoint -}}{{- $cp.endpoint -}}{{- end -}}
 {{- end -}}
 
+{{/* Strip the optional ":port" off controlPlane.endpoint and return just
+     the host (or IP). Used by the kube-vip static-pod manifest to know
+     which address to claim. Empty when the user hasn't set endpoint. */}}
+{{- define "kubernetes-cluster.controlPlaneVip" -}}
+{{- $cp := default (dict) .Values.controlPlane -}}
+{{- if $cp.endpoint -}}
+{{- regexReplaceAll ":[0-9]+$" $cp.endpoint "" -}}
+{{- end -}}
+{{- end -}}
+
 {{/* Cloud-init userData for the CONTROL PLANE node. Installs kubeadm,
      runs `kubeadm init` (with --control-plane-endpoint when set),
      applies the CNI, then mints a join token and publishes it onto the
@@ -398,6 +408,65 @@ write_files:
       done
       log "publish failed after 5 attempts — see /tmp/publish-join.out"
       exit 1
+  - path: /etc/kubernetes/write-kube-vip-manifest.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      # Write the kube-vip static-pod manifest into /etc/kubernetes/manifests/.
+      # Args:
+      #   $1 = VIP (the control-plane endpoint IP)
+      #   $2 = interface name kube-vip should bind the VIP on
+      # Leader election runs against the apiserver itself — admin.conf is
+      # mounted from the host (kubeadm produces it as part of init/join).
+      # Until admin.conf exists, kubelet retries the pod; once it does,
+      # kube-vip claims the VIP on the leader CP via ARP.
+      set -euo pipefail
+      VIP="${1:?missing VIP}"
+      IFACE="${2:?missing interface}"
+      mkdir -p /etc/kubernetes/manifests
+      cat > /etc/kubernetes/manifests/kube-vip.yaml <<EOF
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: kube-vip
+        namespace: kube-system
+      spec:
+        hostNetwork: true
+        hostAliases:
+          - hostnames:
+              - kubernetes
+            ip: 127.0.0.1
+        priorityClassName: system-node-critical
+        containers:
+          - name: kube-vip
+            image: ghcr.io/kube-vip/kube-vip:v0.8.7
+            imagePullPolicy: IfNotPresent
+            args: ["manager"]
+            securityContext:
+              capabilities:
+                add: ["NET_ADMIN", "NET_RAW"]
+            env:
+              - { name: vip_arp,              value: "true" }
+              - { name: port,                 value: "6443" }
+              - { name: vip_interface,        value: "$IFACE" }
+              - { name: vip_cidr,             value: "32" }
+              - { name: cp_enable,            value: "true" }
+              - { name: cp_namespace,         value: "kube-system" }
+              - { name: svc_enable,           value: "false" }
+              - { name: vip_leaderelection,   value: "true" }
+              - { name: vip_leaseduration,    value: "15" }
+              - { name: vip_renewdeadline,    value: "10" }
+              - { name: vip_retryperiod,      value: "2" }
+              - { name: address,              value: "$VIP" }
+            volumeMounts:
+              - { name: kubeconfig, mountPath: /etc/kubernetes/admin.conf }
+        volumes:
+          - name: kubeconfig
+            hostPath:
+              path: /etc/kubernetes/admin.conf
+              type: FileOrCreate
+      EOF
+      echo "wrote /etc/kubernetes/manifests/kube-vip.yaml VIP=$VIP IFACE=$IFACE"
   - path: /etc/kubernetes/cp-init.sh
     permissions: "0755"
     content: |
@@ -420,6 +489,19 @@ write_files:
       ADVERTISE_IP=$(ip route get 8.8.8.8 2>/dev/null | awk '/src/ {for (i=1;i<=NF;i++) if ($i=="src") print $(i+1)}' | head -1)
       echo "ADVERTISE_IP=$ADVERTISE_IP"
       test -n "$ADVERTISE_IP"
+{{- with include "kubernetes-cluster.controlPlaneVip" . }}
+      # HA path: write the kube-vip static-pod manifest BEFORE kubeadm
+      # init so the VIP ({{ . }}) is owned by the bootstrap CP from
+      # apiserver start. Leader election re-uses the apiserver itself, so
+      # joining replicas claim the VIP automatically if this CP dies.
+      # admin.conf doesn't exist yet — kubelet will keep retrying until
+      # kubeadm init finishes; first attempt fails, subsequent succeed.
+      VIP={{ . | quote }}
+      VIP_IFACE=$(ip -o -4 addr show | awk -v ip="$ADVERTISE_IP" '$4 ~ "^"ip"/" {print $2; exit}')
+      test -n "$VIP_IFACE"
+      mkdir -p /etc/kubernetes/manifests
+      /etc/kubernetes/write-kube-vip-manifest.sh "$VIP" "$VIP_IFACE"
+{{- end }}
       # Mint a fresh certificate-key locally. Stored at /etc/kubernetes/cert-key
       # so publish-join.sh picks it up and publishes alongside the join command.
       # Always done — even for single-CP — so promoting to HA later is a values
@@ -707,6 +789,61 @@ write_files:
       printf 'overlay\nbr_netfilter\n' > /etc/modules-load.d/k8s.conf
       printf 'net.bridge.bridge-nf-call-iptables = 1\nnet.bridge.bridge-nf-call-ip6tables = 1\nnet.ipv4.ip_forward = 1\n' > /etc/sysctl.d/99-kubernetes.conf
       sysctl --system
+  - path: /etc/kubernetes/write-kube-vip-manifest.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      # Same writer as the bootstrap CP — see cpUserData. The replica
+      # claims VIP ownership via leader election if/when the bootstrap CP
+      # dies; until then it serves the apiserver locally and forwards
+      # writes to the leader's apiserver.
+      set -euo pipefail
+      VIP="${1:?missing VIP}"
+      IFACE="${2:?missing interface}"
+      mkdir -p /etc/kubernetes/manifests
+      cat > /etc/kubernetes/manifests/kube-vip.yaml <<EOF
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: kube-vip
+        namespace: kube-system
+      spec:
+        hostNetwork: true
+        hostAliases:
+          - hostnames:
+              - kubernetes
+            ip: 127.0.0.1
+        priorityClassName: system-node-critical
+        containers:
+          - name: kube-vip
+            image: ghcr.io/kube-vip/kube-vip:v0.8.7
+            imagePullPolicy: IfNotPresent
+            args: ["manager"]
+            securityContext:
+              capabilities:
+                add: ["NET_ADMIN", "NET_RAW"]
+            env:
+              - { name: vip_arp,              value: "true" }
+              - { name: port,                 value: "6443" }
+              - { name: vip_interface,        value: "$IFACE" }
+              - { name: vip_cidr,             value: "32" }
+              - { name: cp_enable,            value: "true" }
+              - { name: cp_namespace,         value: "kube-system" }
+              - { name: svc_enable,           value: "false" }
+              - { name: vip_leaderelection,   value: "true" }
+              - { name: vip_leaseduration,    value: "15" }
+              - { name: vip_renewdeadline,    value: "10" }
+              - { name: vip_retryperiod,      value: "2" }
+              - { name: address,              value: "$VIP" }
+            volumeMounts:
+              - { name: kubeconfig, mountPath: /etc/kubernetes/admin.conf }
+        volumes:
+          - name: kubeconfig
+            hostPath:
+              path: /etc/kubernetes/admin.conf
+              type: FileOrCreate
+      EOF
+      echo "wrote /etc/kubernetes/manifests/kube-vip.yaml VIP=$VIP IFACE=$IFACE"
   - path: /etc/kubernetes/join.sh
     permissions: "0755"
     content: |
@@ -723,6 +860,16 @@ write_files:
       #     --certificate-key=<key-from-Node.spec.extra.cert_key>
       exec >> /var/log/join.log 2>&1
       set -x
+{{- with include "kubernetes-cluster.controlPlaneVip" . }}
+      # HA path: write the kube-vip static-pod manifest BEFORE kubeadm
+      # join. kubelet will see it during the join and start kube-vip
+      # alongside the new apiserver. The bootstrap CP already owns the
+      # VIP via ARP, so kubeadm join's TLS handshake against
+      # {{ . }}:6443 lands cleanly.
+      ADVERTISE_IP=$(ip route get 8.8.8.8 2>/dev/null | awk '/src/ {for (i=1;i<=NF;i++) if ($i=="src") print $(i+1)}' | head -1)
+      VIP_IFACE=$(ip -o -4 addr show | awk -v ip="$ADVERTISE_IP" '$4 ~ "^"ip"/" {print $2; exit}')
+      /etc/kubernetes/write-kube-vip-manifest.sh {{ . | quote }} "$VIP_IFACE"
+{{- end }}
       for i in $(seq 1 30); do
         echo "[$(date -Iseconds)] join attempt $i"
         if {{ $jc }} --control-plane --certificate-key {{ $ck }}; then

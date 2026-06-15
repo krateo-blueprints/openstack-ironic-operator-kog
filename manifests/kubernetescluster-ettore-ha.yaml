@@ -1,0 +1,148 @@
+# HA cluster: 3-CP stacked-etcd + 3 workers on Ettore's lab.
+#
+# Topology (Ironic blades → roles):
+#   CP   bootstrap: blade06   (cluster init, kubeadm --upload-certs)
+#   CP   replica 1: blade05
+#   CP   replica 2: blade04
+#   Worker:         blade10, blade07, blade08
+#
+# Control-plane endpoint is a kube-vip VIP on 192.168.0.250 (chosen
+# outside the lab's DHCP pool). kube-vip runs as a static pod on every
+# CP (cloud-init writes /etc/kubernetes/manifests/kube-vip.yaml before
+# kubeadm init/join) and serves the VIP via ARP with leader election —
+# whichever CP is alive owns 192.168.0.250.
+#
+# Pre-reqs (Ettore lab side):
+#   - 192.168.0.250 is NOT issued by the data-network DHCP.
+#   - blade04 / blade05 / blade07 / blade08 are powered and Redfish-
+#     reachable at http://172.19.74.11:8000.
+#   - The standalone BH fixtures (baremetalhost-blade04.yaml, etc.) MUST
+#     be deleted first — they collide on nodeName otherwise.
+#
+# Apply:
+#   kubectl --kubeconfig local/kubeconfig.ironic-lab --context kind-ironic-lab \
+#     apply -f manifests/kubernetescluster-ettore-ha.yaml
+---
+apiVersion: composition.krateo.io/v0-10-14
+kind: KubernetesCluster
+metadata:
+  name: ettore-ha
+  namespace: openstack
+spec:
+  clusterName: ettore-ha
+  k8sVersion: v1.36.2
+  cni:
+    install: flannel
+    manifestUrl: https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
+  network:
+    podCIDR: 10.244.0.0/16
+    serviceCIDR: 10.96.0.0/12
+    managementApiReachability: nodeport-dns
+  image:
+    source: http://172.19.74.1:8089/debian-13-genericcloud-amd64.qcow2
+    checksum: http://172.19.74.1:8089/CHECKSUM
+  configurationRef:
+    name: ironic-endpoint
+    namespace: openstack
+  ironicApiUrl: http://ironic.openstack.svc.cluster.local:6385
+  ironicApiVersion: "1.81"
+  ironicAuth:
+    authUrl:    http://172.19.74.1:5000
+    ironicUrl:  http://172.19.74.1:6385
+    username:   admin
+    password:   ***REMOVED***
+    userDomain: Default
+  managementCluster:
+    apiUrl:                  http://198.51.100.5:8443
+    serviceAccountName:      ettore-ha-cp-publisher
+    serviceAccountNamespace: openstack
+  controlPlane:
+    # kube-vip claims this address and binds 6443 on all CP nodes via
+    # ARP leader election. kubeadm bakes the VIP into the apiserver's
+    # TLS SAN through --control-plane-endpoint, so kubeconfigs work
+    # against any live CP without rewriting.
+    endpoint: "192.168.0.250:6443"
+    nodes:
+      # nodes[0] = bootstrap CP — runs `kubeadm init --upload-certs`.
+      - nodeName:    blade06
+        nodeUuid:    2f05176e-4531-4a90-a3bd-eda84b517d57
+        parentNode:  5113ab44-faf2-4f76-bb41-ea8b14b7aa92
+        driver:      redfish
+        driver_info:
+          redfish_address:   http://172.19.74.11:8000
+          redfish_password:  baremetal
+          redfish_system_id: /redfish/v1/Systems/blade06
+          redfish_username:  ironic
+          redfish_verify_ca: false
+        ports:
+          - { address: "00:60:2f:36:81:01", pxe_enabled: true  }
+          - { address: "00:60:2f:36:81:02", pxe_enabled: false }
+      # Replica CPs gate on bootstrap's cert_key (2h kubeadm TTL).
+      - nodeName:    blade05
+        nodeUuid:    ef74ac60-e7f5-44be-9b7e-358822dc6b9d
+        parentNode:  5113ab44-faf2-4f76-bb41-ea8b14b7aa92
+        driver:      redfish
+        driver_info:
+          redfish_address:   http://172.19.74.11:8000
+          redfish_password:  baremetal
+          redfish_system_id: /redfish/v1/Systems/blade05
+          redfish_username:  ironic
+          redfish_verify_ca: false
+        ports:
+          - { address: "00:60:2f:35:81:01", pxe_enabled: true  }
+          - { address: "00:60:2f:35:81:02", pxe_enabled: false }
+      - nodeName:    blade04
+        nodeUuid:    4ecc2ccf-c9d7-4e36-872b-1279b538609f
+        parentNode:  5113ab44-faf2-4f76-bb41-ea8b14b7aa92
+        driver:      redfish
+        driver_info:
+          redfish_address:   http://172.19.74.11:8000
+          redfish_password:  baremetal
+          redfish_system_id: /redfish/v1/Systems/blade04
+          redfish_username:  ironic
+          redfish_verify_ca: false
+        ports:
+          - { address: "00:60:2f:34:81:01", pxe_enabled: true  }
+          - { address: "00:60:2f:34:81:02", pxe_enabled: false }
+  workers:
+    drainTimeout: 5m
+    nodes:
+      - nodeName:    blade10
+        nodeUuid:    fcae4724-4837-4916-8d39-7348b1389a68
+        parentNode:  5113ab44-faf2-4f76-bb41-ea8b14b7aa92
+        driver:      redfish
+        driver_info:
+          redfish_address:   http://172.19.74.11:8000
+          redfish_password:  baremetal
+          redfish_system_id: /redfish/v1/Systems/blade10
+          redfish_username:  ironic
+          redfish_verify_ca: false
+        ports:
+          - { address: "00:60:2f:3a:81:01", pxe_enabled: true  }
+          - { address: "00:60:2f:3a:81:02", pxe_enabled: false }
+      - nodeName:    blade07
+        nodeUuid:    dfd4bf28-17c2-4141-83f8-361acdc7a633
+        parentNode:  5113ab44-faf2-4f76-bb41-ea8b14b7aa92
+        driver:      redfish
+        driver_info:
+          redfish_address:   http://172.19.74.11:8000
+          redfish_password:  baremetal
+          redfish_system_id: /redfish/v1/Systems/blade07
+          redfish_username:  ironic
+          redfish_verify_ca: false
+        ports:
+          - { address: "00:60:2f:37:81:01", pxe_enabled: true  }
+          - { address: "00:60:2f:37:81:02", pxe_enabled: false }
+      - nodeName:    blade08
+        nodeUuid:    daef0a77-1db5-4181-a577-bcfb31becc72
+        parentNode:  5113ab44-faf2-4f76-bb41-ea8b14b7aa92
+        driver:      redfish
+        driver_info:
+          redfish_address:   http://172.19.74.11:8000
+          redfish_password:  baremetal
+          redfish_system_id: /redfish/v1/Systems/blade08
+          redfish_username:  ironic
+          redfish_verify_ca: false
+        ports:
+          - { address: "00:60:2f:38:81:01", pxe_enabled: true  }
+          - { address: "00:60:2f:38:81:02", pxe_enabled: false }
