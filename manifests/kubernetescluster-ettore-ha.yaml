@@ -6,14 +6,22 @@
 #   CP   replica 2: blade04
 #   Worker:         blade10, blade07, blade08
 #
-# Control-plane endpoint is a kube-vip VIP on 192.168.0.250 (chosen
-# outside the lab's DHCP pool). kube-vip runs as a static pod on every
-# CP (cloud-init writes /etc/kubernetes/manifests/kube-vip.yaml before
+# Control-plane endpoint is a kube-vip VIP on 172.19.74.51 (the OOB
+# network, in the 51-100 range Ettore allocated for user VIPs — see
+# Teams chat: 1-50 reserved Ettore, 101-199 Ironic DHCP, 200-254
+# reserved Ettore). kube-vip runs as a static pod on every CP
+# (cloud-init writes /etc/kubernetes/manifests/kube-vip.yaml before
 # kubeadm init/join) and serves the VIP via ARP with leader election —
-# whichever CP is alive owns 192.168.0.250.
+# whichever CP is alive owns 172.19.74.51.
+#
+# Because the VIP lives on OOB, cp-init.sh / join.sh derive the
+# apiserver-advertise-address from the VIP's /24 (so the apiserver
+# bind and the kube-vip ARP claim land on the same NIC — enp1s0
+# typically). This overrides the default-route-IP detection used in
+# the single-CP path.
 #
 # Pre-reqs (Ettore lab side):
-#   - 192.168.0.250 is NOT issued by the data-network DHCP.
+#   - 172.19.74.51 is free (within his 51-100 allocation).
 #   - blade04 / blade05 / blade07 / blade08 are powered and Redfish-
 #     reachable at http://172.19.74.11:8000.
 #   - The standalone BH fixtures (baremetalhost-blade04.yaml, etc.) MUST
@@ -60,8 +68,9 @@ spec:
     # kube-vip claims this address and binds 6443 on all CP nodes via
     # ARP leader election. kubeadm bakes the VIP into the apiserver's
     # TLS SAN through --control-plane-endpoint, so kubeconfigs work
-    # against any live CP without rewriting.
-    endpoint: "192.168.0.250:6443"
+    # against any live CP without rewriting. VIP allocation from Ettore:
+    # 172.19.74.51-100 free for user VIPs (51 chosen as low-end).
+    endpoint: "172.19.74.51:6443"
     nodes:
       # nodes[0] = bootstrap CP — runs `kubeadm init --upload-certs`.
       - nodeName:    blade06
