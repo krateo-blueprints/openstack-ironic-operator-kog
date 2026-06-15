@@ -701,6 +701,15 @@ write_files:
       set -x
       for i in $(seq 1 30); do
         echo "[$(date -Iseconds)] join attempt $i"
+        # Before every retry, scrub partial state from the previous failed
+        # attempt — kubeadm join writes kubelet.conf and starts kubelet
+        # part-way through, then exits non-zero if the apiserver isn't
+        # ready yet. The next retry would otherwise hit
+        # `FileAvailable--etc-kubernetes-kubelet.conf` preflight errors
+        # for the rest of the loop.
+        if [ "$i" -gt 1 ]; then
+          kubeadm reset --force --cleanup-tmp-dir || true
+        fi
         if {{ $jc }}; then
           echo "[$(date -Iseconds)] join succeeded on attempt $i"
           exit 0
@@ -886,6 +895,14 @@ write_files:
 {{- end }}
       for i in $(seq 1 30); do
         echo "[$(date -Iseconds)] join attempt $i"
+        # Scrub partial state from the previous failed attempt — see the
+        # worker join.sh for the full rationale. The replica path is
+        # especially exposed because `--control-plane` writes a much
+        # larger set of /etc/kubernetes/* files; one half-done attempt
+        # poisons every subsequent retry.
+        if [ "$i" -gt 1 ]; then
+          kubeadm reset --force --cleanup-tmp-dir || true
+        fi
         if {{ $jc }} --control-plane --certificate-key {{ $ck }}; then
           echo "[$(date -Iseconds)] join succeeded on attempt $i"
           exit 0

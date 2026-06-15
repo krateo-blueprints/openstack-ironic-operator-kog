@@ -13,5 +13,5 @@ metadata:
   namespace: krateo-system
 spec:
   chart:
-    url: http://chartrepo.openstack.svc.cluster.local/kubernetes-cluster-0.10.14.tgz
-    version: "0.10.14"
+    url: http://chartrepo.openstack.svc.cluster.local/kubernetes-cluster-0.10.15.tgz
+    version: "0.10.15"
