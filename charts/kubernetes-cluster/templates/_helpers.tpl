@@ -486,21 +486,31 @@ write_files:
       # one IP and apiserver on another. publish-join.sh embeds the SAME
       # IP in the join command (kubeadm read it back from apiserver's
       # config), so workers and CP agree on the endpoint.
-      ADVERTISE_IP=$(ip route get 8.8.8.8 2>/dev/null | awk '/src/ {for (i=1;i<=NF;i++) if ($i=="src") print $(i+1)}' | head -1)
-      echo "ADVERTISE_IP=$ADVERTISE_IP"
+{{- $vip := include "kubernetes-cluster.controlPlaneVip" . }}
+{{- if $vip }}
+      # HA path: derive ADVERTISE_IP from the VIP's /24 instead of the
+      # default-route source IP, because the VIP lives on the OOB network
+      # while the default route is via the data network. We need the
+      # apiserver bind AND the kube-vip claim to land on the SAME
+      # interface — otherwise a worker connecting to VIP:6443 hits a CP
+      # whose apiserver isn't listening on that NIC.
+      VIP={{ $vip | quote }}
+      VIP_PREFIX=$(echo "$VIP" | awk -F. '{print $1"."$2"."$3"."}')
+      ADVERTISE_IP=$(ip -o -4 addr show \
+        | awk -v p="$VIP_PREFIX" '$4 ~ "^"p {sub("/.*","",$4); print $4; exit}')
+      VIP_IFACE=$(ip -o -4 addr show \
+        | awk -v p="$VIP_PREFIX" '$4 ~ "^"p {print $2; exit}')
+      echo "HA: VIP=$VIP ADVERTISE_IP=$ADVERTISE_IP VIP_IFACE=$VIP_IFACE"
       test -n "$ADVERTISE_IP"
-{{- with include "kubernetes-cluster.controlPlaneVip" . }}
-      # HA path: write the kube-vip static-pod manifest BEFORE kubeadm
-      # init so the VIP ({{ . }}) is owned by the bootstrap CP from
-      # apiserver start. Leader election re-uses the apiserver itself, so
-      # joining replicas claim the VIP automatically if this CP dies.
-      # admin.conf doesn't exist yet — kubelet will keep retrying until
-      # kubeadm init finishes; first attempt fails, subsequent succeed.
-      VIP={{ . | quote }}
-      VIP_IFACE=$(ip -o -4 addr show | awk -v ip="$ADVERTISE_IP" '$4 ~ "^"ip"/" {print $2; exit}')
       test -n "$VIP_IFACE"
       mkdir -p /etc/kubernetes/manifests
       /etc/kubernetes/write-kube-vip-manifest.sh "$VIP" "$VIP_IFACE"
+{{- else }}
+      ADVERTISE_IP=$(ip route get 8.8.8.8 2>/dev/null \
+        | awk '/src/ {for (i=1;i<=NF;i++) if ($i=="src") print $(i+1)}' \
+        | head -1)
+      echo "single-CP: ADVERTISE_IP=$ADVERTISE_IP"
+      test -n "$ADVERTISE_IP"
 {{- end }}
       # Mint a fresh certificate-key locally. Stored at /etc/kubernetes/cert-key
       # so publish-join.sh picks it up and publishes alongside the join command.
@@ -862,13 +872,17 @@ write_files:
       set -x
 {{- with include "kubernetes-cluster.controlPlaneVip" . }}
       # HA path: write the kube-vip static-pod manifest BEFORE kubeadm
-      # join. kubelet will see it during the join and start kube-vip
-      # alongside the new apiserver. The bootstrap CP already owns the
-      # VIP via ARP, so kubeadm join's TLS handshake against
-      # {{ . }}:6443 lands cleanly.
-      ADVERTISE_IP=$(ip route get 8.8.8.8 2>/dev/null | awk '/src/ {for (i=1;i<=NF;i++) if ($i=="src") print $(i+1)}' | head -1)
-      VIP_IFACE=$(ip -o -4 addr show | awk -v ip="$ADVERTISE_IP" '$4 ~ "^"ip"/" {print $2; exit}')
-      /etc/kubernetes/write-kube-vip-manifest.sh {{ . | quote }} "$VIP_IFACE"
+      # join. kubelet starts kube-vip during the join; the bootstrap CP
+      # already owns the VIP via ARP, so this replica's kube-vip stays
+      # in backup mode until the bootstrap CP dies, then takes over.
+      # The VIP_IFACE must be the OOB-network interface (same /24 as
+      # the VIP), matching cp-init.sh's derivation on the bootstrap CP.
+      VIP={{ . | quote }}
+      VIP_PREFIX=$(echo "$VIP" | awk -F. '{print $1"."$2"."$3"."}')
+      VIP_IFACE=$(ip -o -4 addr show \
+        | awk -v p="$VIP_PREFIX" '$4 ~ "^"p {print $2; exit}')
+      test -n "$VIP_IFACE"
+      /etc/kubernetes/write-kube-vip-manifest.sh "$VIP" "$VIP_IFACE"
 {{- end }}
       for i in $(seq 1 30); do
         echo "[$(date -Iseconds)] join attempt $i"
