@@ -3,9 +3,8 @@
 # chart per instance and reconciles it (re-evaluating the chart's `lookup` each reconcile to
 # render the per-state NodeProvision transitions).
 #
-# The url below points at the in-cluster chart server used by the local env (`make composition-up`
-# packages the chart and serves it). For a real cluster, publish the .tgz (HTTP/OCI/Helm repo)
-# and set spec.chart.url accordingly.
+# The chart is published to GHCR as an OCI artifact by .github/workflows/release-chart.yaml on
+# tag/dispatch. For local development you may repoint spec.chart.url at an in-cluster chart server.
 ---
 apiVersion: core.krateo.io/v1alpha1
 kind: CompositionDefinition
@@ -14,5 +13,5 @@ metadata:
   namespace: krateo-system
 spec:
   chart:
-    url: http://chartrepo.openstack.svc.cluster.local/baremetal-lifecycle-0.3.1.tgz
+    url: oci://ghcr.io/braghettos/charts/baremetal-lifecycle
     version: "0.3.1"

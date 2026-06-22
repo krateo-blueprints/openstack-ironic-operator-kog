@@ -4,10 +4,20 @@ description: Helm chart for Ironic bare metal server provisioning via compositio
 type: application
 version: 0.3.1
 appVersion: "1.0"
+icon: https://raw.githubusercontent.com/krateoplatformops/krateo/main/docs/media/logo.svg
 keywords:
+  - compute
+  - baremetal
   - ironic
+  - provisioning
+  - kog
   - bare-metal
   - openstack
   - krateo
 maintainers:
   - name: openstack-ironic-operator
+annotations:
+  krateo.io/category: compute
+  krateo.io/display-name: Baremetal Lifecycle (Ironic KOG)
+  krateo.io/maturity: beta
+  krateoSupportedVersion: ">= 2.5.1"
