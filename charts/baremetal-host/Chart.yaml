@@ -9,11 +9,20 @@ description: |
 type: application
 version: 0.3.5
 appVersion: "1.0"
+icon: https://www.openstack.org/themes/openstack/images/project-mascots/Ironic/OpenStack_Project_Ironic_vertical.png
 keywords:
   - ironic
   - bare-metal
   - openstack
   - krateo
   - metal3
+  - baremetal
+  - compute
+  - kog
 maintainers:
   - name: openstack-ironic-operator
+annotations:
+  krateo.io/category: compute
+  krateo.io/display-name: Baremetal Host (Ironic KOG)
+  krateo.io/maturity: beta
+  krateoSupportedVersion: ">= 2.5.1"

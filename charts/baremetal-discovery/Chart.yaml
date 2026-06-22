@@ -4,11 +4,20 @@ description: Discovery composition for Ironic bare-metal nodes. Creates a Node C
 type: application
 version: 0.1.1
 appVersion: "1.0"
+icon: https://www.openstack.org/themes/openstack/images/project-mascots/Ironic/OpenStack_Project_Ironic_vertical.png
 keywords:
   - ironic
   - bare-metal
   - inspection
   - inventory
   - krateo
+  - baremetal
+  - compute
+  - kog
 maintainers:
   - name: openstack-ironic-operator
+annotations:
+  krateo.io/category: compute
+  krateo.io/display-name: Baremetal Discovery (Ironic KOG)
+  krateo.io/maturity: beta
+  krateoSupportedVersion: ">= 2.5.1"
