@@ -1,0 +1,35 @@
+# Example Composition for the baremetal-lifecycle blueprint.
+# Drives an Ironic bare metal node from `enroll` to `active` via the
+# composition-dynamic-controller generated from the baremetal-lifecycle CompositionDefinition.
+#
+# apiVersion encodes the chart version (0.3.1 -> v0-3-1); Kind is the PascalCase of the
+# CD metadata.name (baremetal-lifecycle -> BaremetalLifecycle).
+#
+# Per-resource CRs (Node / Port / NodeProvision / NodePower) are rendered by the chart at
+# install time; no separate samples/ directory ships with this chart.
+---
+apiVersion: composition.krateo.io/v0-3-1
+kind: BaremetalLifecycle
+metadata:
+  name: baremetal-lifecycle
+  namespace: krateo-system
+spec:
+  # Key user input: the node identity.
+  nodeName: server-01
+  driver: ipmi
+  # BMC credentials passed straight to Ironic for the chosen driver.
+  driver_info:
+    ipmi_address: 172.19.74.10
+    ipmi_username: admin
+    ipmi_password: changeme
+  # PXE NIC(s). nodeUuid is required when ports are declared.
+  nodeUuid: 11111111-1111-1111-1111-111111111111
+  ports:
+    - address: "00:60:2f:32:81:01"
+      pxe_enabled: true
+  # Image to deploy (available -> active).
+  instance_info:
+    image_source: "http://172.19.74.1:8089/debian-12-generic-amd64.qcow2"
+    image_checksum: "http://172.19.74.1:8089/CHECKSUM"
+  # Power toggle (omit to leave power unmanaged by this composition).
+  online: true

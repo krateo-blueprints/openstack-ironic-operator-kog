@@ -1,23 +1,61 @@
-# Package and optionally publish baremetal-lifecycle chart
-# On release: creates .tgz artifact
-# To publish to OCI: add secrets and helm push (see README)
-name: Release Chart
+name: release-chart
+
+# Publishes all four ironic-KOG charts (each at its own Chart.yaml version) to
+# oci://ghcr.io/<owner>/charts/<name> on any SemVer tag or manual dispatch. No
+# single tag-version guard (the four charts version independently).
+
 on:
-  release:
-    types:
-      - published
-  workflow_dispatch:
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  HELM_VERSION: v3.19.0
+
 jobs:
-  package:
+  publish:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - name: Package chart
-        run: |
-          helm package charts/baremetal-lifecycle -d dist/
-          ls -la dist/
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install helm
+        uses: azure/setup-helm@v4
         with:
-          name: baremetal-lifecycle-chart
-          path: dist/*.tgz
+          version: ${{ env.HELM_VERSION }}
+
+      - name: helm lint (all charts)
+        run: |
+          for dir in charts/baremetal-discovery charts/baremetal-host charts/baremetal-lifecycle charts/kubernetes-cluster; do
+            helm lint "$dir"
+          done
+
+      - name: helm package (all charts)
+        run: |
+          mkdir -p dist
+          for dir in charts/baremetal-discovery charts/baremetal-host charts/baremetal-lifecycle charts/kubernetes-cluster; do
+            helm package "$dir" --destination dist
+          done
+
+      - name: helm registry login (GHCR)
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
+
+      - name: helm push (all charts, retry on GHCR flakiness)
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          for tgz in dist/*.tgz; do
+            ok=0
+            for attempt in 1 2 3 4 5; do
+              helm push "$tgz" "oci://ghcr.io/${owner}/charts" && { ok=1; break; }
+              echo "push attempt $attempt failed (GHCR flakiness); retrying in 10s"
+              sleep 10
+            done
+            [ "$ok" = 1 ] || { echo "::error::push of $tgz failed after 5 attempts"; exit 1; }
+          done
