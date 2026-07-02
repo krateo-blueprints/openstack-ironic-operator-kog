@@ -31,9 +31,18 @@
 # wait per the API ref; `deleted` has broader applicability.)
 {{- $state := include "baremetal-host.provisionState" . -}}
 {{- $undeployStates := list "active" "deploy failed" "clean failed" "wait call-back" "deploying" -}}
+{{- /* v0.4.0: fires when EITHER (a) user set spec.undeploy=true,
+       OR (b) shouldAutoRedeploy detected configdrive-hash drift on
+       an `active` node. (b) closes the redeploy-on-userdata-change
+       loop without operator intervention.
+       v0.4.3 (c): shouldRecoverStuckCallback fires when state has
+       been wait-callback past threshold — recovers blades whose IPA
+       never called back (PXE/network/chassis-manager issue). */ -}}
+{{- $autoRedeploy := include "baremetal-host.shouldAutoRedeploy" . -}}
+{{- $stuckCallback := include "baremetal-host.shouldRecoverStuckCallback" . -}}
 {{- if .Values.nodeName }}
 {{- if not (include "baremetal-host.detached" .) }}
-{{- if and .Values.undeploy (has $state $undeployStates) }}
+{{- if and (or .Values.undeploy $autoRedeploy $stuckCallback) (has $state $undeployStates) }}
 apiVersion: {{ include "baremetal-host.nodeApiVersion" . }}
 kind: NodeProvision
 metadata:

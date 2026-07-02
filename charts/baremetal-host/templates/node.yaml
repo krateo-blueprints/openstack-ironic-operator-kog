@@ -3,11 +3,21 @@
 # otherwise Ironic complains about empty image_source on the way to active.
 {{- if .Values.nodeName }}
 {{- $instanceInfo := include "baremetal-host.instanceInfo" . | fromYaml }}
+{{- $cdHash := include "baremetal-host.configDriveHash" . }}
 apiVersion: {{ include "baremetal-host.nodeApiVersion" . }}
 kind: Node
 metadata:
   name: {{ .Values.nodeName }}
   namespace: {{ include "baremetal-host.nodeNamespace" . }}
+  {{- if $cdHash }}
+  annotations:
+    # v0.4.0: configdrive-hash stamped on every render. Compared against
+    # the freshly-rendered hash on subsequent reconciles; if changed on
+    # an `active` node, transition-undeploy auto-fires to drive a chart-
+    # managed redeploy (single apply, no operator choreography). See
+    # _helpers.tpl `shouldAutoRedeploy`.
+    baremetal.ogen.krateo.io/configdrive-hash: {{ $cdHash | quote }}
+  {{- end }}
   labels:
     app.kubernetes.io/name: baremetal-host
     app.kubernetes.io/instance: {{ .Release.Name }}
