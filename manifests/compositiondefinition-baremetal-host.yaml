@@ -8,5 +8,5 @@ metadata:
   namespace: krateo-system
 spec:
   chart:
-    url: http://chartrepo.openstack.svc.cluster.local/baremetal-host-0.3.5.tgz
-    version: "0.3.5"
+    url: http://chartrepo.openstack.svc.cluster.local/baremetal-host-0.4.5.tgz
+    version: "0.4.5"
