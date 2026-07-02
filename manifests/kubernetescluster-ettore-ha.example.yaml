@@ -1,37 +1,32 @@
-# HA cluster: 3-CP stacked-etcd + 3 workers on Ettore's lab.
+# Sample 3-CP + 3-worker HA KubernetesCluster manifest.
 #
-# Topology (Ironic blades → roles):
-#   CP   bootstrap: blade06   (cluster init, kubeadm --upload-certs)
-#   CP   replica 1: blade05
-#   CP   replica 2: blade04
-#   Worker:         blade10, blade07, blade08
+# COPY THIS FILE to `kubernetescluster-<yourname>.yaml` (which is
+# gitignored) and fill the placeholders (<...>) with your own values.
 #
-# Control-plane endpoint is a kube-vip VIP on 172.19.74.51 (the OOB
-# network, in the 51-100 range Ettore allocated for user VIPs — see
-# Teams chat: 1-50 reserved Ettore, 101-199 Ironic DHCP, 200-254
-# reserved Ettore). kube-vip runs as a static pod on every CP
-# (cloud-init writes /etc/kubernetes/manifests/kube-vip.yaml before
-# kubeadm init/join) and serves the VIP via ARP with leader election —
-# whichever CP is alive owns 172.19.74.51.
+# Placeholders you MUST replace before applying:
+#   - <KEYSTONE_ADMIN_PASSWORD>  admin password for the Ironic Keystone
+#   - <REDFISH_PASSWORD>         Redfish account password (per-node)
 #
-# Because the VIP lives on OOB, cp-init.sh / join.sh derive the
-# apiserver-advertise-address from the VIP's /24 (so the apiserver
-# bind and the kube-vip ARP claim land on the same NIC — enp1s0
-# typically). This overrides the default-route-IP detection used in
-# the single-CP path.
+# Everything else here is illustrative (lab-specific node UUIDs, MACs,
+# OOB IPs, the enclosure parent UUID). Replace with your own inventory.
 #
-# Pre-reqs (Ettore lab side):
-#   - 172.19.74.51 is free (within his 51-100 allocation).
-#   - blade04 / blade05 / blade07 / blade08 are powered and Redfish-
-#     reachable at http://172.19.74.11:8000.
-#   - The standalone BH fixtures (baremetalhost-blade04.yaml, etc.) MUST
-#     be deleted first — they collide on nodeName otherwise.
+# Single chart, ONE manifest, handles single-CP or HA from controlPlane.nodes[].
+# - 1 entry: single-CP (no kube-vip, no replicas, no VIP required)
+# - 3 entries: HA (kube-vip on each CP, replicas via runtime VIP-healthz wait)
 #
-# Apply:
-#   kubectl --kubeconfig local/kubeconfig.ironic-lab --context kind-ironic-lab \
-#     apply -f manifests/kubernetescluster-ettore-ha.yaml
+# All PKI + tokens are chart-managed (lookup-or-genCA pattern):
+#   - kubeadm cluster CA + front-proxy CA + etcd CA + SA key
+#   - bootstrap token (sha256-derived from clusterName, deterministic)
+#   - cert-key for kubeadm-certs Secret encryption (also deterministic)
+# Replicas + workers know the token/CA hash at chart render time — no
+# runtime publish, no Node.spec.extra rendezvous.
+#
+# Stacked etcd: kubeadm manages etcd cluster expansion natively. The
+# ghost-member trap is mitigated by avoiding kubeadm-join retries on
+# the same blade — failure → BH auto-redeploy via v0.4.0 baremetal-host
+# (Task #89) → fresh OS → fresh kubeadm join attempt.
 ---
-apiVersion: composition.krateo.io/v0-10-15
+apiVersion: composition.krateo.io/v0-12-11
 kind: KubernetesCluster
 metadata:
   name: ettore-ha
@@ -58,42 +53,37 @@ spec:
     authUrl:    http://172.19.74.1:5000
     ironicUrl:  http://172.19.74.1:6385
     username:   admin
-    password:   ***REMOVED***
+    password:   <KEYSTONE_ADMIN_PASSWORD>
     userDomain: Default
   managementCluster:
     apiUrl:                  http://198.51.100.5:8443
     serviceAccountName:      ettore-ha-cp-publisher
     serviceAccountNamespace: openstack
   controlPlane:
-    # kube-vip claims this address and binds 6443 on all CP nodes via
-    # ARP leader election. kubeadm bakes the VIP into the apiserver's
-    # TLS SAN through --control-plane-endpoint, so kubeconfigs work
-    # against any live CP without rewriting. VIP allocation from Ettore:
-    # 172.19.74.51-100 free for user VIPs (51 chosen as low-end).
     endpoint: "172.19.74.51:6443"
     nodes:
-      # nodes[0] = bootstrap CP — runs `kubeadm init --upload-certs`.
       - nodeName:    blade06
         nodeUuid:    2f05176e-4531-4a90-a3bd-eda84b517d57
         parentNode:  5113ab44-faf2-4f76-bb41-ea8b14b7aa92
+        oobIp:       172.19.74.194
         driver:      redfish
         driver_info:
           redfish_address:   http://172.19.74.11:8000
-          redfish_password:  baremetal
+          redfish_password:  <REDFISH_PASSWORD>
           redfish_system_id: /redfish/v1/Systems/blade06
           redfish_username:  ironic
           redfish_verify_ca: false
         ports:
           - { address: "00:60:2f:36:81:01", pxe_enabled: true  }
           - { address: "00:60:2f:36:81:02", pxe_enabled: false }
-      # Replica CPs gate on bootstrap's cert_key (2h kubeadm TTL).
       - nodeName:    blade05
         nodeUuid:    ef74ac60-e7f5-44be-9b7e-358822dc6b9d
         parentNode:  5113ab44-faf2-4f76-bb41-ea8b14b7aa92
+        oobIp:       172.19.74.140
         driver:      redfish
         driver_info:
           redfish_address:   http://172.19.74.11:8000
-          redfish_password:  baremetal
+          redfish_password:  <REDFISH_PASSWORD>
           redfish_system_id: /redfish/v1/Systems/blade05
           redfish_username:  ironic
           redfish_verify_ca: false
@@ -103,10 +93,11 @@ spec:
       - nodeName:    blade04
         nodeUuid:    4ecc2ccf-c9d7-4e36-872b-1279b538609f
         parentNode:  5113ab44-faf2-4f76-bb41-ea8b14b7aa92
+        oobIp:       172.19.74.185
         driver:      redfish
         driver_info:
           redfish_address:   http://172.19.74.11:8000
-          redfish_password:  baremetal
+          redfish_password:  <REDFISH_PASSWORD>
           redfish_system_id: /redfish/v1/Systems/blade04
           redfish_username:  ironic
           redfish_verify_ca: false
@@ -122,7 +113,7 @@ spec:
         driver:      redfish
         driver_info:
           redfish_address:   http://172.19.74.11:8000
-          redfish_password:  baremetal
+          redfish_password:  <REDFISH_PASSWORD>
           redfish_system_id: /redfish/v1/Systems/blade10
           redfish_username:  ironic
           redfish_verify_ca: false
@@ -135,7 +126,7 @@ spec:
         driver:      redfish
         driver_info:
           redfish_address:   http://172.19.74.11:8000
-          redfish_password:  baremetal
+          redfish_password:  <REDFISH_PASSWORD>
           redfish_system_id: /redfish/v1/Systems/blade07
           redfish_username:  ironic
           redfish_verify_ca: false
@@ -148,7 +139,7 @@ spec:
         driver:      redfish
         driver_info:
           redfish_address:   http://172.19.74.11:8000
-          redfish_password:  baremetal
+          redfish_password:  <REDFISH_PASSWORD>
           redfish_system_id: /redfish/v1/Systems/blade08
           redfish_username:  ironic
           redfish_verify_ca: false

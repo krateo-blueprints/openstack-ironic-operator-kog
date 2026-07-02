@@ -12,3 +12,8 @@ clouds.yaml
 local/wireguard/
 *.wg.conf
 wg*.conf
+# Lab-specific KubernetesCluster manifests carry Keystone + Redfish
+# credentials. Copy the .example.yaml and fill in your own values;
+# actual instances stay local.
+manifests/kubernetescluster-*.yaml
+!manifests/kubernetescluster-*.example.yaml
