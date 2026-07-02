@@ -1,0 +1,4 @@
+{{/* v0.12.0: stacked etcd (kubeadm-managed), no separate snapshot
+     CronJob. etcd snapshot/restore via kubeadm's standard tooling
+     (`kubeadm certs renew` + etcdctl in /etc/kubernetes/manifests/
+     etcd.yaml). This file kept as empty to clean helm history. */}}

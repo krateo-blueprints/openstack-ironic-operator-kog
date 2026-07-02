@@ -76,6 +76,16 @@
           "type": ["string", "null"],
           "description": "Stable address kubeadm advertises as the cluster apiserver. Empty for single-CP; required for HA (must point at a load-balanced VIP)."
         },
+        "etcd": {
+          "type": ["object", "null"],
+          "description": "v0.11.0: external etcd config for HA clusters. Ignored when nodes[] has <=1 entry (single-CP uses kubeadm stacked etcd).",
+          "properties": {
+            "aptPackage":            {"type": ["string", "null"]},
+            "snapshotImage":         {"type": ["string", "null"]},
+            "snapshotSchedule":      {"type": ["string", "null"]},
+            "snapshotRetentionDays": {"type": ["integer", "null"]}
+          }
+        },
         "nodes": {
           "type": ["array", "null"],
           "description": "Preferred HA shape. Index 0 = bootstrap CP. 1, 3, or 5 entries.",
@@ -85,6 +95,7 @@
               "nodeName":    {"type": ["string", "null"]},
               "nodeUuid":    {"type": ["string", "null"]},
               "parentNode":  {"type": ["string", "null"]},
+              "oobIp":       {"type": ["string", "null"], "description": "v0.11.0: OOB-network IP for this CP. REQUIRED for HA (cpNodes > 1) so etcd peer URLs land on the stable management NIC."},
               "driver":      {"type": ["string", "null"]},
               "driver_info": {"type": ["object", "null"]},
               "ports":       {"type": ["array", "null"]}
@@ -121,6 +132,7 @@
                 "properties": {
                   "nodeName":     {"type": ["string", "null"]},
                   "nodeUuid":     {"type": ["string", "null"]},
+                  "parentNode":   {"type": ["string", "null"]},
                   "driver":       {"type": ["string", "null"]},
                   "driver_info":  {"type": ["object", "null"]},
                   "ports":        {"type": ["array", "null"]},
@@ -161,6 +173,7 @@
             "properties": {
               "nodeName":     {"type": ["string", "null"]},
               "nodeUuid":     {"type": ["string", "null"]},
+              "parentNode":   {"type": ["string", "null"]},
               "driver":       {"type": ["string", "null"]},
               "driver_info":  {"type": ["object", "null"]},
               "ports":        {"type": ["array", "null"]},
