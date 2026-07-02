@@ -11,10 +11,15 @@
 #    Once Ironic walks the node from active back to available, the
 #    operator removes the entry from `removed` entirely and the BH stops
 #    being rendered — cdc cleans it up.
-{{- $jc := include "kubernetes-cluster.joinCommand" . -}}
+{{- /* v0.12.0: workers no longer wait for bootstrap to publish the
+       kubeadm-join command — the token + apiserver endpoint + CA hash
+       are all chart-deterministic, baked into worker join.sh at
+       template time. Workers render concurrently with the bootstrap CP
+       and wait at runtime for the apiserver VIP to be reachable. */ -}}
+{{- $kubeadmReady := include "kubernetes-cluster.kubeadmPkiReady" . -}}
 {{- $lcNs := include "kubernetes-cluster.lifecycleNamespace" . -}}
 {{- $cluster := .Values.clusterName -}}
-{{- if $jc -}}
+{{- if $kubeadmReady -}}
 {{- $workers := default (list) (default (dict) .Values.workers).nodes -}}
 {{- range $idx, $w := $workers }}
 ---
@@ -60,6 +65,7 @@ spec:
     networkData:
       {{- $nd | nindent 6 }}
     {{- end }}
+  deployedConfigDriveHash: {{ include "kubernetes-cluster.deployedConfigDriveHash" $ | quote }}
   configurationRef:
     {{- toYaml $.Values.configurationRef | nindent 4 }}
 {{- end }}
@@ -103,6 +109,7 @@ spec:
     {{- include "kubernetes-cluster.image" $ | nindent 4 }}
   undeploy: true
   undeployMode: {{ default "full" $w.undeployMode | quote }}
+  deployedConfigDriveHash: {{ include "kubernetes-cluster.deployedConfigDriveHash" $ | quote }}
   configurationRef:
     {{- toYaml $.Values.configurationRef | nindent 4 }}
 {{- end }}

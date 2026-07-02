@@ -5,7 +5,7 @@
      on the v0.3.4 widened `spec.undeploy` gate for drain & undeploy
      (Milestone 5b) and image swaps (Milestone 5a). Single CR per node
      throughout its lifecycle. */}}
-{{- define "kubernetes-cluster.lifecycleApiVersion" -}}composition.krateo.io/v0-3-5{{- end -}}
+{{- define "kubernetes-cluster.lifecycleApiVersion" -}}composition.krateo.io/v0-4-5{{- end -}}
 {{- define "kubernetes-cluster.lifecycleKind" -}}BaremetalHost{{- end -}}
 
 {{- define "kubernetes-cluster.lifecycleNamespace" -}}
@@ -204,6 +204,400 @@ services:
 {{- end -}}
 {{- end -}}
 
+{{/* === v0.11.0: External etcd PKI ===
+
+     HA clusters (cpNodes count > 1) run a 3-member etcd cluster as a
+     SYSTEMD UNIT on each CP — independent of kubeadm's stacked-etcd
+     flow. This block manages the PKI:
+
+       - etcd CA (cert + key, 10y validity)
+       - apiserver-etcd-client cert (cert + key, 10y, signed by CA)
+       - per-CP etcd server cert (cert + key, 10y, IP+DNS SANs, signed
+         by CA) — requires user to supply .controlPlane.nodes[].oobIp
+         so the SAN matches what apiserver/peers dial
+
+     Stability: certs are generated ONCE on the first chart render via
+     genCA / genSignedCert. Subsequent renders `lookup` the persisted
+     Secret (`<release>-etcd-pki`) and reuse the existing material.
+     Without lookup-and-reuse, every cdc reconcile (~60s) would rotate
+     the CA and break the running cluster.
+
+     Two-pass apply caveat: BaremetalHost templates gate on
+     `etcdPkiReady` returning "yes". On the first chart render the
+     Secret doesn't exist in the live cluster yet, so lookup returns
+     nil, the per-CP server cert paths are empty, and `etcdPkiReady`
+     returns empty → BHs don't render. Only the Secret manifest
+     renders. cdc applies the Secret. ~60s later the next reconcile
+     hits the Secret via lookup, BHs render with real certs, deploy
+     proceeds. Documented in docs/KUBERNETES-CLUSTER-V0.11.0-DESIGN.md. */}}
+
+{{/* === v0.12.0: chart-managed kubeadm PKI ===
+
+     One chart handles both single-CP and HA (1, 3, or 5 CPs). All
+     PKI is pre-generated at chart render time and baked into every CP's
+     cloud-init via write_files. No runtime rendezvous between bootstrap
+     and replicas: replicas wait for the apiserver VIP to be healthy,
+     then kubeadm-join with chart-baked token + chart-computable CA hash.
+
+     PKI material per kubeadm's expectations:
+       - cluster CA            → /etc/kubernetes/pki/ca.{crt,key}
+       - front-proxy CA        → /etc/kubernetes/pki/front-proxy-ca.{crt,key}
+       - etcd CA (stacked)     → /etc/kubernetes/pki/etcd/ca.{crt,key}
+       - SA signing key + pub  → /etc/kubernetes/pki/sa.{key,pub}
+       - bootstrap token       → baked into kubeadm-init.yaml + replica
+                                 join.sh + worker join.sh
+
+     2-pass apply: first chart render creates the kubeadm-pki Secret;
+     `kubeadmPkiReady` returns empty until the Secret exists in the
+     live cluster. BH templates gate on this so they don't render with
+     empty PKI. ~60s later the next cdc reconcile sees the Secret and
+     renders the BHs.
+
+     Stacked etcd: kubeadm manages etcd cluster expansion natively on
+     `kubeadm join --control-plane`. No external etcd, no install-etcd
+     systemd unit. */}}
+
+{{- define "kubernetes-cluster.kubeadmPkiSecretName" -}}
+{{- printf "%s-kubeadm-pki" .Values.clusterName -}}
+{{- end -}}
+
+{{/* v0.12.3 (Task #91): the deployed-configdrive hash IS this chart's
+     version. Embedded in cloud-init userData via /etc/kubernetes/
+     .deployed-hash, published to Ironic.node.extra.deployed_configdrive_
+     hash by publish-deployed-hash.sh in runcmd's last step, then
+     mirrored to Node CR.spec.extra by the bridge sidecar. The
+     baremetal-host chart's shouldAutoRedeploy compares this value to
+     the BH-baked configDriveHashInput (also = .Chart.Version when
+     rendered) — match means the running OS is the chart's intended
+     userData; mismatch (including empty after a teardown+redeploy)
+     fires transition-undeploy.
+
+     Stable across cdc reconciles because .Chart.Version doesn't
+     change between renders of the same chart. Drift fires when the
+     CHART itself bumps (operator-triggered redeploy). */}}
+{{- define "kubernetes-cluster.deployedConfigDriveHash" -}}
+{{- .Chart.Version -}}
+{{- end -}}
+
+{{/* Stable per-cluster bootstrap token. Format kubeadm requires:
+     <id>.<secret>, [a-z0-9]{6}\.[a-z0-9]{16}. Derived from the cluster
+     name via sha256 so it's deterministic per cluster (re-renders give
+     the same token; replicas + workers always know it). */}}
+{{- define "kubernetes-cluster.bootstrapToken" -}}
+{{- $hash := sha256sum (printf "kubeadm-token-%s" .Values.clusterName) -}}
+{{- printf "%s.%s" (substr 0 6 $hash) (substr 6 22 $hash) -}}
+{{- end -}}
+
+{{/* Stable certificate-key (32-byte hex) for kubeadm-certs Secret
+     encryption. Same derivation pattern as bootstrapToken. */}}
+{{- define "kubernetes-cluster.kubeadmCertKey" -}}
+{{- sha256sum (printf "kubeadm-cert-key-%s" .Values.clusterName) | trunc 64 -}}
+{{- end -}}
+
+{{/* PKI bundle: returns YAML dict with all kubeadm CAs and SA keys.
+     Reused via lookup-then-genCA: on first render, generates fresh
+     PKI; on subsequent renders, reuses what's already in the Secret. */}}
+{{- define "kubernetes-cluster.kubeadmPkiBundle" -}}
+{{- $secretName := include "kubernetes-cluster.kubeadmPkiSecretName" . -}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- $result := dict -}}
+{{- /* Reuse the full bundle from the live Secret only when ALL fields
+       are present (including v0.12.6's etcd-client.crt). If a key is
+       missing — e.g. upgrading from a pre-v0.12.6 Secret — fall through
+       to the fresh-CA path. Sprig genSignedCert needs a sprig.certificate
+       struct (not a dict), so we can't partially regenerate; one-shot
+       rotation is acceptable because BH auto-redeploy converges via
+       configDriveHash drift detection. */ -}}
+{{- if and $existing (index (default (dict) $existing.data) "etcd-client.crt") -}}
+  {{- $data := default (dict) $existing.data -}}
+  {{- $_ := set $result "caCert"            (b64dec (index $data "ca.crt")) -}}
+  {{- $_ := set $result "caKey"             (b64dec (index $data "ca.key")) -}}
+  {{- $_ := set $result "frontProxyCaCert"  (b64dec (index $data "front-proxy-ca.crt")) -}}
+  {{- $_ := set $result "frontProxyCaKey"   (b64dec (index $data "front-proxy-ca.key")) -}}
+  {{- $_ := set $result "etcdCaCert"        (b64dec (index $data "etcd-ca.crt")) -}}
+  {{- $_ := set $result "etcdCaKey"         (b64dec (index $data "etcd-ca.key")) -}}
+  {{- $_ := set $result "saKey"             (b64dec (index $data "sa.key")) -}}
+  {{- $_ := set $result "etcdClientCert"    (b64dec (index $data "etcd-client.crt")) -}}
+  {{- $_ := set $result "etcdClientKey"     (b64dec (index $data "etcd-client.key")) -}}
+{{- else -}}
+  {{- $ca       := genCA (printf "kubernetes-%s" .Values.clusterName) 3650 -}}
+  {{- $fpCa     := genCA (printf "front-proxy-%s" .Values.clusterName) 3650 -}}
+  {{- $etcdCa   := genCA (printf "etcd-%s" .Values.clusterName) 3650 -}}
+  {{- /* kubeadm expects an RSA service-account signing key. Generate a
+         throwaway leaf cert just to extract the key+pub the same way the
+         etcd-PKI flow did. The cert itself is discarded. */ -}}
+  {{- $saTmpCa  := genCA (printf "sa-tmp-%s" .Values.clusterName) 30 -}}
+  {{- $saLeaf   := genSignedCert (printf "sa-%s" .Values.clusterName) (list) (list "sa") 3650 $saTmpCa -}}
+  {{- /* v0.12.6: etcd-client cert signed by etcd-ca. Lets replica join.sh
+         authenticate to the bootstrap etcd before kubeadm has placed
+         apiserver-etcd-client.crt on disk (which only happens late in
+         kubeadm join). Used by wait_for_etcd_no_pending_learner and
+         remove_ghost_etcd_members. */ -}}
+  {{- $etcdClient := genSignedCert (printf "etcd-client-%s" .Values.clusterName) (list) (list "etcd-client") 3650 $etcdCa -}}
+  {{- $_ := set $result "caCert"            $ca.Cert -}}
+  {{- $_ := set $result "caKey"             $ca.Key -}}
+  {{- $_ := set $result "frontProxyCaCert"  $fpCa.Cert -}}
+  {{- $_ := set $result "frontProxyCaKey"   $fpCa.Key -}}
+  {{- $_ := set $result "etcdCaCert"        $etcdCa.Cert -}}
+  {{- $_ := set $result "etcdCaKey"         $etcdCa.Key -}}
+  {{- $_ := set $result "saKey"             $saLeaf.Key -}}
+  {{- $_ := set $result "etcdClientCert"    $etcdClient.Cert -}}
+  {{- $_ := set $result "etcdClientKey"     $etcdClient.Key -}}
+{{- end -}}
+{{- $result | toYaml -}}
+{{- end -}}
+
+{{/* Returns "yes" when the kubeadm-pki Secret exists in the live
+     cluster with CA + front-proxy + etcd-CA + SA key populated.
+     2-pass-apply gate: first render creates the Secret, second
+     reconcile (~60s) sees it and renders the BHs. */}}
+{{- define "kubernetes-cluster.kubeadmPkiReady" -}}
+{{- $secretName := include "kubernetes-cluster.kubeadmPkiSecretName" . -}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- if $existing -}}
+{{- $data := default (dict) $existing.data -}}
+{{- if and (index $data "ca.crt") (index $data "front-proxy-ca.crt") (index $data "etcd-ca.crt") (index $data "sa.key") -}}yes{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* Apiserver endpoint that replicas + workers point their kubeadm
+     join command at. For HA (cpNodes > 1): controlPlane.endpoint VIP.
+     For single-CP: bootstrap CP's apiserver — but we don't know its IP
+     at chart render time when it's DHCP-assigned. Solution: replicas
+     and workers are gated to NOT render for single-CP (len cpNodes ==
+     1 means there are no replicas), and single-CP workers wait for the
+     bootstrap CP's IP via the same publish mechanism that drives
+     workload-kubeconfig delivery. */}}
+{{- define "kubernetes-cluster.kubeadmJoinEndpoint" -}}
+{{- $cp := default (dict) .Values.controlPlane -}}
+{{- if $cp.endpoint -}}{{- $cp.endpoint -}}{{- end -}}
+{{- end -}}
+
+{{/* v0.12.0: kubeadm PKI write_files. Renders the chart-managed CAs
+     and SA key into /etc/kubernetes/pki/ on every CP. With these in
+     place, `kubeadm init` skips its certs phase (would error if certs
+     already exist), `kubeadm join --control-plane` doesn't need
+     --certificate-key or --upload-certs (no kubeadm-certs Secret
+     download), and all CPs share the same CA so the discovery-token-
+     ca-cert-hash matches.
+
+     Workers don't need PKI pre-placement — kubeadm join (without
+     --control-plane) only needs the discovery token + CA hash, which
+     it verifies against the apiserver's TLS cert at join time. */}}
+{{- define "kubernetes-cluster.kubeadmPkiWriteFiles" -}}
+{{- if not (include "kubernetes-cluster.kubeadmPkiReady" .) -}}{{- /* 2-pass gate */ -}}
+{{- else -}}
+{{- $bundle := (include "kubernetes-cluster.kubeadmPkiBundle" . | fromYaml) -}}
+{{- /* v0.12.5: PKI persisted to /etc/kubernetes/pki-chart/ (backup
+       location). cp-init.sh and replica join.sh copy from -chart/ to
+       /etc/kubernetes/pki/ before kubeadm operations. `kubeadm reset`
+       wipes pki/ but doesn't touch pki-chart/ — so retries after a
+       failed join survive with the chart-baked CAs intact. */ -}}
+- path: /etc/kubernetes/pki-chart/ca.crt
+  permissions: "0644"
+  content: |
+{{ $bundle.caCert | indent 4 }}
+- path: /etc/kubernetes/pki-chart/ca.key
+  permissions: "0600"
+  content: |
+{{ $bundle.caKey | indent 4 }}
+- path: /etc/kubernetes/pki-chart/front-proxy-ca.crt
+  permissions: "0644"
+  content: |
+{{ $bundle.frontProxyCaCert | indent 4 }}
+- path: /etc/kubernetes/pki-chart/front-proxy-ca.key
+  permissions: "0600"
+  content: |
+{{ $bundle.frontProxyCaKey | indent 4 }}
+- path: /etc/kubernetes/pki-chart/etcd-ca.crt
+  permissions: "0644"
+  content: |
+{{ $bundle.etcdCaCert | indent 4 }}
+- path: /etc/kubernetes/pki-chart/etcd-ca.key
+  permissions: "0600"
+  content: |
+{{ $bundle.etcdCaKey | indent 4 }}
+- path: /etc/kubernetes/pki-chart/sa.key
+  permissions: "0600"
+  content: |
+{{ $bundle.saKey | indent 4 }}
+{{- /* v0.12.6: etcd-client cert/key. Stays in pki-chart/ — used directly
+       by replica join.sh's etcdctl calls so it doesn't have to wait for
+       kubeadm to materialize apiserver-etcd-client.crt under pki/. */}}
+- path: /etc/kubernetes/pki-chart/etcd-client.crt
+  permissions: "0644"
+  content: |
+{{ $bundle.etcdClientCert | indent 4 }}
+- path: /etc/kubernetes/pki-chart/etcd-client.key
+  permissions: "0600"
+  content: |
+{{ $bundle.etcdClientKey | indent 4 }}
+- path: /usr/local/bin/restore-chart-pki.sh
+  permissions: "0755"
+  content: |
+    #!/bin/bash
+    # v0.12.5: restore chart-baked PKI from the backup location to where
+    # kubeadm expects it. Idempotent — run before every kubeadm op so
+    # `kubeadm reset` -> retry cycles don't end up with empty pki/.
+    set -euo pipefail
+    mkdir -p /etc/kubernetes/pki/etcd
+    cp /etc/kubernetes/pki-chart/ca.crt              /etc/kubernetes/pki/ca.crt
+    cp /etc/kubernetes/pki-chart/ca.key              /etc/kubernetes/pki/ca.key
+    cp /etc/kubernetes/pki-chart/front-proxy-ca.crt  /etc/kubernetes/pki/front-proxy-ca.crt
+    cp /etc/kubernetes/pki-chart/front-proxy-ca.key  /etc/kubernetes/pki/front-proxy-ca.key
+    cp /etc/kubernetes/pki-chart/etcd-ca.crt         /etc/kubernetes/pki/etcd/ca.crt
+    cp /etc/kubernetes/pki-chart/etcd-ca.key         /etc/kubernetes/pki/etcd/ca.key
+    cp /etc/kubernetes/pki-chart/sa.key              /etc/kubernetes/pki/sa.key
+    openssl rsa -in /etc/kubernetes/pki/sa.key -pubout \
+      > /etc/kubernetes/pki/sa.pub 2>/dev/null
+    chmod 0644 /etc/kubernetes/pki/sa.pub
+    chmod 0600 /etc/kubernetes/pki/ca.key /etc/kubernetes/pki/front-proxy-ca.key \
+               /etc/kubernetes/pki/etcd/ca.key /etc/kubernetes/pki/sa.key
+{{- end -}}
+{{- end -}}
+
+{{/* Just the cluster CA cert, for workers. Workers don't need the full
+     kubeadm PKI but they DO need the CA to compute the discovery-token-
+     ca-cert-hash at runtime (cleaner than --unsafe-skip-ca-verification). */}}
+{{- define "kubernetes-cluster.kubeadmCaWriteFiles" -}}
+{{- if not (include "kubernetes-cluster.kubeadmPkiReady" .) -}}{{- /* gate */ -}}
+{{- else -}}
+{{- $bundle := (include "kubernetes-cluster.kubeadmPkiBundle" . | fromYaml) -}}
+- path: /etc/kubernetes/pki/ca.crt
+  permissions: "0644"
+  content: |
+{{ $bundle.caCert | indent 4 }}
+{{- end -}}
+{{- end -}}
+
+{{/* kubeadm-init.yaml template for the bootstrap CP. Stacked etcd
+     (kubeadm-managed). __ADVERTISE_IP__ + __CERT_KEY__ are sed-
+     substituted at runtime in cp-init.sh from the chart-derived
+     bootstrap token / cert-key (both stable per cluster — see
+     kubeadm.bootstrapToken and kubeadm.kubeadmCertKey helpers).
+
+     bootstrapTokens has the chart-known token pre-baked so replicas
+     and workers can use it for discovery without runtime publish. */}}
+{{- define "kubernetes-cluster.kubeadmInitWriteFiles" -}}
+{{- if not (include "kubernetes-cluster.kubeadmPkiReady" .) -}}{{- /* gate */ -}}
+{{- else -}}
+{{- $cpe := include "kubernetes-cluster.controlPlaneEndpoint" . -}}
+{{- $tok := include "kubernetes-cluster.bootstrapToken" . -}}
+- path: /etc/kubernetes/kubeadm-init.yaml.template
+  permissions: "0644"
+  content: |
+    apiVersion: kubeadm.k8s.io/v1beta4
+    kind: InitConfiguration
+    bootstrapTokens:
+      - token: {{ $tok | quote }}
+        ttl: 24h
+        usages: [signing, authentication]
+        groups: [system:bootstrappers:kubeadm:default-node-token]
+    localAPIEndpoint:
+      advertiseAddress: __ADVERTISE_IP__
+      bindPort: 6443
+    certificateKey: __CERT_KEY__
+    ---
+    apiVersion: kubeadm.k8s.io/v1beta4
+    kind: ClusterConfiguration
+    kubernetesVersion: {{ .Values.k8sVersion }}
+{{- if $cpe }}
+    controlPlaneEndpoint: {{ $cpe | quote }}
+{{- end }}
+    networking:
+      podSubnet: {{ .Values.network.podCIDR | quote }}
+      serviceSubnet: {{ .Values.network.serviceCIDR | quote }}
+{{- end -}}
+{{- end -}}
+
+{{/* v0.12.8: kubeadm-join.yaml.template for replica CPs (HA only).
+     Without a JoinConfiguration file, `kubeadm join --control-plane`
+     uses the node's default-route IP for apiserver advertise AND etcd
+     peer URL. On dual-NIC blades where the default route is via the
+     management network (192.168.0.x) but the bootstrap CP advertised
+     etcd on the data network (172.19.74.x via VIP_PREFIX), peers can
+     never reach each other → etcd member never started → kubeadm join
+     fails. Replica join.sh sed-substitutes ADVERTISE_IP / CA_HASH /
+     CERT_KEY at runtime, computed via the same VIP_PREFIX trick the
+     bootstrap CP uses. */}}
+{{- define "kubernetes-cluster.kubeadmJoinWriteFiles" -}}
+{{- if not (include "kubernetes-cluster.kubeadmPkiReady" .) -}}{{- /* gate */ -}}
+{{- else -}}
+{{- $cpe := include "kubernetes-cluster.controlPlaneEndpoint" . -}}
+{{- $tok := include "kubernetes-cluster.bootstrapToken" . -}}
+- path: /etc/kubernetes/kubeadm-join.yaml.template
+  permissions: "0644"
+  content: |
+    apiVersion: kubeadm.k8s.io/v1beta4
+    kind: JoinConfiguration
+    discovery:
+      bootstrapToken:
+        token: {{ $tok | quote }}
+        apiServerEndpoint: {{ $cpe | quote }}
+        caCertHashes:
+          - "sha256:__CA_HASH__"
+    controlPlane:
+      localAPIEndpoint:
+        advertiseAddress: __ADVERTISE_IP__
+        bindPort: 6443
+      certificateKey: __CERT_KEY__
+    nodeRegistration:
+      kubeletExtraArgs:
+        - name: node-ip
+          value: __ADVERTISE_IP__
+{{- end -}}
+{{- end -}}
+
+{{/* v0.12.3 (Task #91): publish-deployed-hash.sh + /etc/kubernetes/
+     .deployed-hash file. Universal across cpUserData, cpReplicaUserData,
+     workerUserData. */}}
+{{- define "kubernetes-cluster.publishDeployedHashWriteFiles" -}}
+- path: /etc/kubernetes/.deployed-hash
+  permissions: "0644"
+  content: |
+    {{ include "kubernetes-cluster.deployedConfigDriveHash" . }}
+- path: /etc/kubernetes/publish-deployed-hash.sh
+  permissions: "0755"
+  content: |
+    #!/bin/bash
+    # Publish the chart-baked deploy hash to Ironic.node.extra.
+    # deployed_configdrive_hash. Bridge sidecar mirrors to Node CR
+    # spec.extra. baremetal-host chart's shouldAutoRedeploy compares
+    # current chart-rendered hash vs spec.extra value. Match = OS is
+    # in chart's intended state. Drift = teardown OR chart bump → fire
+    # transition-undeploy.
+    set -euo pipefail
+    exec >> /var/log/publish-deployed-hash.log 2>&1
+    set -x
+    date
+    HASH=$(cat /etc/kubernetes/.deployed-hash)
+    test -n "$HASH"
+    HN="$(hostname)"
+    AUTH_URL={{ .Values.ironicAuth.authUrl | quote }}
+    IRONIC_URL={{ .Values.ironicAuth.ironicUrl | quote }}
+    USERNAME={{ .Values.ironicAuth.username | quote }}
+    PASSWORD={{ .Values.ironicAuth.password | quote }}
+    USER_DOMAIN={{ .Values.ironicAuth.userDomain | quote }}
+    TOKEN=$(curl -sS -D - -o /dev/null \
+      -H "Content-Type: application/json" \
+      -d "{\"auth\":{\"identity\":{\"methods\":[\"password\"],\"password\":{\"user\":{\"name\":\"$USERNAME\",\"password\":\"$PASSWORD\",\"domain\":{\"name\":\"$USER_DOMAIN\"}}}},\"scope\":{\"system\":{\"all\":true}}}}" \
+      "$AUTH_URL/v3/auth/tokens" \
+      | grep -i 'x-subject-token' | awk '{print $2}' | tr -d '\r')
+    test -n "$TOKEN"
+    UUID=$(curl -sS -H "X-Auth-Token: $TOKEN" \
+      -H "X-OpenStack-Ironic-API-Version: 1.81" \
+      "$IRONIC_URL/v1/nodes/$HN" \
+      | python3 -c "import sys,json; print(json.load(sys.stdin).get('uuid',''))")
+    test -n "$UUID"
+    curl -sS -X PATCH \
+      -H "X-Auth-Token: $TOKEN" \
+      -H "X-OpenStack-Ironic-API-Version: 1.81" \
+      -H "Content-Type: application/json-patch+json" \
+      -d "[{\"op\":\"add\",\"path\":\"/extra/deployed_configdrive_hash\",\"value\":\"$HASH\"}]" \
+      "$IRONIC_URL/v1/nodes/$UUID"
+    echo "published deployed_configdrive_hash=$HASH for $HN ($UUID)"
+{{- end -}}
+
 {{/* Cloud-init userData for the CONTROL PLANE node. Installs kubeadm,
      runs `kubeadm init` (with --control-plane-endpoint when set),
      applies the CNI, then mints a join token and publishes it onto the
@@ -260,7 +654,7 @@ write_files:
       # by querying apt-cache rather than hard-coding `-1.1`.
       K8S_PKG_VER=$(apt-cache madison kubelet | awk -v v="{{ trimPrefix "v" .Values.k8sVersion }}" '$3 ~ "^"v"-" {print $3; exit}')
       test -n "$K8S_PKG_VER"
-      apt-get install -y kubelet="$K8S_PKG_VER" kubeadm="$K8S_PKG_VER" kubectl="$K8S_PKG_VER" containerd
+      apt-get install -y kubelet="$K8S_PKG_VER" kubeadm="$K8S_PKG_VER" kubectl="$K8S_PKG_VER" containerd etcd-client jq
       apt-mark hold kubelet kubeadm kubectl
       # Debian 13 trixie's containerd ships with bin_dir = "/usr/lib/cni" by
       # default. Flannel's install-cni-plugin initContainer (and kubeadm)
@@ -516,20 +910,39 @@ write_files:
       # so publish-join.sh picks it up and publishes alongside the join command.
       # Always done — even for single-CP — so promoting to HA later is a values
       # change, not an OS-level reconfiguration.
-      openssl rand -hex 32 > /etc/kubernetes/cert-key
+      # v0.12.2: cert-key MUST match what replicas use to decrypt the
+      # kubeadm-certs Secret. Use the chart-deterministic value, NOT a
+      # random one — otherwise replicas fail with "cipher: message
+      # authentication failed" when downloading uploaded-certs.
+      echo "{{ include "kubernetes-cluster.kubeadmCertKey" . }}" > /etc/kubernetes/cert-key
       chmod 0600 /etc/kubernetes/cert-key
-      kubeadm init \
-        --upload-certs \
-        --certificate-key=$(cat /etc/kubernetes/cert-key) \
-        --pod-network-cidr={{ .Values.network.podCIDR }} \
-        --service-cidr={{ .Values.network.serviceCIDR }} \
-        --kubernetes-version={{ .Values.k8sVersion }} \
-        --apiserver-advertise-address=$ADVERTISE_IP \
-        --apiserver-bind-port=6443{{ with include "kubernetes-cluster.controlPlaneEndpoint" . }} \
-        --control-plane-endpoint={{ . }}{{ end }}
+      # v0.12.5: restore PKI from /etc/kubernetes/pki-chart/ to where
+      # kubeadm expects it. Survives kubeadm reset because pki-chart/
+      # is untouched by reset.
+      bash /usr/local/bin/restore-chart-pki.sh
+      sed -e "s|__ADVERTISE_IP__|$ADVERTISE_IP|g" \
+          -e "s|__CERT_KEY__|$(cat /etc/kubernetes/cert-key)|g" \
+        /etc/kubernetes/kubeadm-init.yaml.template \
+        > /etc/kubernetes/kubeadm-init.yaml
+      chmod 0600 /etc/kubernetes/kubeadm-init.yaml
+      # Skip cert generation phases — chart-baked PKI is already on disk.
+      # Kubeadm will detect existing CAs and only generate leaf certs.
+      kubeadm init --upload-certs \
+        --config /etc/kubernetes/kubeadm-init.yaml
       mkdir -p /root/.kube
       cp /etc/kubernetes/admin.conf /root/.kube/config
-      KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f {{ .Values.cni.manifestUrl }}
+      # v0.12.4: retry CNI apply — apiserver may take a few seconds to
+      # be ready right after `kubeadm init` completes. Without retry, a
+      # single apply at the wrong moment leaves the cluster CNI-less,
+      # and all nodes (CP + workers) stay NotReady forever.
+      for i in $(seq 1 12); do
+        if KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f {{ .Values.cni.manifestUrl }}; then
+          echo "CNI applied on attempt $i"
+          break
+        fi
+        echo "CNI apply attempt $i failed; sleeping 10s"
+        sleep 10
+      done
   - path: /etc/kubernetes/publish-workload-kubeconfig.sh
     permissions: "0755"
     content: |
@@ -600,7 +1013,14 @@ write_files:
       done
       log "publish-workload-kubeconfig failed after 5 attempts"
       exit 1
+{{- include "kubernetes-cluster.kubeadmPkiWriteFiles" . | nindent 2 }}
+{{- include "kubernetes-cluster.kubeadmInitWriteFiles" . | nindent 2 }}
+{{- include "kubernetes-cluster.publishDeployedHashWriteFiles" . | nindent 2 }}
 runcmd:
+  # v0.12.7: publish FIRST so the bridge-mirrored observed hash matches
+  # current within ~15s of boot — well before bh-chart's 60s reconcile
+  # could race-fire auto-redeploy on a stale-leftover observed value.
+  - bash /etc/kubernetes/publish-deployed-hash.sh
   - /etc/kubernetes/install-k8s.sh
   - /etc/kubernetes/cp-init.sh
   - /etc/kubernetes/publish-workload-kubeconfig.sh
@@ -645,7 +1065,7 @@ write_files:
       # of hard-coding `-1.1`.
       K8S_PKG_VER=$(apt-cache madison kubelet | awk -v v="{{ trimPrefix "v" .Values.k8sVersion }}" '$3 ~ "^"v"-" {print $3; exit}')
       test -n "$K8S_PKG_VER"
-      apt-get install -y kubelet="$K8S_PKG_VER" kubeadm="$K8S_PKG_VER" containerd
+      apt-get install -y kubelet="$K8S_PKG_VER" kubeadm="$K8S_PKG_VER" containerd jq
       apt-mark hold kubelet kubeadm
       # Debian 13 trixie's containerd ships with bin_dir = "/usr/lib/cni" by
       # default. Flannel's install-cni-plugin initContainer (and kubeadm)
@@ -690,36 +1110,37 @@ write_files:
     permissions: "0755"
     content: |
       #!/bin/bash
-      # Retry kubeadm join. The bootstrap CP's apiserver may flap right
-      # after kubeadm init while etcd / kube-proxy / cm stabilise; if the
-      # join lands in one of those gaps it errors with
-      #   `connect: connection refused` against <cp>:6443
-      # and cloud-init's runcmd doesn't retry. 30 × 20s gives ~10min of
-      # retry — long enough to catch a healthy window without burning a
-      # whole BH-redeploy cycle.
+      # v0.12.0: chart-baked kubeadm join. Token + CA hash are derived
+      # from the chart-managed cluster CA on disk (placed by the chart
+      # if this is a worker bootstrapping into an HA cluster, or fetched
+      # via discovery for workers without local CA — kubeadm validates
+      # the discovery token against the apiserver's TLS cert hash).
       exec >> /var/log/join.log 2>&1
       set -x
-      for i in $(seq 1 30); do
-        echo "[$(date -Iseconds)] join attempt $i"
-        # Before every retry, scrub partial state from the previous failed
-        # attempt — kubeadm join writes kubelet.conf and starts kubelet
-        # part-way through, then exits non-zero if the apiserver isn't
-        # ready yet. The next retry would otherwise hit
-        # `FileAvailable--etc-kubernetes-kubelet.conf` preflight errors
-        # for the rest of the loop.
-        if [ "$i" -gt 1 ]; then
-          kubeadm reset --force --cleanup-tmp-dir || true
+      VIP={{ include "kubernetes-cluster.controlPlaneEndpoint" . | quote }}
+      TOKEN={{ include "kubernetes-cluster.bootstrapToken" . | quote }}
+      # Wait for apiserver via VIP, ~10 min budget.
+      for i in $(seq 1 120); do
+        if curl -k -s --max-time 3 "https://$VIP/healthz" >/dev/null 2>&1; then
+          echo "[$(date -Iseconds)] apiserver $VIP healthy on poll $i"
+          break
         fi
-        if {{ $jc }}; then
-          echo "[$(date -Iseconds)] join succeeded on attempt $i"
-          exit 0
-        fi
-        echo "[$(date -Iseconds)] attempt $i failed; sleeping 20s"
-        sleep 20
+        sleep 5
       done
-      echo "[$(date -Iseconds)] all 30 attempts exhausted"
-      exit 1
+      curl -k -s --max-time 3 "https://$VIP/healthz" >/dev/null 2>&1 \
+        || { echo "apiserver never became reachable — abort"; exit 1; }
+      # v0.12.2: workers MUST NOT have /etc/kubernetes/pki/ca.crt pre-
+      # placed (kubeadm join's preflight rejects "file already exists").
+      # Use --discovery-token-unsafe-skip-ca-verification — the bootstrap
+      # token's signature validates cluster identity, so MITM on the
+      # CA cert delivery is detected at token verification time.
+      kubeadm join "$VIP" \
+        --token "$TOKEN" \
+        --discovery-token-unsafe-skip-ca-verification
+{{- include "kubernetes-cluster.publishDeployedHashWriteFiles" . | nindent 2 }}
 runcmd:
+  # v0.12.7: publish FIRST (see bootstrap CP rationale).
+  - bash /etc/kubernetes/publish-deployed-hash.sh
   - /etc/kubernetes/install-k8s.sh
   - /etc/kubernetes/join.sh
 {{- end -}}
@@ -730,8 +1151,8 @@ runcmd:
      onto its own Node CR's spec.extra. Replica CPs render only when
      both lookups resolve (see lifecycle-cp-replicas.yaml gate). */}}
 {{- define "kubernetes-cluster.cpReplicaUserData" -}}
-{{- $jc := include "kubernetes-cluster.joinCommand" . -}}
-{{- $ck := include "kubernetes-cluster.certKey"     . -}}
+{{- /* v0.11.4: $jc + $ck are no longer baked at template time —
+       join.sh polls the bootstrap CP's Node.spec.extra at runtime. */ -}}
 #cloud-config
 ssh_pwauth: true
 chpasswd:
@@ -767,7 +1188,7 @@ write_files:
       # by querying apt-cache rather than hard-coding `-1.1`.
       K8S_PKG_VER=$(apt-cache madison kubelet | awk -v v="{{ trimPrefix "v" .Values.k8sVersion }}" '$3 ~ "^"v"-" {print $3; exit}')
       test -n "$K8S_PKG_VER"
-      apt-get install -y kubelet="$K8S_PKG_VER" kubeadm="$K8S_PKG_VER" kubectl="$K8S_PKG_VER" containerd
+      apt-get install -y kubelet="$K8S_PKG_VER" kubeadm="$K8S_PKG_VER" kubectl="$K8S_PKG_VER" containerd etcd-client jq
       apt-mark hold kubelet kubeadm kubectl
       # Debian 13 trixie's containerd ships with bin_dir = "/usr/lib/cni" by
       # default. Flannel's install-cni-plugin initContainer (and kubeadm)
@@ -893,26 +1314,156 @@ write_files:
       test -n "$VIP_IFACE"
       /etc/kubernetes/write-kube-vip-manifest.sh "$VIP" "$VIP_IFACE"
 {{- end }}
-      for i in $(seq 1 30); do
-        echo "[$(date -Iseconds)] join attempt $i"
-        # Scrub partial state from the previous failed attempt — see the
-        # worker join.sh for the full rationale. The replica path is
-        # especially exposed because `--control-plane` writes a much
-        # larger set of /etc/kubernetes/* files; one half-done attempt
-        # poisons every subsequent retry.
-        if [ "$i" -gt 1 ]; then
-          kubeadm reset --force --cleanup-tmp-dir || true
+      # v0.11.4: poll bootstrap CP's Node.spec.extra at runtime for the
+      # kubeadm_join command + cert_key. Replicas are rendered
+      # CONCURRENTLY with the bootstrap (no chart-template gate) so etcd
+      # can form quorum; bootstrap publishes kubeadm_join only AFTER
+      # kubeadm init succeeds. This script bridges the gap.
+      #
+      # v0.12.0: chart-baked values for kubeadm join. Token + cert-key
+      # are deterministic per cluster (sha256 of clusterName), so all
+      # CPs and workers know them at chart render time. The CA cert
+      # hash is computed at runtime from the chart-distributed
+      # /etc/kubernetes/pki/ca.crt (same CA on every CP via the
+      # kubeadmPkiWriteFiles helper).
+      VIP={{ include "kubernetes-cluster.controlPlaneEndpoint" . | quote }}
+      TOKEN={{ include "kubernetes-cluster.bootstrapToken" . | quote }}
+      CERT_KEY={{ include "kubernetes-cluster.kubeadmCertKey" . | quote }}
+      # v0.12.8: derive ADVERTISE_IP from the VIP's /24 — same trick the
+      # bootstrap CP uses in cp-init.sh. Default-route IP on dual-NIC
+      # blades lives on the mgmt network (192.168.0.x), but the bootstrap
+      # advertised etcd on the data network (172.19.74.x). Matching here
+      # is what lets the etcd learner peer with the leader.
+      VIP_PREFIX_FOR_ADV=$(echo "$VIP" | awk -F: '{print $1}' | awk -F. '{print $1"."$2"."$3"."}')
+      ADVERTISE_IP=$(ip -o -4 addr show \
+        | awk -v p="$VIP_PREFIX_FOR_ADV" '$4 ~ "^"p {sub("/.*","",$4); print $4; exit}')
+      echo "[$(date -Iseconds)] derived ADVERTISE_IP=$ADVERTISE_IP from VIP=$VIP"
+      test -n "$ADVERTISE_IP"
+      # Wait for the bootstrap CP's apiserver to be reachable via the
+      # VIP. ~10 min budget covers bootstrap install-k8s + kubeadm init.
+      for i in $(seq 1 120); do
+        if curl -k -s --max-time 3 "https://$VIP/healthz" >/dev/null 2>&1; then
+          echo "[$(date -Iseconds)] apiserver $VIP healthy on poll $i"
+          break
         fi
-        if {{ $jc }} --control-plane --certificate-key {{ $ck }}; then
-          echo "[$(date -Iseconds)] join succeeded on attempt $i"
-          exit 0
+        sleep 5
+      done
+      curl -k -s --max-time 3 "https://$VIP/healthz" >/dev/null 2>&1 \
+        || { echo "apiserver never became reachable — abort"; exit 1; }
+      # Compute the CA cert hash kubeadm expects: sha256 of the DER-
+      # encoded SubjectPublicKeyInfo of the CA cert. Identical across
+      # all CPs because the CA is chart-managed.
+      # v0.12.5: restore chart PKI before computing CA_HASH. Subsequent
+      # retries after kubeadm reset would otherwise see an empty pki/
+      # and compute sha256 of /dev/null (= e3b0c44...), which fails CA
+      # pinning at join time.
+      bash /usr/local/bin/restore-chart-pki.sh
+      CA_HASH=$(openssl x509 -pubkey -in /etc/kubernetes/pki/ca.crt -noout \
+        | openssl rsa -pubin -outform der 2>/dev/null \
+        | sha256sum | awk '{print $1}')
+      test -n "$CA_HASH"
+      # v0.12.4: stacked-etcd ghost-member recovery loop. kubeadm join
+      # --control-plane announces a new etcd member to the existing
+      # cluster BEFORE starting local etcd. If local etcd fails to come
+      # up in time, the announced member sits "unstarted" in the cluster
+      # forever and every retry collides ("member already exists").
+      # v0.12.6: ghost cleanup + wait now use the chart-baked etcd-client
+      # cert/key from /etc/kubernetes/pki-chart/ — present from cloud-init
+      # so etcdctl works on the FIRST attempt (previously used apiserver-
+      # etcd-client.crt, which kubeadm only writes mid-join; the first
+      # attempt's silent etcdctl failures left ghosts uncleanable).
+      BOOTSTRAP_ETCD={{ printf "https://%s:2379" (index ((include "kubernetes-cluster.cpNodes" . | fromYamlArray)) 0).oobIp | quote }}
+      ETCDCTL_AUTH="--cacert=/etc/kubernetes/pki-chart/etcd-ca.crt \
+        --cert=/etc/kubernetes/pki-chart/etcd-client.crt \
+        --key=/etc/kubernetes/pki-chart/etcd-client.key"
+      # Local IPs of this host — used to scope ghost removal so we only
+      # clean OUR OWN ghost (peerURL containing one of our IPs), never
+      # someone else's currently-joining learner.
+      LOCAL_IPS=$(ip -o -4 addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -v '^127\.' | sort -u)
+      remove_ghost_etcd_members() {
+        # Match unstarted (name=="") OR learner members whose peerURL
+        # points at one of our local IPs. Keep going on etcdctl failure.
+        local raw
+        raw=$(ETCDCTL_API=3 etcdctl --endpoints="$BOOTSTRAP_ETCD" $ETCDCTL_AUTH \
+          member list -w json 2>&1) || { echo "etcdctl member list failed: $raw"; return 0; }
+        for ip in $LOCAL_IPS; do
+          local ids
+          ids=$(echo "$raw" | jq -r --arg ip "$ip" '.members[] | select((.name == "" or .isLearner == true) and any(.peerURLs[]; contains($ip))) | .ID' 2>/dev/null || true)
+          for gid in $ids; do
+            local hex=$(printf "%x" "$gid")
+            echo "removing OUR ghost etcd member id=$hex (decimal $gid) peer=$ip"
+            ETCDCTL_API=3 etcdctl --endpoints="$BOOTSTRAP_ETCD" $ETCDCTL_AUTH \
+              member remove "$hex" || true
+          done
+        done
+      }
+      # v0.12.5: wait for etcd cluster to have NO pending learner (etcd
+      # 3.6 rejects MemberAdd when an unpromoted learner exists). With
+      # 2+ replicas booting concurrently, the second sees "too many
+      # learner members" until the first is promoted (~30-60s after
+      # local etcd starts). Polling here serializes joins via etcd state.
+      # v0.12.6: distinguish etcdctl auth/connect failure (transient) from
+      # actual pending count — empty result no longer counts as "0".
+      wait_for_etcd_no_pending_learner() {
+        for i in $(seq 1 40); do
+          local raw count
+          raw=$(ETCDCTL_API=3 etcdctl --endpoints="$BOOTSTRAP_ETCD" $ETCDCTL_AUTH \
+            member list -w json 2>&1) || { echo "etcdctl unreachable (poll $i): $raw"; sleep 15; continue; }
+          count=$(echo "$raw" | jq -r '[.members[] | select(.isLearner == true or .name == "")] | length' 2>/dev/null || echo "")
+          if [ "$count" = "0" ]; then
+            echo "etcd ready for member-add on poll $i"
+            return 0
+          fi
+          if [ -z "$count" ]; then
+            echo "jq parse failed (poll $i); raw=$raw"
+          else
+            echo "etcd has $count pending learner(s) on poll $i; waiting"
+          fi
+          sleep 15
+        done
+      }
+      # v0.12.6: pre-pull kubeadm images BEFORE the retry loop. The
+      # original attempt-1 failure was "etcd member is not started" —
+      # kubeadm writes the etcd static-pod manifest, kubelet starts a
+      # container, but image pull from k8s.gcr.io eats into kubeadm's
+      # bounded wait window and the etcd-health check times out. Cache
+      # the images once so subsequent kubelet pulls hit local store.
+      echo "[$(date -Iseconds)] pre-pulling kubeadm images"
+      kubeadm config images pull -v=0 2>&1 | tail -20 || true
+      JOIN_OK=
+      for attempt in 1 2 3 4 5; do
+        echo "[$(date -Iseconds)] kubeadm join attempt $attempt"
+        # Each retry: restore PKI (kubeadm reset wipes pki/), clean any
+        # ghost left by a previous attempt, wait for etcd to be quiet.
+        bash /usr/local/bin/restore-chart-pki.sh
+        remove_ghost_etcd_members
+        wait_for_etcd_no_pending_learner
+        # v0.12.8: render JoinConfiguration with ADVERTISE_IP / CA_HASH /
+        # CERT_KEY so kubeadm uses the VIP-prefix-derived IP (172.19.74.x)
+        # for both apiserver advertise AND etcd peer URL — matches the
+        # bootstrap's etcd advertise so peers can actually reach each other.
+        sed -e "s|__ADVERTISE_IP__|$ADVERTISE_IP|g" \
+            -e "s|__CA_HASH__|$CA_HASH|g" \
+            -e "s|__CERT_KEY__|$CERT_KEY|g" \
+          /etc/kubernetes/kubeadm-join.yaml.template \
+          > /etc/kubernetes/kubeadm-join.yaml
+        chmod 0600 /etc/kubernetes/kubeadm-join.yaml
+        if kubeadm join --config /etc/kubernetes/kubeadm-join.yaml; then
+          JOIN_OK=yes
+          break
         fi
-        echo "[$(date -Iseconds)] attempt $i failed; sleeping 20s"
+        echo "[$(date -Iseconds)] attempt $attempt failed; cleaning ghosts + resetting"
+        remove_ghost_etcd_members
+        kubeadm reset --force --cleanup-tmp-dir 2>&1 | tail -10 || true
         sleep 20
       done
-      echo "[$(date -Iseconds)] all 30 attempts exhausted"
-      exit 1
+      [ -n "$JOIN_OK" ] || { echo "all attempts failed"; exit 1; }
+{{- include "kubernetes-cluster.kubeadmPkiWriteFiles" . | nindent 2 }}
+{{- include "kubernetes-cluster.kubeadmJoinWriteFiles" . | nindent 2 }}
+{{- include "kubernetes-cluster.publishDeployedHashWriteFiles" . | nindent 2 }}
 runcmd:
+  # v0.12.7: publish FIRST (see bootstrap CP rationale).
+  - bash /etc/kubernetes/publish-deployed-hash.sh
   - /etc/kubernetes/install-k8s.sh
   - /etc/kubernetes/join.sh
 {{- end -}}
