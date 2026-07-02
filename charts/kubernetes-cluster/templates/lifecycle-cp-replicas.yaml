@@ -1,26 +1,25 @@
 # Render REPLICA control-plane BaremetalHost CRs (HA).
 #
-# Replica CPs join the cluster bootstrapped by index-0 (lifecycle-cp.yaml).
-# The FSM gate is the live presence of BOTH:
-#   - kubeadm_join command on the bootstrap CP's Node.spec.extra (token
-#     can be minted by any healthy CP; we just need a non-empty one)
-#   - cert_key on the bootstrap CP's Node.spec.extra (uploaded once via
-#     `kubeadm init --upload-certs --certificate-key=$KEY`)
+# v0.11.4 (was: gate on bootstrap's kubeadm_join + cert_key BEFORE
+# rendering replica BHs).
 #
-# When either lookup is empty -> nothing renders here, cdc retries on
-# next reconcile. When both resolve, one BH is rendered per replica
-# (indices 1..N-1 of controlPlane.nodes[]).
+# OLD design had a chicken-and-egg: bootstrap waited for etcd quorum
+# before running kubeadm init; etcd quorum required 2-of-3 etcd
+# members; replicas weren't rendered until kubeadm init produced
+# kubeadm_join. Result: bootstrap stuck in `kubeadm init` forever,
+# replica BHs never rendered, no quorum.
 #
-# Cert-key TTL is 2h (kubeadm hard-coded). If replicas stall in Ironic
-# for >2h after bootstrap CP published, re-upload from any healthy CP:
-#   kubeadm init phase upload-certs --upload-certs \
-#     --certificate-key=$(read from bootstrap CP Node.spec.extra.cert_key)
-# Then patch the bootstrap CP's Node.spec.extra.cert_key with the same
-# (or a fresh) key so the next chart render picks it up.
+# v0.11.4: render all CP BHs concurrently (gated only on etcd PKI
+# Secret existing — the 2-pass apply mechanism). Each CP boots in
+# parallel, runs install-etcd.sh, etcd cluster forms quorum via static
+# initial-cluster bootstrap. Bootstrap (index 0) runs kubeadm init
+# next; replicas (index >0) run a polling script that watches their
+# own Node.spec.extra for the chart-bridged kubeadm_join + cert_key,
+# then executes kubeadm join. Pure runtime rendezvous; no chart re-
+# render of replica BHs needed once they've booted.
 {{- $cps := fromYamlArray (include "kubernetes-cluster.cpNodes" .) -}}
-{{- $jc  := include "kubernetes-cluster.joinCommand" . -}}
-{{- $ck  := include "kubernetes-cluster.certKey"     . -}}
-{{- if and (gt (len $cps) 1) $jc $ck -}}
+{{- $kubeadmReady := include "kubernetes-cluster.kubeadmPkiReady" . -}}
+{{- if and (gt (len $cps) 1) $kubeadmReady -}}
 {{- $caBundle := include "kubernetes-cluster.mgmtCaBundle" . -}}
 {{- if $caBundle -}}
 {{- $lcNs := include "kubernetes-cluster.lifecycleNamespace" . -}}
@@ -72,6 +71,7 @@ spec:
     networkData:
       {{- $nd | nindent 6 }}
     {{- end }}
+  deployedConfigDriveHash: {{ include "kubernetes-cluster.deployedConfigDriveHash" $ | quote }}
   configurationRef:
     {{- toYaml $.Values.configurationRef | nindent 4 }}
 {{- end }}

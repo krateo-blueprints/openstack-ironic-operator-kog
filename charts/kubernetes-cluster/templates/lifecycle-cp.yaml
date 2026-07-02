@@ -27,7 +27,13 @@
        the new .Values.k8sVersion baked into cloud-init. */}}
 {{- $upgradeTarget := dig "upgrade" "targetNode" "" (default (dict) .Values.controlPlane) -}}
 {{- $undeployForUpgrade := and $upgradeTarget (eq $upgradeTarget $bootstrap.nodeName) -}}
-{{- if $bootstrap.nodeName -}}
+{{/* v0.11.0 gate: for HA clusters, hold rendering until the etcd PKI
+     Secret exists in the live cluster (lookup hit). First chart apply
+     creates the Secret but BHs don't render. ~60s later cdc reconciles,
+     lookup hits, BHs render with real etcd material. Single-CP path
+     short-circuits to "yes" — no behavior change for legacy users. */}}
+{{- $kubeadmReady := include "kubernetes-cluster.kubeadmPkiReady" . -}}
+{{- if and $bootstrap.nodeName $kubeadmReady -}}
 ---
 apiVersion: {{ include "kubernetes-cluster.lifecycleApiVersion" . }}
 kind: {{ include "kubernetes-cluster.lifecycleKind" . }}
@@ -78,6 +84,7 @@ spec:
       {{- $nd | nindent 6 }}
     {{- end }}
   {{- end }}
+  deployedConfigDriveHash: {{ include "kubernetes-cluster.deployedConfigDriveHash" . | quote }}
   configurationRef:
     {{- toYaml .Values.configurationRef | nindent 4 }}
 {{- end }}
