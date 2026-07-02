@@ -2,6 +2,10 @@
 
 Provision a real Kubernetes cluster on Ironic-managed bare-metal nodes by applying **one** Custom Resource. No Go operator, no extra controllers — a layered Krateo composition that decomposes into well-known primitives and ends up calling Ironic's REST API.
 
+> **v0.11.0 architecture change.** HA clusters (cpNodes > 1) now run etcd as a host **systemd unit** on each CP, bootstrapped from a static `initial-cluster=` list. kubeadm sees etcd as **external** and skips the join-time etcd-member-dance that broke v0.10.15 HA with an irrecoverable ghost-member loop. Single-CP path is unchanged (kubeadm stacked etcd). Full design rationale and bootstrap sequence: [`KUBERNETES-CLUSTER-V0.11.0-DESIGN.md`](KUBERNETES-CLUSTER-V0.11.0-DESIGN.md). Restore runbook: [`RUNBOOK-ETCD-RESTORE.md`](RUNBOOK-ETCD-RESTORE.md).
+>
+> New required value for HA: `controlPlane.nodes[].oobIp` (the OOB-network IP — etcd peer URLs are hard-pinned there). New optional values: `controlPlane.etcd.{aptPackage,snapshotImage,snapshotSchedule,snapshotRetentionDays}`.
+
 ## Table of contents
 
 - [Layered architecture](#layered-architecture)
