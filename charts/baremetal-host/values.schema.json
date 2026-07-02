@@ -21,6 +21,7 @@
     "cleanSteps":       {"type": ["array", "null"], "description": "Ironic clean steps to run while manageable. Each item: interface, step, args."},
     "undeploy":         {"type": "boolean", "default": false, "description": "When true, drives the blade from `active` back to `available` via transition-undeploy. Hold-at-available signal."},
     "undeployMode":     {"type": "string",  "enum": ["full", "none"], "default": "full", "description": "Ironic cleanup pass between deleted and available. full=standard clean_steps, none=skip (fast, dirty)."},
-    "configurationRef": {"type": "object"}
+    "configurationRef": {"type": "object"},
+    "deployedConfigDriveHash": {"type": ["string", "null"], "description": "v0.4.2 (Task #91): chart-rendered desired hash; cloud-init publishes the running OS hash to Ironic.node.extra. shouldAutoRedeploy compares both. Mismatch fires transition-undeploy."}
   }
 }
