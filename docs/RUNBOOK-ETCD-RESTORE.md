@@ -1,3 +1,12 @@
+---
+type: Runbook
+title: Restore etcd from a v0.11.x chart snapshot
+description: Runbook for restoring HA control-plane etcd from a chart-taken snapshot on kubernetes-cluster v0.11.0+ (external etcd) — when to use it, the restore sequence, and the redeploy fallback.
+resource: oci://ghcr.io/krateo-blueprints/charts/baremetal-host
+tags: [ironic, kubernetes-cluster, etcd, restore, runbook]
+timestamp: 2026-08-11T00:00:00Z
+---
+
 # Runbook — Restore etcd from a v0.11.x chart snapshot
 
 Applies to HA clusters deployed with `kubernetes-cluster` chart v0.11.0+

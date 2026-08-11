@@ -1,3 +1,12 @@
+---
+type: Architecture
+title: kubernetes-cluster composition
+description: The layered kubernetes-cluster composition — provision a real Kubernetes cluster on Ironic-managed bare-metal nodes from one Custom Resource, the Ironic provision FSM, the CP/worker rendezvous, and the HA/etcd model.
+resource: oci://ghcr.io/krateo-blueprints/charts/baremetal-host
+tags: [ironic, kubernetes-cluster, composition, kubeadm, architecture]
+timestamp: 2026-08-11T00:00:00Z
+---
+
 # `kubernetes-cluster` composition
 
 Provision a real Kubernetes cluster on Ironic-managed bare-metal nodes by applying **one** Custom Resource. No Go operator, no extra controllers — a layered Krateo composition that decomposes into well-known primitives and ends up calling Ironic's REST API.

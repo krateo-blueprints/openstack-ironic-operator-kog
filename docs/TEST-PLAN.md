@@ -1,3 +1,12 @@
+---
+type: Runbook
+title: baremetal-host chart E2E test plan
+description: The manual E2E test plan for the baremetal-host chart — the gaps beyond the CI-regression matrix: mutating inputs, hardware integration, concurrency, chart-version skew and long-running stability.
+resource: oci://ghcr.io/krateo-blueprints/charts/baremetal-host
+tags: [ironic, baremetal-host, test-plan, e2e, runbook]
+timestamp: 2026-08-11T00:00:00Z
+---
+
 # Test Plan: baremetal-host chart 0.3.3 — E2E
 
 Status: open. Validated set (deploy walk, full undeploy, fresh delete, configdrive
