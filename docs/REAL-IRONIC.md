@@ -86,7 +86,7 @@ current `provision_state`); cdc re-evaluates each reconcile until the node is `a
 ## Against a Krateo-blueprint Ironic (in-cluster Keystone) — recipe
 
 Validated against an Ironic deployed in-cluster from the
-[Krateo OpenStack blueprint](https://github.com/braghettos/krateo-openstack-blueprint) `ironic`
+[Krateo OpenStack blueprint](https://github.com/krateo-blueprints/krateo-openstack-blueprint) `ironic`
 component (Keystone-protected, `ironic-api` Service on `:6385`). The same proxy is used, pointed at
 the in-cluster Keystone. Three blueprint-specific points:
 
