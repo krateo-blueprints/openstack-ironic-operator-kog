@@ -945,7 +945,7 @@ distribution would require a chart fork or out-of-band copy step.
 ## Deploying on the Ettore lab (real bare-metal recipe)
 
 A turn-key manifest for the Ettore lab lives at
-[`manifests/kubernetescluster-ettore-lab.yaml`](../manifests/kubernetescluster-ettore-lab.yaml)
+[`manifests/kubernetescluster-example.yaml`](../manifests/kubernetescluster-example.yaml)
 — CP on blade06 + worker on blade10, with the real Redfish credentials
 and UUIDs from the existing baremetalhost-blade06-power-flip.yaml and
 baremetalhost-blade10-inspect-fail.yaml fixtures.
@@ -993,7 +993,7 @@ baremetalhost-blade10-inspect-fail.yaml fixtures.
 ```bash
 kubectl --kubeconfig local/kubeconfig.ironic-lab \
   --context kind-ironic-lab \
-  apply -f manifests/kubernetescluster-ettore-lab.yaml
+  apply -f manifests/kubernetescluster-example.yaml
 ```
 
 Then watch:

@@ -43,7 +43,7 @@ Recommended landing order (`2 → 3 → 4 → 5b → 1 → 5a → 5c`) was follo
 end-to-end. Chart at `0.6.0`, CompositionDefinition repointed.
 
 Real Ettore-lab deployable manifest is at
-[`manifests/kubernetescluster-ettore-lab.yaml`](../manifests/kubernetescluster-ettore-lab.yaml)
+[`manifests/kubernetescluster-example.yaml`](../manifests/kubernetescluster-example.yaml)
 — CP on blade06 + worker on blade10, real Redfish credentials and
 UUIDs. Two pre-deploy operator steps documented in
 [`docs/USER-GUIDE.md`](USER-GUIDE.md): plumb the management apiserver
