@@ -1,3 +1,12 @@
+---
+type: Runbook
+title: Run against real standalone Ironic via Bifrost
+description: Quickstart for driving the KOG operator against a real standalone Ironic deployed with Bifrost — real PXE deploys to libvirt VMs as virtual bare metal, no Keystone/Glance/Nova.
+resource: oci://ghcr.io/krateo-blueprints/charts/baremetal-host
+tags: [ironic, bifrost, runbook, pxe, standalone]
+timestamp: 2026-08-11T00:00:00Z
+---
+
 # Quickstart: real standalone Ironic via Bifrost
 
 The realistic *real-Ironic* path that stays 100% standalone — no Keystone, Glance, Nova,

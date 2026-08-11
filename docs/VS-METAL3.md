@@ -1,3 +1,12 @@
+---
+type: Architecture
+title: This composition vs metal3 BareMetalHost
+description: An evidence-backed comparison of the Krateo Ironic composition against metal3's baremetal-operator — lifecycle parity, operability trade-offs, and where each approach wins.
+resource: oci://ghcr.io/krateo-blueprints/charts/baremetal-host
+tags: [ironic, metal3, comparison, architecture, baremetal]
+timestamp: 2026-08-11T00:00:00Z
+---
+
 # Comparative analysis: this composition vs metal3 BareMetalHost
 
 Honest, evidence-backed comparison. We claim parity on the core lifecycle and

@@ -1,3 +1,12 @@
+---
+type: Runbook
+title: End-to-end validation on the fake driver
+description: Step-by-step end-to-end validation of the blueprint on a local kind cluster with standalone Ironic (fake-hardware), from local-up through a full enroll-to-active provision walk.
+resource: oci://ghcr.io/krateo-blueprints/charts/baremetal-host
+tags: [ironic, e2e, validation, runbook, kind]
+timestamp: 2026-08-11T00:00:00Z
+---
+
 # End-to-End Validation
 
 Validated locally with `kind` + standalone Ironic (fake-hardware) — no real hardware.

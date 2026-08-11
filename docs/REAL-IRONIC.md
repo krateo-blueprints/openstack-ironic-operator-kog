@@ -1,3 +1,12 @@
+---
+type: Runbook
+title: Run the operator against a real Ironic API
+description: Quickstart for driving the operator against a real, Keystone-protected Ironic — an auth proxy authenticates with your clouds.yaml, injects a fresh token plus microversion, and forwards to your Ironic.
+resource: oci://ghcr.io/krateo-blueprints/charts/baremetal-host
+tags: [ironic, keystone, runbook, real-ironic, proxy]
+timestamp: 2026-08-11T00:00:00Z
+---
+
 # Quickstart: run the operator against a real Ironic API
 
 The operator is the same as in the local (fake) env — only the endpoint behind the in-cluster

@@ -1,3 +1,12 @@
+---
+type: Architecture
+title: kubernetes-cluster v0.11.0 — external etcd, static bootstrap
+description: Design note reframing etcd lifecycle as host substrate (a systemd unit on each control plane, external to kubeadm) to eliminate the join-time etcd-member-dance that broke v0.10.15 HA.
+resource: oci://ghcr.io/krateo-blueprints/charts/baremetal-host
+tags: [ironic, kubernetes-cluster, etcd, ha, architecture]
+timestamp: 2026-08-11T00:00:00Z
+---
+
 # kubernetes-cluster v0.11.0 — External etcd, static bootstrap
 
 Status: **DRAFT**, awaiting acceptance. Reframes etcd lifecycle as host
