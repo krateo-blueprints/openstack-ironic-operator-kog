@@ -1,0 +1,37 @@
+# openstack-ironic-operator-kog — LLM doc index
+# One line per file. The four charts version independently; read a chart at the version in its
+# CompositionDefinition (manifests/compositiondefinition-<name>.yaml, spec.chart.version).
+docs/index.md: the map — the KOG + composition architecture and links to the whole bundle
+docs/overview.md: the two layers (KOG primitives + lookup-driven per-state composition), the four charts, delete-vs-undeploy
+docs/usage.md: free local kind + standalone Ironic env, driving a composition with cdc, apply-at-the-right-apiVersion, real Ironic
+docs/configuration.md: the value surface of each chart + the singleton NodeConfiguration
+docs/api.md: the CompositionDefinition CRD, the four generated composition CRDs, the KOG Ironic primitives
+docs/examples.md: index of the runnable examples
+docs/release.md: how the four charts are published to GHCR (release-chart.yaml)
+docs/log.md: curated history
+examples/baremetal-lifecycle/README.md: a BaremetalLifecycle CR that walks a node enroll -> active
+examples/baremetal-lifecycle/composition.yaml: the composition CR itself
+# Deep-dive references (design + runbook):
+docs/KUBERNETES-CLUSTER.md: the layered kubernetes-cluster composition (kubeadm over Ironic blades)
+docs/KUBERNETES-CLUSTER-PLAN.md: the kubernetes-cluster implementation roadmap
+docs/KUBERNETES-CLUSTER-V0.11.0-DESIGN.md: external-etcd HA design (systemd unit, static bootstrap)
+docs/USER-GUIDE.md: the BaremetalHost composition user guide
+docs/VS-METAL3.md: comparison against metal3's baremetal-operator
+docs/BIFROST.md: run against real standalone Ironic via Bifrost (real PXE, no Keystone)
+docs/REAL-IRONIC.md: run against a Keystone-protected Ironic via the auth proxy
+docs/E2E.md: end-to-end validation on the fake driver
+docs/TEST-PLAN.md: the baremetal-host chart E2E test plan
+docs/ORPHAN-RECOVERY.md: recovering a desynced helm release
+docs/RUNBOOK-ETCD-RESTORE.md: restoring HA etcd from a chart snapshot
+docs/quickstart.md: first-time smoke test with the openstack baremetal CLI
+# Source (read at the matching chart version):
+charts/baremetal-host/values.yaml: the unified BaremetalHost composition values
+charts/baremetal-lifecycle/values.yaml: the provisioning-only composition values
+charts/baremetal-discovery/values.yaml: the discovery-only composition values
+charts/kubernetes-cluster/values.yaml: the kubeadm-cluster composition values
+manifests/compositiondefinition-baremetal-host.yaml: registers the baremetal-host chart
+manifests/compositiondefinition-baremetal-lifecycle.yaml: registers the baremetal-lifecycle chart
+manifests/compositiondefinition-baremetal-discovery.yaml: registers the baremetal-discovery chart
+manifests/compositiondefinition-kubernetes-cluster.yaml: registers the kubernetes-cluster chart
+manifests/restdefinition-node.yaml: KOG Node CRUD RestDefinition
+manifests/restdefinition-provision.yaml: KOG NodeProvision action RestDefinition

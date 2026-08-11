@@ -1,3 +1,12 @@
+---
+type: Architecture
+title: BaremetalHost composition — user guide
+description: The BaremetalHost composition user guide — the two stacked Krateo layers, the single-CR lifecycle drive, the transition gates, and the cluster-ingress option matrix for the kubernetes-cluster case.
+resource: oci://ghcr.io/krateo-blueprints/charts/baremetal-host
+tags: [ironic, baremetal-host, composition, user-guide, architecture]
+timestamp: 2026-08-11T00:00:00Z
+---
+
 # BaremetalHost composition — user guide
 
 Drive a bare-metal blade through Ironic's lifecycle with a single

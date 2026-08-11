@@ -1,3 +1,12 @@
+---
+type: Runbook
+title: Quickstart — Ironic bare-metal operator
+description: First-time quickstart — install the KOG provider, kubectl apply a Node, and verify enrollment with the openstack baremetal CLI before driving the full lifecycle via a composition.
+resource: oci://ghcr.io/krateo-blueprints/charts/baremetal-host
+tags: [ironic, quickstart, runbook, kog]
+timestamp: 2026-08-11T00:00:00Z
+---
+
 # Quickstart — Ironic (bare metal) operator
 
 Manage OpenStack **Ironic** bare-metal resources as Kubernetes CRs. End to end:
