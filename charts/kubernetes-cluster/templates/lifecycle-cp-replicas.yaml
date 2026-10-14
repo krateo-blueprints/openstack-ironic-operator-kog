@@ -9,14 +9,14 @@
 # kubeadm_join. Result: bootstrap stuck in `kubeadm init` forever,
 # replica BHs never rendered, no quorum.
 #
-# v0.11.4: render all CP BHs concurrently (gated only on etcd PKI
-# Secret existing — the 2-pass apply mechanism). Each CP boots in
-# parallel, runs install-etcd.sh, etcd cluster forms quorum via static
-# initial-cluster bootstrap. Bootstrap (index 0) runs kubeadm init
-# next; replicas (index >0) run a polling script that watches their
-# own Node.spec.extra for the chart-bridged kubeadm_join + cert_key,
-# then executes kubeadm join. Pure runtime rendezvous; no chart re-
-# render of replica BHs needed once they've booted.
+# v0.12.0: render all CP BHs concurrently, gated only on the kubeadm
+# PKI Secret existing (the 2-pass apply mechanism). Each CP boots in
+# parallel with the PKI already written by cloud-init. Bootstrap
+# (index 0) runs kubeadm init; replicas (index >0) wait for the
+# apiserver VIP to answer, then kubeadm join --control-plane with the
+# chart-derived token and CA hash. etcd is stacked and kubeadm expands
+# it on join. No runtime rendezvous, and no chart re-render of replica
+# BHs once they have booted.
 {{- $cps := fromYamlArray (include "kubernetes-cluster.cpNodes" .) -}}
 {{- $kubeadmReady := include "kubernetes-cluster.kubeadmPkiReady" . -}}
 {{- if and (gt (len $cps) 1) $kubeadmReady -}}
