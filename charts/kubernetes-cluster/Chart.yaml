@@ -2,18 +2,22 @@ apiVersion: v2
 name: kubernetes-cluster
 description: |
   Krateo blueprint that turns a set of Ironic-managed bare-metal nodes into a
-  vanilla kubeadm-bootstrapped Kubernetes cluster. Renders one BaremetalLifecycle
-  per cluster member (control plane + workers) and gates the join sequence on
-  the control plane having published its `kubeadm join` command into its own
-  Node CR's spec.extra.kubeadm_join (rendezvous via the existing Node KOG
-  primitive — no new CRDs, no new tools).
+  vanilla kubeadm-bootstrapped Kubernetes cluster. Renders one BaremetalHost
+  per cluster member (control plane + workers) and adds the cloud-init that
+  makes a booted blade a cluster member. No provisioning logic of its own.
 
-  State machine:
-    cp:      lifecycle(deploy)  -> kubeadm init -> patch own Node.spec.extra
-    workers: gated on cp Node.spec.extra.kubeadm_join present
-             -> lifecycle(deploy) -> kubeadm join
+  Since v0.12.0 there is NO runtime rendezvous: the whole kubeadm PKI is
+  generated at render time into the `<cluster>-kubeadm-pki` Secret and baked
+  into each node via cloud-init write_files, and the bootstrap token and
+  certificate key are derived from the cluster name (sha256), so replicas and
+  workers can compute them. Two-pass apply: BaremetalHosts do not render until
+  that Secret is visible to a live lookup.
+
+  Stacked etcd, expanded natively by `kubeadm join --control-plane` — no
+  external etcd, no install-etcd unit, no snapshot CronJob.
+
 type: application
-version: 0.12.11
+version: 0.13.0
 appVersion: "1.0"
 keywords:
   - kubernetes
