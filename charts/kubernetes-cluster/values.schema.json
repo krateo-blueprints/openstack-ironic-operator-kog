@@ -10,7 +10,17 @@
     },
     "k8sVersion": {
       "type": "string",
-      "description": "kubelet/kubeadm package version, e.g. v1.31.4."
+      "description": "kubelet/kubeadm package version, e.g. v1.36.5. The minor is regex-extracted to build the pkgs.k8s.io apt repo URL."
+    },
+    "kubeProxy": {
+      "type": ["object", "null"],
+      "properties": {
+        "mode": {
+          "type": ["string", "null"],
+          "enum": [null, "nftables", "iptables"],
+          "description": "kube-proxy backend. Defaults to nftables. Selecting iptables also pins the host to iptables-legacy on Debian 13; only needed below k8s v1.33."
+        }
+      }
     },
     "cni": {
       "type": ["object", "null"],
