@@ -4,9 +4,23 @@
 
 clusterName: lab
 
-# kubeadm-installed k8s version. Drives the kubelet/kubeadm/kubectl
-# package version on every node via cloud-init.
-k8sVersion: v1.31.4
+# kubeadm-installed k8s version. Drives three things in cloud-init: the
+# pkgs.k8s.io apt repo (minor is regex-extracted from this value), the
+# exact package revision (resolved at runtime via apt-cache madison), and
+# ClusterConfiguration.kubernetesVersion.
+k8sVersion: v1.36.5
+
+# kube-proxy backend, written into the kubeadm InitConfiguration as a
+# KubeProxyConfiguration document.
+#   nftables - default. GA since v1.31 (beta) / v1.33 (stable). Talks to
+#              nf_tables directly, so Debian 13's iptables-nft default is
+#              a non-issue and no host-side alternatives pin is needed.
+#   iptables - legacy backend. On Debian 13 this ALSO re-pins the host's
+#              iptables alternative to iptables-legacy in cloud-init,
+#              because kube-proxy's iptables mode exits with code 2 on an
+#              nft-backed iptables. Use only on k8s < v1.33.
+kubeProxy:
+  mode: nftables
 
 # CNI is wired by the CP post-init. Default flannel for simplicity.
 cni:

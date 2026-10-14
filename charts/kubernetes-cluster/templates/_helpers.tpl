@@ -507,6 +507,10 @@ services:
     networking:
       podSubnet: {{ .Values.network.podCIDR | quote }}
       serviceSubnet: {{ .Values.network.serviceCIDR | quote }}
+    ---
+    apiVersion: kubeproxy.config.k8s.io/v1alpha1
+    kind: KubeProxyConfiguration
+    mode: {{ ((.Values.kubeProxy | default dict).mode | default "nftables") }}
 {{- end -}}
 {{- end -}}
 
@@ -683,13 +687,15 @@ write_files:
       # in path [/usr/lib/cni]`.
       systemctl enable containerd
       systemctl restart containerd
-      # Debian 13 trixie's default iptables alternative is iptables-nft. With
-      # the bundled kube-proxy (v1.31, iptables mode), the proxy exits with
-      # code 2 right after caches sync — no error logged, no kernel panic.
-      # Pinning iptables-legacy avoids the silent crash. Track upstream
-      # adoption of `--proxy-mode=nftables` for a longer-term path.
+      # Debian 13 trixie's default iptables alternative is iptables-nft, on
+      # which kube-proxy's *iptables* mode exits with code 2 right after
+      # caches sync — no error logged, no kernel panic. nftables mode (the
+      # chart default) talks to nf_tables directly and needs no pin, so the
+      # legacy alternatives are only forced on the iptables path.
+{{- if eq ((.Values.kubeProxy | default dict).mode | default "nftables") "iptables" }}
       update-alternatives --set iptables /usr/sbin/iptables-legacy
       update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
+{{- end }}
       modprobe overlay
       modprobe br_netfilter
       printf 'overlay\nbr_netfilter\n' > /etc/modules-load.d/k8s.conf
@@ -1094,13 +1100,15 @@ write_files:
       # in path [/usr/lib/cni]`.
       systemctl enable containerd
       systemctl restart containerd
-      # Debian 13 trixie's default iptables alternative is iptables-nft. With
-      # the bundled kube-proxy (v1.31, iptables mode), the proxy exits with
-      # code 2 right after caches sync — no error logged, no kernel panic.
-      # Pinning iptables-legacy avoids the silent crash. Track upstream
-      # adoption of `--proxy-mode=nftables` for a longer-term path.
+      # Debian 13 trixie's default iptables alternative is iptables-nft, on
+      # which kube-proxy's *iptables* mode exits with code 2 right after
+      # caches sync — no error logged, no kernel panic. nftables mode (the
+      # chart default) talks to nf_tables directly and needs no pin, so the
+      # legacy alternatives are only forced on the iptables path.
+{{- if eq ((.Values.kubeProxy | default dict).mode | default "nftables") "iptables" }}
       update-alternatives --set iptables /usr/sbin/iptables-legacy
       update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
+{{- end }}
       modprobe overlay
       modprobe br_netfilter
       printf 'overlay\nbr_netfilter\n' > /etc/modules-load.d/k8s.conf
@@ -1217,13 +1225,15 @@ write_files:
       # in path [/usr/lib/cni]`.
       systemctl enable containerd
       systemctl restart containerd
-      # Debian 13 trixie's default iptables alternative is iptables-nft. With
-      # the bundled kube-proxy (v1.31, iptables mode), the proxy exits with
-      # code 2 right after caches sync — no error logged, no kernel panic.
-      # Pinning iptables-legacy avoids the silent crash. Track upstream
-      # adoption of `--proxy-mode=nftables` for a longer-term path.
+      # Debian 13 trixie's default iptables alternative is iptables-nft, on
+      # which kube-proxy's *iptables* mode exits with code 2 right after
+      # caches sync — no error logged, no kernel panic. nftables mode (the
+      # chart default) talks to nf_tables directly and needs no pin, so the
+      # legacy alternatives are only forced on the iptables path.
+{{- if eq ((.Values.kubeProxy | default dict).mode | default "nftables") "iptables" }}
       update-alternatives --set iptables /usr/sbin/iptables-legacy
       update-alternatives --set ip6tables /usr/sbin/ip6tables-legacy
+{{- end }}
       modprobe overlay
       modprobe br_netfilter
       printf 'overlay\nbr_netfilter\n' > /etc/modules-load.d/k8s.conf
