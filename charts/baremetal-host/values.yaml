@@ -18,7 +18,7 @@ nodeNamespace: ""      # defaults to release namespace
 ports:
 
 # --- Optional inspection step ---
-# When true, runs `target: inspect` after manageable; inspection results land in the Node CR's
+# When true, runs `target: inspect` after manageable; inspection results land in the BaremetalNode CR's
 # status (properties + inspection_finished_at). transition-provide gates on the inspect CR's
 # existence so we don't loop.
 enableInspection: false
@@ -70,7 +70,7 @@ configDrive:
 # When true, Ironic suspends power-state monitoring and other automatic actions on the node
 # (kept-alive heartbeats, periodic agent checks, etc.). Use during hardware servicing so
 # Ironic's auto-recovery doesn't fight whatever you're doing at the BMC. Propagates as a
-# spec.maintenance edit on the Node CR -> RDC PATCHes Ironic via the JSON-Patch translator.
+# spec.maintenance edit on the BaremetalNode CR -> RDC PATCHes Ironic via the JSON-Patch translator.
 maintenance: false
 
 # --- Detached mode ---
@@ -135,7 +135,7 @@ networkData:
 undeploy: false
 
 # undeployMode controls Ironic's cleanup pass between `deleted` and `available`. Applied
-# proactively via spec.automated_clean on the Node CR (see templates/node.yaml) so it's
+# proactively via spec.automated_clean on the BaremetalNode CR (see templates/node.yaml) so it's
 # in place before the target=deleted PUT fires.
 # - full (default): automated_clean stays at ironic.conf [conductor]automated_clean
 #   default (usually true) — full IPA boot, standard clean_steps (disk erase, etc.).
@@ -144,7 +144,16 @@ undeploy: false
 undeployMode: full
 
 # --- Krateo plumbing ---
-# Singleton NodeConfiguration the chart points spec.configurationRef at (see
+# Singleton BaremetalNodeConfiguration the chart points spec.configurationRef at (see
 # manifests/nodeconfiguration-ironic.yaml).
 configurationRef:
   name: ironic-endpoint
+
+# --- Debugging ---
+debug:
+  # Stamps krateo.io/connector-verbose on the BaremetalNode CR, making
+  # rest-dynamic-controller log the full HTTP exchange with Ironic, body included.
+  # RDC otherwise surfaces a bare "unexpected status: 400" and drops Ironic's
+  # faultstring, so a rejected create is undiagnosable without this.
+  # Requires RDC >= 0.26.1, which redacts credential headers before logging.
+  connectorVerbose: false

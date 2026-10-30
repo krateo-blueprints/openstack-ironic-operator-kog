@@ -1,22 +1,33 @@
-# Node CR — RDC syncs this to Ironic. instance_info is assembled from spec.image +
+# BaremetalNode CR — RDC syncs this to Ironic. instance_info is assembled from spec.image +
 # spec.configDrive (see _helpers.tpl). Only emit instance_info when image.source is set,
 # otherwise Ironic complains about empty image_source on the way to active.
 {{- if .Values.nodeName }}
 {{- $instanceInfo := include "baremetal-host.instanceInfo" . | fromYaml }}
 {{- $cdHash := include "baremetal-host.configDriveHash" . }}
 apiVersion: {{ include "baremetal-host.nodeApiVersion" . }}
-kind: Node
+kind: BaremetalNode
 metadata:
   name: {{ .Values.nodeName }}
   namespace: {{ include "baremetal-host.nodeNamespace" . }}
-  {{- if $cdHash }}
+  {{- if or $cdHash (.Values.debug).connectorVerbose }}
   annotations:
+    {{- if $cdHash }}
     # v0.4.0: configdrive-hash stamped on every render. Compared against
     # the freshly-rendered hash on subsequent reconciles; if changed on
     # an `active` node, transition-undeploy auto-fires to drive a chart-
     # managed redeploy (single apply, no operator choreography). See
     # _helpers.tpl `shouldAutoRedeploy`.
     baremetal.ogen.krateo.io/configdrive-hash: {{ $cdHash | quote }}
+    {{- end }}
+    {{- if (.Values.debug).connectorVerbose }}
+    # v0.5.1: rest-dynamic-controller logs the full HTTP request and response,
+    # including the body, for this resource. Without it RDC reports only
+    # "unexpected status: 400" and discards Ironic's faultstring, which is the
+    # only part that says WHY. Credential headers are redacted by RDC itself
+    # from 0.26.1 onward -- do NOT enable this on an RDC older than that.
+    # Off by default: verbose bodies are noisy and this is a debugging aid.
+    krateo.io/connector-verbose: "true"
+    {{- end }}
   {{- end }}
   labels:
     app.kubernetes.io/name: baremetal-host

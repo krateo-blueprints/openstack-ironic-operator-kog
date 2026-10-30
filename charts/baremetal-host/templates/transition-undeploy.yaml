@@ -20,7 +20,7 @@
 #      -> KOG DELETE /v1/nodes/{id} now succeeds (node is at `available`)
 #
 # Cleanup mode is governed by spec.undeployMode (full | none), via spec.automated_clean
-# on the Node CR (see templates/node.yaml).
+# on the BaremetalNode CR (see templates/node.yaml).
 #
 # Gate widened in v0.3.4 to make `spec.undeploy=true` a true "get me out,
 # whatever you're stuck on" signal. Empirical verification on the lab Ironic
@@ -48,11 +48,20 @@ kind: NodeProvision
 metadata:
   name: {{ printf "%s-undeploy" .Release.Name | trunc 63 | trimSuffix "-" }}
   namespace: {{ include "baremetal-host.nodeNamespace" . }}
+  {{- if (.Values.debug).connectorVerbose }}
+  annotations:
+    # See values.yaml debug.connectorVerbose. Makes RDC dump the full HTTP exchange
+    # with Ironic for this transition, including the faultstring it otherwise drops.
+    krateo.io/connector-verbose: "true"
+  {{- end }}
   labels:
     app.kubernetes.io/name: baremetal-host
     app.kubernetes.io/instance: {{ .Release.Name }}
     baremetal.ogen.krateo.io/transition: undeploy
 spec:
+  configurationRef:
+    name: {{ include "baremetal-host.configName" . }}
+    namespace: {{ include "baremetal-host.nodeNamespace" . }}
   node_id: {{ .Values.nodeName | quote }}
   target: deleted
 {{- end }}

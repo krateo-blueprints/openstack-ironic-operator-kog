@@ -1,12 +1,17 @@
-# RestDefinition for the Ironic power-state action (one CR per power request).
-# Mirrors restdefinition-provision.yaml: KOG generates a NodePower CRD + RDC. Creating a
-# NodePower CR fires PUT /v1/nodes/{node_id}/states/power once (202 -> Pending guard
-# prevents re-fire, same pattern as NodeProvision).
+# RestDefinition for the Ironic power state. KOG generates a NodePower CRD + RDC.
 #
-# Use case: charts/baremetal-lifecycle (and later baremetal-host) render a NodePower CR
-# when spec.online toggles. The chart renames the CR when target changes so KOG sees a
-# fresh CR and the PUT fires a new time. Idempotency of "already powered on" is handled by
-# Ironic itself (returns 409 if already in the target state).
+# A NodePower CR asserts "this node should be in this power state" and keeps asserting it.
+# It is NOT a fire-once request, which is what it used to be and why it could not converge:
+# the old model relied on findby never matching, so every CR fired its PUT and then sat at
+# Ready=False(Pending) forever. That is invisible until something aggregates child readiness
+# -- composition-dynamic-controller does, so a fully provisioned host still reported
+# Ready=False. See the comment on the findby verb for the mechanism and the fix.
+#
+# Use case: charts/baremetal-host renders a NodePower CR from spec.online. The chart still
+# encodes the observed state in the CR name (`-power-on-from-off`) as a belt-and-braces
+# re-fire trigger; with the declarative model that rename is no longer load-bearing, because
+# drift alone now causes the update. Simplifying the chart to a stable name is a safe
+# follow-up, deliberately not bundled with this change.
 #
 # Apply order:
 #   1. kubectl create configmap ironic-power-oas -n openstack --from-file=power.yaml=../oas/ironic-power.yaml
@@ -29,13 +34,88 @@ spec:
       - power_state
       - target_power_state
     verbsDescription:
+      # DECLARATIVE, not fire-once. See the note at the top of this file for why the
+      # original model could not converge.
+      #
+      # The identifier is node_id, and a node in GET /v1/nodes has no such key -- it has
+      # `name`. isItemMatch looks up item["node_id"] and finds nothing, so findby could NEVER
+      # match, which is exactly what made every new CR "not found" and therefore fire. The
+      # cost was that it stayed not-found forever: the 202 sets Pending, Observe then returns
+      # exists+up-to-date from the Pending guard WITHOUT clearing the condition, and the CR
+      # sits at Ready=False(Pending) for the rest of its life. cdc aggregates child readiness,
+      # so one such CR holds the whole composition at Ready=False even with the host fully
+      # provisioned. Measured: a reconcile at 08:19:31 refreshed Synced and left Ready
+      # untouched at 08:16:49 -- permanent, not lag.
+      #
+      # So: make the item matchable by lifting `name` to `node_id`, and express the question
+      # the resource actually asks -- "is the node in the target power state?" -- by lifting
+      # the observed state onto `target`, the same key the spec uses. The drift comparison
+      # then does the work: equal => converged => Ready=True; different => RDC calls update,
+      # which re-issues the PUT. That is continuous enforcement for free, and it is
+      # self-healing in a way the fire-once model never was -- a node that loses power out of
+      # band drifts and gets corrected, instead of leaving a CR that already fired.
+      #
+      # target_power_state FIRST, falling back to power_state, is what keeps it quiet during
+      # a transition: while Ironic is acting, target_power_state already holds the requested
+      # value, so the comparison sees convergence and does not re-issue. Once the action
+      # completes Ironic clears it to null and `//` falls through to the settled power_state.
+      # Without that ordering every in-flight power change would look like drift and earn a
+      # second PUT.
       - action: findby
         method: GET
         path: /v1/nodes
+        headers:
+          - name: X-OpenStack-Ironic-API-Version
+            value: "1.109"
         identifiersMatchPolicy: OR
+        # WITHOUT THIS, blade01 IS NOT IN THE LIST AT ALL.
+        #
+        # Ironic 1.83 introduced parent/child nodes, and GET /v1/nodes HIDES child nodes by
+        # default -- they are considered nested resources rather than machines in their own
+        # right. blade01 sets parent_node: enclosure01, so the list came back containing only
+        # enclosure01 and findby could never match no matter what the identifier said.
+        # Measured: 4 findby GETs, every response carrying exactly one node, "enclosure01".
+        #
+        # This is the kind of absence that reads as a bug in your own matching logic. It is
+        # also why the identifier fix alone was not enough: both were real, and only fixing
+        # both makes findby work.
+        #
+        # Declared here as a static per-verb query rather than in the OAS on purpose. An OAS
+        # parameter can materialise as a generated spec field, and the CRD surface is the one
+        # thing here that is expensive to get wrong. ValidateRequest only enforces that
+        # REQUIRED parameters are present, so an undeclared query is injected without complaint.
+        queries:
+          - name: include_children
+            value: "true"
+        responseTransform:
+          inline: '. + {node_id: .name, target: (.target_power_state // .power_state)}'
+      # Retained for CRD generation and for an Ironic that somehow has no such node; with
+      # findby now matching, Observe reports the resource as existing and this never fires.
+      # The real work happens on update.
       - action: create
         method: PUT
         path: /v1/nodes/{node_id}/states/power
+        headers:
+          - name: X-OpenStack-Ironic-API-Version
+            value: "1.109"
+        requestFieldMapping:
+          - inPath: node_id
+            inCustomResource: spec.node_id
+      # Same endpoint as create: Ironic has one way to change power, and whether we call it
+      # "create" or "update" is a KOG-side distinction. Body is {"target": ...}, built from
+      # spec by the OAS PowerTarget schema.
+      #
+      # 409 is tolerated because it is the benign race, not a failure: Ironic returns it when
+      # a power action is already pending on the node. Treating it as an error would surface a
+      # transient as a reconcile failure on a node that is already doing the right thing.
+      - action: update
+        method: PUT
+        path: /v1/nodes/{node_id}/states/power
+        headers:
+          - name: X-OpenStack-Ironic-API-Version
+            value: "1.109"
+        tolerateCodes:
+          - 409
         requestFieldMapping:
           - inPath: node_id
             inCustomResource: spec.node_id

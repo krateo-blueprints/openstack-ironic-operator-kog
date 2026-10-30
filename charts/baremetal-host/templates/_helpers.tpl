@@ -1,4 +1,4 @@
-{{- define "baremetal-host.nodeApiVersion" -}}baremetal.ogen.krateo.io/v1alpha1{{- end -}}
+{{- define "baremetal-host.nodeApiVersion" -}}baremetal.ogen.krateo.io/v1-0-0{{- end -}}
 {{- define "baremetal-host.nodeNamespace" -}}
 {{- if .Values.nodeNamespace -}}{{- .Values.nodeNamespace -}}{{- else -}}{{- .Release.Namespace -}}{{- end -}}
 {{- end -}}
@@ -15,19 +15,13 @@
 
 {{/* Live provision_state of the Node via lookup. Empty when CR doesn't exist yet. */}}
 {{- define "baremetal-host.provisionState" -}}
-{{- $node := lookup (include "baremetal-host.nodeApiVersion" .) "Node" (include "baremetal-host.nodeNamespace" .) .Values.nodeName -}}
+{{- $node := lookup (include "baremetal-host.nodeApiVersion" .) "BaremetalNode" (include "baremetal-host.nodeNamespace" .) .Values.nodeName -}}
 {{- if $node -}}{{- dig "status" "provision_state" "" $node -}}{{- end -}}
-{{- end -}}
-
-{{/* Live power_state of the Node via lookup. */}}
-{{- define "baremetal-host.powerState" -}}
-{{- $node := lookup (include "baremetal-host.nodeApiVersion" .) "Node" (include "baremetal-host.nodeNamespace" .) .Values.nodeName -}}
-{{- if $node -}}{{- dig "status" "power_state" "" $node -}}{{- end -}}
 {{- end -}}
 
 {{/* inspection_finished_at via lookup — used to gate provide on completed inspect. */}}
 {{- define "baremetal-host.inspectionFinishedAt" -}}
-{{- $node := lookup (include "baremetal-host.nodeApiVersion" .) "Node" (include "baremetal-host.nodeNamespace" .) .Values.nodeName -}}
+{{- $node := lookup (include "baremetal-host.nodeApiVersion" .) "BaremetalNode" (include "baremetal-host.nodeNamespace" .) .Values.nodeName -}}
 {{- if $node -}}{{- dig "status" "inspection_finished_at" "" $node -}}{{- end -}}
 {{- end -}}
 
@@ -66,7 +60,7 @@
 
 {{/* v0.4.0: configdrive-drift detection enables single-apply redeploys.
      Hash the effective configdrive at chart-template time, stamp the
-     hash as an annotation on the Node CR. On the next reconcile, the
+     hash as an annotation on the BaremetalNode CR. On the next reconcile, the
      chart compares the freshly-rendered hash against the live Node
      annotation (via lookup); if they differ on an `active` node, the
      chart auto-fires transition-undeploy (= NodeProvision target=
@@ -86,12 +80,12 @@
 {{- end -}}
 
 {{- define "baremetal-host.observedConfigDriveHash" -}}
-{{/* v0.4.2 (Task #91): observed hash sourced from Node CR spec.extra.
+{{/* v0.4.2 (Task #91): observed hash sourced from BaremetalNode CR spec.extra.
      deployed_configdrive_hash — set by the bridge sidecar mirroring
      Ironic.node.extra (populated by cloud-init publish-deployed-hash.sh
      at end of runcmd). Empty if blade hasn't successfully completed
      cloud-init + publish yet. */}}
-{{- $node := lookup (include "baremetal-host.nodeApiVersion" .) "Node" (include "baremetal-host.nodeNamespace" .) .Values.nodeName -}}
+{{- $node := lookup (include "baremetal-host.nodeApiVersion" .) "BaremetalNode" (include "baremetal-host.nodeNamespace" .) .Values.nodeName -}}
 {{- if $node -}}{{- dig "spec" "extra" "deployed_configdrive_hash" "" $node -}}{{- end -}}
 {{- end -}}
 
@@ -172,14 +166,14 @@
 {{- define "baremetal-host.shouldRecoverStuckCallback" -}}
 {{- $state := include "baremetal-host.provisionState" . -}}
 {{- if eq $state "wait call-back" -}}
-  {{/* v0.4.4: anchor age on the Node CR's metadata.creationTimestamp.
+  {{/* v0.4.4: anchor age on the BaremetalNode CR's metadata.creationTimestamp.
        v0.4.3 mistakenly looked up sh.helm.release.v1.<release>.v1 — the
        FIRST helm revision Secret — but Helm prunes old revisions, so
        after ~10 cdc reconciles that Secret is gone and the helper
-       silently never fires. The Node CR's creationTimestamp is stable
+       silently never fires. The BaremetalNode CR's creationTimestamp is stable
        across BH-chart helm revisions for the same node and resets
        cleanly on K8sCluster delete → reapply. */ -}}
-  {{- $node := lookup (include "baremetal-host.nodeApiVersion" .) "Node" (include "baremetal-host.nodeNamespace" .) .Values.nodeName -}}
+  {{- $node := lookup (include "baremetal-host.nodeApiVersion" .) "BaremetalNode" (include "baremetal-host.nodeNamespace" .) .Values.nodeName -}}
   {{- if $node -}}
     {{- $created := dig "metadata" "creationTimestamp" "" $node -}}
     {{- if $created -}}

@@ -1,0 +1,50 @@
+# End-to-end provisioning test for blade01, post proxy-removal.
+#
+# Every value below was READ from the live lab rather than copied from a sibling blade:
+#   nodeUuid     GET /redfish/v1/Systems/blade01  -> UUID 31926b3b-...  (matches Ironic)
+#   parentNode   GET /v1/nodes/enclosure01        -> 5113ab44-...
+#   ports        GET /v1/nodes/<uuid>/ports       -> ONE port, pxe_enabled true
+#   state        GET /v1/nodes/<uuid>             -> provision_state manageable, power off
+#
+# Note blade01 carries only ONE port, where blade02..blade11 each declare two
+# (:01 pxe_enabled true, :02 false). The MAC follows the lab-wide pattern
+# 00:60:2f:<0x30+N>:81:01 -- confirmed across all ten sibling manifests AND against
+# Ironic's own port table, so it is measured, not extrapolated. The second NIC is not
+# declared because Ironic does not know about one; inventing it would create a port
+# record for hardware that may not exist.
+#
+# enableInspection is false: the node is already `manageable` from a previous session,
+# and Ironic's agent inspect_interface refuses managed inspection without a Port anyway
+# -- so inspection cannot be used to DISCOVER MACs, only to enrich a node that has them.
+# This run exercises the provisioning walk: manageable -> available -> active.
+---
+apiVersion: composition.krateo.io/v0-5-5
+kind: BaremetalHost
+metadata:
+  name: blade01
+  namespace: openstack
+spec:
+  nodeName: blade01
+  nodeNamespace: openstack
+  nodeUuid: 31926b3b-80ae-43e8-a081-86be42694ec4
+  parentNode: 5113ab44-faf2-4f76-bb41-ea8b14b7aa92
+  driver: redfish
+  driver_info:
+    redfish_address: http://172.19.74.11:8000
+    redfish_verify_ca: false
+    redfish_username: ironic
+    redfish_password: baremetal
+    redfish_system_id: /redfish/v1/Systems/blade01
+  ports:
+    - address: "00:60:2f:31:81:01"
+      pxe_enabled: true
+  enableInspection: false
+  image:
+    source: http://172.19.74.1:8089/debian-13-genericcloud-amd64.qcow2
+    checksum: http://172.19.74.1:8089/CHECKSUM
+  online: true
+  # Ironic rejected the first create with a bare 400 and RDC discards the response
+  # body, so the faultstring -- the only part that says why -- never reached a log.
+  # This makes RDC log the full exchange. Chart 0.5.1 added the flag.
+  debug:
+    connectorVerbose: true

@@ -1,16 +1,23 @@
 # Minimal OpenAPI 3.0 spec for Ironic Node resource (CRUD only)
-# Used by oasgen-provider to generate Node CRD for rest-dynamic-controller
+# Used by oasgen-provider to generate BaremetalNode CRD for rest-dynamic-controller
 # Ref: https://docs.openstack.org/api-ref/baremetal/
 
 openapi: 3.0.3
 info:
   title: Ironic Bare Metal Node API
-  description: Minimal spec for Node CRUD (state transitions via Jobs)
+  description: Minimal spec for BaremetalNode CRUD (state transitions via Jobs)
   version: 1.0.0
 
 servers:
   - url: http://ironic.openstack.svc.cluster.local:6385
-    description: Ironic API (override via NodeConfiguration)
+    description: Ironic API (override via BaremetalNodeConfiguration)
+
+# Applies the apiKey scheme defined under components. The token itself comes from the
+# BaremetalNodeConfiguration's spec.authentication.apiKey.tokenRef; where no tokenRef is
+# configured (the local standalone Ironic runs noauth) no header is sent, so the same
+# document serves both the noauth local env and a Keystone-protected real Ironic.
+security:
+  - apiKey: []
 
 paths:
   /v1/nodes:
@@ -21,7 +28,6 @@ paths:
       # ("Unexpected arguments"). rest-dynamic-controller lists all nodes and matches
       # the `name` identifier client-side (findby identifiersMatchPolicy).
       parameters:
-        - $ref: '#/components/parameters/X-Ironic-Endpoint'
         - $ref: '#/components/parameters/X-OpenStack-Ironic-API-Version'
       responses:
         '200':
@@ -39,7 +45,6 @@ paths:
       summary: Create node
       operationId: createNode
       parameters:
-        - $ref: '#/components/parameters/X-Ironic-Endpoint'
         - $ref: '#/components/parameters/X-OpenStack-Ironic-API-Version'
       requestBody:
         required: true
@@ -67,7 +72,6 @@ paths:
       summary: Get node by UUID
       operationId: getNode
       parameters:
-        - $ref: '#/components/parameters/X-Ironic-Endpoint'
         - $ref: '#/components/parameters/X-OpenStack-Ironic-API-Version'
       responses:
         '200':
@@ -82,7 +86,6 @@ paths:
       summary: Update node
       operationId: updateNode
       parameters:
-        - $ref: '#/components/parameters/X-Ironic-Endpoint'
         - $ref: '#/components/parameters/X-OpenStack-Ironic-API-Version'
       requestBody:
         content:
@@ -100,7 +103,6 @@ paths:
       summary: Delete node
       operationId: deleteNode
       parameters:
-        - $ref: '#/components/parameters/X-Ironic-Endpoint'
         - $ref: '#/components/parameters/X-OpenStack-Ironic-API-Version'
       responses:
         '204':
@@ -109,21 +111,52 @@ paths:
           description: Node not found
 
 components:
-  parameters:
-    X-Ironic-Endpoint:
-      name: X-Ironic-Endpoint
+  # Keystone auth, replacing the in-path keystone-ironic-proxy. rest-dynamic-controller
+  # sends the Secret's value verbatim as X-Auth-Token (valuePrefix defaults to empty,
+  # which is what Keystone wants -- it is not a Bearer token).
+  #
+  # MINTING AND ROTATION ARE DELIBERATELY NOT OURS. A secret-manager (External Secrets,
+  # Vault Agent) writes the raw token into the Secret; the chart ships no CronJob, no
+  # sidecar, no refresh code. Upstream designed for this -- the TokenRef doc comment says
+  # the Secret holds the credential value only "so a rotation path (ESO, a token
+  # endpoint) writes the raw credential and never has to know about HTTP framing".
+  #
+  # OPERATIONAL WARNING: an expired token produces SILENT 401s. The CR goes Ready=False
+  # and the controller logs 401s forever; nothing surfaces "your token expired" as a
+  # distinct condition. The secret-manager is a hard prerequisite, not a recommendation.
+  #
+  # Needs oasgen >= 0.19.0 for apiKey, and >= 0.26.1 so the verbose request dump redacts
+  # credential headers rather than printing X-Auth-Token in cleartext.
+  securitySchemes:
+    apiKey:
+      type: apiKey
       in: header
-      required: false
-      description: Override Ironic API base URL (used by NodeConfiguration)
-      schema:
-        type: string
+      name: X-Auth-Token
+  parameters:
     X-OpenStack-Ironic-API-Version:
       name: X-OpenStack-Ironic-API-Version
       in: header
-      required: false
-      description: Ironic API microversion (Ironic rejects write requests without it). Set via NodeConfiguration.
+      # required + default, NOT optional-and-set-via-Configuration.
+      #
+      # Measured 2026-10-29 on oasgen/RDC 0.41.0: RDC resolves the Configuration and
+      # applies spec.authentication (X-Auth-Token reaches the wire) but never sends
+      # spec.configuration.header, so this header went missing entirely and Ironic
+      # negotiated its MINIMUM, 1.1. That is the worst possible failure mode: the 2014
+      # API answers, so nothing errors loudly -- instead node lookup by name silently
+      # 404s (names need >= 1.5) and any body using a modern field is rejected
+      # (parent_node needs >= 1.83). Both looked like bugs in this chart for hours.
+      #
+      # The old keystone proxy injected this header on every request, which is why the
+      # gap only surfaced once the proxy was removed.
+      #
+      # The microversion is not per-install configuration -- it is a property of the
+      # contract this OAS describes -- so it belongs here with a default rather than in
+      # a Configuration CR an operator can forget to set.
+      required: true
+      description: Ironic API microversion. Pinned here because an unset value silently degrades to Ironic's minimum (1.1) instead of failing.
       schema:
         type: string
+        default: "1.109"
   schemas:
     Node:
       type: object
@@ -235,7 +268,7 @@ components:
       # Fields KOG/RDC is allowed to PATCH in a Node. The keystone-ironic-proxy translates
       # the plain JSON body into RFC-6902 JSON-Patch before forwarding to Ironic, so this
       # schema only governs which fields KOG considers "updateable", NOT the wire format.
-      # Add fields here as we want them to flow back from Node CR spec -> Ironic.
+      # Add fields here as we want them to flow back from BaremetalNode CR spec -> Ironic.
       type: object
       properties:
         name:
