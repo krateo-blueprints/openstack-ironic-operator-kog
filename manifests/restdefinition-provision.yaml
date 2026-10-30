@@ -6,6 +6,38 @@
 #   1. kubectl create configmap ironic-provision-oas -n openstack --from-file=provision.yaml=../oas/ironic-provision.yaml
 #   2. kubectl apply -f restdefinition-provision.yaml
 ---
+# FIRE-ONCE HERE IS DELIBERATE, and is NOT the same mistake restdefinition-power.yaml had.
+#
+# The two kinds model genuinely different things. A NodePower CR is a CONTINUOUS ASSERTION
+# ("this host should be on") that lives as long as the host does, so it must be able to
+# reach Ready and to re-assert itself after out-of-band drift -- which is why it was made
+# declarative. A NodeProvision CR is a ONE-SHOT ACTION whose lifetime the chart already
+# scopes: transition-deploy.yaml only renders while provision_state is `available`, and the
+# CR disappears once the node is `active`. Ready=False(Pending) for the duration of an
+# in-flight transition is therefore CORRECT, and the composition being not-ready while a
+# transition is in flight is correct too. The power CR was wrong because it NEVER went away,
+# so a transient condition became a permanent one.
+#
+# The narrow hazard, stated accurately: what makes the PUT fire is that findby cannot match,
+# and the reason it cannot match is that a listed node has no `node_id` key for the
+# identifier to compare against. `include_children=true` is NOT what protects this -- adding
+# that query alone is harmless here, because the identifier still finds nothing. What WOULD
+# break it is adding a responseTransform that lifts `name` onto `node_id`, as the power
+# definition does: findby would start matching, Observe would report the resource as
+# existing and up to date (spec.target has no counterpart in a node object, so the
+# comparison skips it), and transitions would SILENTLY STOP FIRING -- no error, no drift,
+# just a PUT that never happens.
+#
+# So if this is ever converted, the transform and an update verb have to land together, and
+# it needs care power did not. `target` here is a VERB (`active`, `provide`, `manage`,
+# `deleted`, `clean`, `inspect`) rather than a state, and the verb->state mapping is not
+# injective: both `provide` and `deleted` settle on `available`, while `manage`, `clean` and
+# `inspect` all settle on `manageable`. A state->verb transform therefore cannot tell "clean
+# this manageable node" from "this node is already manageable, nothing to do", and the clean
+# would never run. Provisioning also passes through intermediate states (deploying, wait
+# call-back, clean wait) that are neither start nor target; `target_provision_state` covers
+# those the way it does for power, but the ambiguity above it does not solve.
+---
 apiVersion: ogen.krateo.io/v1alpha1
 kind: RestDefinition
 metadata:
@@ -33,10 +65,16 @@ spec:
       - action: findby
         method: GET
         path: /v1/nodes
+        headers:
+          - name: X-OpenStack-Ironic-API-Version
+            value: "1.109"
         identifiersMatchPolicy: OR
       - action: create
         method: PUT
         path: /v1/nodes/{node_id}/states/provision
+        headers:
+          - name: X-OpenStack-Ironic-API-Version
+            value: "1.109"
         requestFieldMapping:
           - inPath: node_id
             inCustomResource: spec.node_id
