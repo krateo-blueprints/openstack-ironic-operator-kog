@@ -474,6 +474,8 @@ Order matters: top of the table = check first.
 
 | Symptom | Where to look | Often-true root cause |
 |---|---|---|
+| Node reaches Ironic `active` but publishes NOTHING (empty `spec.extra`, no `cp_stage`) | `sudo tail -30 /var/log/install-k8s.log` on the blade | **A NIC missing from the node's `ports` list.** `networkData` is derived from `ports`, one link per entry, so an undeclared port is an interface the OS never configures. With only the PXE NIC declared the blade has no default route, `apt-get update` cannot resolve `deb.debian.org`/`pkgs.k8s.io`, `apt-cache madison kubelet` returns empty, and `install-k8s.sh` dies on `test -n "$K8S_PKG_VER"` before anything k8s-related. Ironic still says `active` — writing the image DID succeed. Check `ip route show default` on the blade; compare `/sys/class/net/*/address` against the `ports` you declared. |
+| All `BaremetalNode` CRs stuck `Terminating`, rdc looping `DELETE /v1/nodes/<id>` | `kubectl get baremetalnodes -o json \| jq '.items[].metadata.deletionTimestamp'` | **A node was removed from spec while Ironic-`active`.** Ironic refuses DELETE on an active node, so the finalizer never clears. The teardown LOOKS successful first — the BaremetalHost disappears, the release manifest shrinks, the composition reports `Ready=True` — because only the Kubernetes objects went. Fixed by baremetal-host 0.5.6's `pre-delete` hook (drives undeploy first, fails closed). Pre-0.5.6: re-add the node with `upgrade.targetNode` so a NodeProvision walks it to `available`, after which the pending DELETE completes by itself. |
 | etcd / apiserver restart counter climbing every ~11s | `grep cgroupDriver /var/lib/kubelet/config.yaml` vs `grep SystemdCgroup /etc/containerd/config.toml` on the CP | cgroup-driver mismatch. Aligned to `systemd` since v0.10.12. If you see it again, the chart's containerd config rewrite was overridden by something. |
 | `KubernetesCluster` stuck `Ready: False` | `kubectl -n krateo-system logs deploy/kubernetesclusters-v0-X-X-controller` | core-provider regenerated the cdc; the ettore CR may be at an apiVersion no longer served. Re-apply the manifest with the latest `composition.krateo.io/v0-X-X`. |
 | `BaremetalHost` stuck `Synced: False` "exists and cannot be imported" | `kubectl -n openstack get port,nodeprovision,nodepower` for orphans | half-failed prior helm install. Bridge reaper deletes them after 60s (v0.10.8). If reaper isn't running, restart wg pod. |
@@ -490,6 +492,38 @@ Order matters: top of the table = check first.
 When a symptom survives one chart cut, the next move is **diagnostics on the live cluster, not the next chart cut**.
 
 Concretely: SSH into the CP, run the relevant `grep`/`journalctl`/`crictl` commands, read the output. The 11-second etcd kill that started this whole journey was visible from `grep cgroupDriver` + `grep SystemdCgroup` in under a minute — we'd burned nine chart cuts speculating before doing that. Don't repeat that mistake.
+
+### Two traps that report success
+
+Both of these cost most of a day, and both share a shape: **the layer you are watching reports success while the thing you care about has failed.**
+
+**Ironic `active` is not "the node booted".** It means Ironic wrote a disk image, which it did. Whether cloud-init then ran, got a route, installed packages or reached `kubeadm init` is invisible from Ironic — and invisible from the cluster, because a node whose cloud-init aborted publishes nothing, which is indistinguishable from a node whose cloud-init is still running. Port probes do not disambiguate it either: an installed-but-unconfigured kubelet listens on nothing, exactly like an uninstalled one. The only instrument that answers is the blade's own `/var/log/install-k8s.log`.
+
+**Deleting the CR is not decommissioning the machine.** See the Terminating row above.
+
+### Never drive a destructive one-shot from observed state
+
+A re-image gate once inferred "wipe this node" from `provision_state == active AND spec.extra empty`. That is not a transient condition — it is the **steady state of a node whose cloud-init failed**, so the wipe never cleared the condition that triggered it. The blade was re-imaged four times in thirty minutes.
+
+The rule, which generalises past this repo (two Krateo components hit the same shape — a drain wait keyed on "could not observe the pod", and an existence check that cannot answer during `Pending`):
+
+> If an action fails and leaves its own trigger intact, it repeats forever. The "attempted" record must be written **before** acting, by whatever owns the action, and must not depend on the state the action changes.
+
+Corollary for the chart: `deployedConfigDriveHash` is `.Chart.Version`, **not** a content hash. Changing configdrive content within one chart version is therefore invisible to drift detection. Making it a real content hash is correct, but needs the empty-observed suppression reasoned through first — otherwise a node that never publishes gets re-imaged on every reconcile, which is the loop above.
+
+### Calibrate a negative before believing it
+
+Every wrong conclusion in this repo's history has been a negative result trusted before the instrument was tested. Real examples, all of which produced confident wrong answers:
+
+| The "finding" | What was actually wrong |
+|---|---|
+| "`1.36.6` is not in the apt repo" | `curl` without `-L`; the repo answers 302 |
+| "the configdrive is empty" | queried `.userData`; the chart emits `user_data` |
+| "core-provider lacks pods RBAC" | `can-i` named a non-existent SA (`core-provider`, not `krateo-core-provider`) |
+| "the release renders 0 BaremetalHosts" | wrong release name; cdc suffixes it (use the `krateo.io/release-name` label) |
+| "five children were orphaned" | looked 60s after apply; they were mid-deletion |
+
+**Pair every negative with a known positive.** `grep` for a string you know exists. Probe a host you know answers. If the control fails too, you have an instrument problem, not a finding.
 
 ---
 
