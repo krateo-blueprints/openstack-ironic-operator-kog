@@ -1,19 +1,18 @@
 apiVersion: v2
-name: baremetal-host
-description: |
-  Unified single-CRD composition for Ironic bare-metal host lifecycle. Absorbs the
-  baremetal-discovery + baremetal-lifecycle split into one BaremetalHost resource with
-  phase gates, like metal3's BaremetalHost. State machine:
-    registering -> (inspecting -> ready)? -> available -> (provisioning -> provisioned)
-  Power is managed via spec.online when set.
-type: application
-version: 0.4.5
 appVersion: "1.0"
+description: 'Unified single-CRD composition for Ironic bare-metal host lifecycle.
+  Absorbs the baremetal-discovery + baremetal-lifecycle split into one BaremetalHost
+  resource with phase gates, like metal3''s BaremetalHost. State machine:   registering
+  -> (inspecting -> ready)? -> available -> (provisioning -> provisioned) Power is
+  managed via spec.online when set. '
 keywords:
-  - ironic
-  - bare-metal
-  - openstack
-  - krateo
-  - metal3
+- ironic
+- bare-metal
+- openstack
+- krateo
+- metal3
 maintainers:
-  - name: openstack-ironic-operator
+- name: openstack-ironic-operator
+name: baremetal-host
+type: application
+version: 0.5.6

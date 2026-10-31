@@ -2,26 +2,134 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "BareMetalHost Chart Values",
   "type": "object",
-  "required": ["nodeName", "driver"],
+  "required": [
+    "nodeName",
+    "driver"
+  ],
   "properties": {
-    "nodeName":         {"type": "string"},
-    "nodeUuid":         {"type": "string"},
-    "parentNode":       {"type": "string"},
-    "driver":           {"type": "string", "enum": ["ipmi", "redfish", "fake-hardware"]},
-    "driver_info":      {"type": ["object", "null"]},
-    "nodeNamespace":    {"type": "string"},
-    "ports":            {"type": ["array", "null"]},
-    "enableInspection": {"type": "boolean", "default": false},
-    "image":            {"type": ["object", "null"]},
-    "configDrive":      {"type": ["object", "null"]},
-    "online":           {"type": "boolean"},
-    "maintenance":      {"type": "boolean", "default": false},
-    "detached":         {"type": "boolean", "default": false},
-    "networkData":      {"type": ["object", "null"]},
-    "cleanSteps":       {"type": ["array", "null"], "description": "Ironic clean steps to run while manageable. Each item: interface, step, args."},
-    "undeploy":         {"type": "boolean", "default": false, "description": "When true, drives the blade from `active` back to `available` via transition-undeploy. Hold-at-available signal."},
-    "undeployMode":     {"type": "string",  "enum": ["full", "none"], "default": "full", "description": "Ironic cleanup pass between deleted and available. full=standard clean_steps, none=skip (fast, dirty)."},
-    "configurationRef": {"type": "object"},
-    "deployedConfigDriveHash": {"type": ["string", "null"], "description": "v0.4.2 (Task #91): chart-rendered desired hash; cloud-init publishes the running OS hash to Ironic.node.extra. shouldAutoRedeploy compares both. Mismatch fires transition-undeploy."}
+    "nodeName": {
+      "type": "string"
+    },
+    "nodeUuid": {
+      "type": "string"
+    },
+    "parentNode": {
+      "type": "string"
+    },
+    "driver": {
+      "type": "string",
+      "enum": [
+        "ipmi",
+        "redfish",
+        "fake-hardware"
+      ]
+    },
+    "driver_info": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "nodeNamespace": {
+      "type": "string"
+    },
+    "ports": {
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "enableInspection": {
+      "type": "boolean",
+      "default": false
+    },
+    "image": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "configDrive": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "online": {
+      "type": "boolean"
+    },
+    "maintenance": {
+      "type": "boolean",
+      "default": false
+    },
+    "detached": {
+      "type": "boolean",
+      "default": false
+    },
+    "networkData": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "cleanSteps": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Ironic clean steps to run while manageable. Each item: interface, step, args."
+    },
+    "undeploy": {
+      "type": "boolean",
+      "default": false,
+      "description": "When true, drives the blade from `active` back to `available` via transition-undeploy. Hold-at-available signal."
+    },
+    "undeployMode": {
+      "type": "string",
+      "enum": [
+        "full",
+        "none"
+      ],
+      "default": "full",
+      "description": "Ironic cleanup pass between deleted and available. full=standard clean_steps, none=skip (fast, dirty)."
+    },
+    "configurationRef": {
+      "type": "object"
+    },
+    "deployedConfigDriveHash": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "v0.4.2 (Task #91): chart-rendered desired hash; cloud-init publishes the running OS hash to Ironic.node.extra. shouldAutoRedeploy compares both. Mismatch fires transition-undeploy."
+    },
+    "debug": {
+      "type": "object",
+      "description": "v0.5.1: debugging aids. Off by default.",
+      "properties": {
+        "connectorVerbose": {
+          "type": "boolean",
+          "default": false,
+          "description": "Stamps krateo.io/connector-verbose on the BaremetalNode CR so rest-dynamic-controller logs the full HTTP exchange with Ironic, body included. RDC otherwise reports a bare status code and discards Ironic's faultstring. Requires RDC >= 0.26.1, which redacts credential headers."
+        }
+      }
+    },
+    "teardown": {
+      "type": "object",
+      "description": "Teardown behaviour when the BaremetalHost is deleted. undeployOnDelete drives Ironic active->available in a pre-delete hook so removal-from-spec is a complete teardown signal; without it the BaremetalNode CR wedges in Terminating because Ironic refuses DELETE on an active node.",
+      "properties": {
+        "undeployOnDelete": {
+          "type": "boolean"
+        },
+        "timeoutSeconds": {
+          "type": "integer",
+          "minimum": 60
+        },
+        "image": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
   }
 }

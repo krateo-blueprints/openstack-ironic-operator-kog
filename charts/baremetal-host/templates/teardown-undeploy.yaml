@@ -1,0 +1,194 @@
+# UNDEPLOY ON REMOVAL — the teardown half of the lifecycle.
+#
+# THE PROBLEM THIS SOLVES, and it cost a wedged lab to find:
+#
+# Removing a node from a composition's spec deletes its BaremetalHost, which
+# makes cdc run `helm uninstall`, which deletes the BaremetalNode CR, which
+# makes KOG fire DELETE /v1/nodes/{id}. Ironic REFUSES to delete a node in
+# `active` state. The finalizer then never clears and the CR sits in
+# Terminating forever while rdc retries the DELETE every few seconds:
+#
+#   op=Delete kind=BaremetalNode  "Cannot delete external resource"
+#   DELETE /v1/nodes/blade01 HTTP/1.1      <- retried indefinitely
+#
+# All six nodes in this lab wedged exactly that way. The machines were
+# untouched; only the Kubernetes objects were stuck, which is the confusing
+# part — the teardown LOOKS successful (the BaremetalHost disappears, the
+# release's manifest shrinks, the composition reports Ready) right up until you
+# look at the node CRs.
+#
+# transition-undeploy.yaml documents why it can't fix this itself, and it's
+# right: cdc's delete handler calls helm uninstall WITHOUT re-rendering the
+# chart, so the chart's normal render-reconcile-render loop never gets another
+# turn once deletion starts. Its conclusion was to require an explicit
+# `spec.undeploy=true` first, making teardown a two-step the operator drives.
+#
+# THE OWNER'S REQUIREMENT IS THE OPPOSITE, and it's the better model:
+# "undeploy happens when a node is removed from specs". One signal — absence
+# from the spec — and the sequencing is the controller's job, not a human's.
+#
+# WHY A pre-delete HOOK IS THE RIGHT PLACE. Helm runs pre-delete hooks during
+# uninstall, before any release resource is removed, so:
+#   * this Job runs while the BaremetalNode CR still exists and is NOT yet
+#     Terminating, which is the only window in which an undeploy can be driven;
+#   * the ServiceAccount and Role below are ordinary release resources, so they
+#     are still present while the hook runs and are cleaned up after it.
+# No re-render is needed, which is precisely the constraint that defeated the
+# in-chart approach.
+#
+# IT FAILS CLOSED. On timeout the Job exits NON-ZERO, which fails the uninstall
+# and leaves the BaremetalHost in place to be retried. That is deliberate: the
+# alternative is proceeding to a DELETE we know Ironic will refuse, which
+# produces the Terminating wedge this exists to prevent. A teardown that cannot
+# drain the machine should stop and say so, not delete the record of it.
+{{- if and .Values.nodeName (.Values.teardown).undeployOnDelete }}
+{{- if not (include "baremetal-host.detached" .) }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ printf "%s-teardown" .Release.Name | trunc 63 | trimSuffix "-" }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: baremetal-host
+    app.kubernetes.io/instance: {{ .Release.Name }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ printf "%s-teardown" .Release.Name | trunc 63 | trimSuffix "-" }}
+  namespace: {{ include "baremetal-host.nodeNamespace" . }}
+  labels:
+    app.kubernetes.io/name: baremetal-host
+    app.kubernetes.io/instance: {{ .Release.Name }}
+rules:
+  # Read the node's provision_state to know whether an undeploy is needed and
+  # when it has landed.
+  - apiGroups: ["baremetal.ogen.krateo.io"]
+    resources: ["baremetalnodes"]
+    verbs: ["get", "list"]
+  # Drive the transition the same way the chart does: by creating a
+  # NodeProvision CR and letting KOG fire the PUT. The hook never calls Ironic
+  # itself — no out-of-band writes, no credentials in this Job.
+  - apiGroups: ["baremetal.ogen.krateo.io"]
+    resources: ["nodeprovisions"]
+    verbs: ["get", "list", "create", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ printf "%s-teardown" .Release.Name | trunc 63 | trimSuffix "-" }}
+  namespace: {{ include "baremetal-host.nodeNamespace" . }}
+  labels:
+    app.kubernetes.io/name: baremetal-host
+    app.kubernetes.io/instance: {{ .Release.Name }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ printf "%s-teardown" .Release.Name | trunc 63 | trimSuffix "-" }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ printf "%s-teardown" .Release.Name | trunc 63 | trimSuffix "-" }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-teardown" .Release.Name | trunc 63 | trimSuffix "-" }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: baremetal-host
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "0"
+    # Keep a failed Job so its log explains why the teardown stopped; a
+    # succeeded one has nothing to say.
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: baremetal-host
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ printf "%s-teardown" .Release.Name | trunc 63 | trimSuffix "-" }}
+      containers:
+        - name: undeploy
+          image: {{ (.Values.teardown).image | default "alpine:3.21" | quote }}
+          env:
+            - name: NODE_NAME
+              value: {{ .Values.nodeName | quote }}
+            - name: NODE_NS
+              value: {{ include "baremetal-host.nodeNamespace" . | quote }}
+            - name: NODE_API
+              value: {{ include "baremetal-host.nodeApiVersion" . | quote }}
+            - name: PROVISION_NAME
+              value: {{ printf "%s-teardown-undeploy" .Release.Name | trunc 63 | trimSuffix "-" | quote }}
+            - name: TIMEOUT_SECONDS
+              value: {{ (.Values.teardown).timeoutSeconds | default 1200 | quote }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              apk add --no-cache curl >/dev/null
+
+              API="https://kubernetes.default.svc"
+              SA=/var/run/secrets/kubernetes.io/serviceaccount
+              TOKEN=$(cat $SA/token)
+              CA=$SA/ca.crt
+              # NODE_API arrives as group/version; the REST path needs them split.
+              GROUP="${NODE_API%%/*}"
+              VERSION="${NODE_API##*/}"
+              BASE="$API/apis/$GROUP/$VERSION/namespaces/$NODE_NS"
+
+              k() { curl -sS --cacert "$CA" -H "Authorization: Bearer $TOKEN" "$@"; }
+
+              state() {
+                k "$BASE/baremetalnodes/$NODE_NAME" 2>/dev/null \
+                  | sed -n 's/.*"provision_state"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+                  | head -1
+              }
+
+              ST=$(state)
+              echo "[teardown] node=$NODE_NAME state=${ST:-<absent>}"
+
+              # Nothing to drain: the node is already deletable, or already gone.
+              case "${ST:-absent}" in
+                absent|available|enroll|manageable|"")
+                  echo "[teardown] no undeploy needed; allowing delete"
+                  exit 0
+                  ;;
+              esac
+
+              echo "[teardown] driving undeploy: creating NodeProvision target=deleted"
+              k -X POST -H 'Content-Type: application/json' \
+                "$BASE/nodeprovisions" \
+                -d "{\"apiVersion\":\"$NODE_API\",\"kind\":\"NodeProvision\",\"metadata\":{\"name\":\"$PROVISION_NAME\"},\"spec\":{\"node_id\":\"$NODE_NAME\",\"target\":\"deleted\"}}" \
+                >/dev/null 2>&1 || echo "[teardown] create returned non-zero (may already exist)"
+
+              DEADLINE=$(( $(date +%s) + TIMEOUT_SECONDS ))
+              LAST=""
+              while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+                ST=$(state)
+                [ "$ST" != "$LAST" ] && { echo "[teardown] state=${ST:-<absent>}"; LAST="$ST"; }
+                case "${ST:-absent}" in
+                  absent|available|"")
+                    echo "[teardown] node is deletable; cleaning up and allowing delete"
+                    k -X DELETE "$BASE/nodeprovisions/$PROVISION_NAME" >/dev/null 2>&1 || true
+                    exit 0
+                    ;;
+                esac
+                sleep 10
+              done
+
+              # FAIL CLOSED. Proceeding would fire a DELETE that Ironic refuses,
+              # wedging the CR in Terminating with no way back. Failing the
+              # uninstall keeps the BaremetalHost so this can be retried, and
+              # leaves a log saying which state it got stuck in.
+              echo "[teardown] TIMEOUT after ${TIMEOUT_SECONDS}s; last state=${ST:-<absent>}" >&2
+              echo "[teardown] refusing to allow delete: Ironic will not DELETE a node in this state" >&2
+              exit 1
+{{- end }}
+{{- end }}
