@@ -77,6 +77,8 @@ spec:
          baremetal-host.shouldAutoRedeploy deliberately never fires (firing on
          an empty observed hash would cycle the blade). The bootstrap CP could
          be rescued with the lever and a replica could not. */}}
+  {{- /* v0.13.8: reverted with the bootstrap path — see lifecycle-cp.yaml.
+         The pin means undeploy; the operator clears it. */ -}}
   {{- if and (dig "upgrade" "targetNode" "" (default (dict) $.Values.controlPlane)) (eq (dig "upgrade" "targetNode" "" (default (dict) $.Values.controlPlane)) $cp.nodeName) }}
   undeploy: true
   undeployMode: full

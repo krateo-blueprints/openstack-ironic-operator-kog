@@ -716,6 +716,7 @@ write_files:
       test -n "$K8S_PKG_VER"
       apt-get install -y kubelet="$K8S_PKG_VER" kubeadm="$K8S_PKG_VER" kubectl="$K8S_PKG_VER" containerd etcd-client jq
       apt-mark hold kubelet kubeadm kubectl
+      bash /etc/kubernetes/publish-stage.sh k8s-packages-installed
       # Debian 13 trixie's containerd ships with bin_dir = "/usr/lib/cni" by
       # default. Flannel's install-cni-plugin initContainer (and kubeadm)
       # drop CNI binaries at /opt/cni/bin instead, so kubelet errors with
@@ -783,6 +784,45 @@ write_files:
 
       [Install]
       WantedBy=timers.target
+  - path: /etc/kubernetes/node-uuid
+    permissions: "0644"
+    content: |
+      {{ include "kubernetes-cluster.bootstrapNodeUuid" . }}
+  - path: /etc/kubernetes/publish-stage.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      # Publish a single progress marker to Ironic node.extra.cp_stage.
+      #
+      # WHY THIS EXISTS. cp-init.sh is a long bash script that runs once, on
+      # first boot, on a machine with no inbound access. Every `set -e` abort in
+      # it is invisible from the cluster: Ironic still reports the node `active`
+      # (it wrote the image successfully — the image is fine, the script failed),
+      # spec.extra stays empty, and there is no way to distinguish "still
+      # installing packages" from "died 40 lines in" without logging into the
+      # blade. That cost hours here, and the only diagnostics available were
+      # port probes, which cannot tell an uninstalled kubelet from an installed
+      # one awaiting kubeadm (neither listens).
+      #
+      # Best effort by design: never let reporting failure break the thing being
+      # reported on. Exits 0 always.
+      set +e
+      STAGE="${1:-unknown}"
+      KEYSTONE_URL="{{ .Values.ironicAuth.authUrl }}"
+      IRONIC_URL="{{ .Values.ironicAuth.ironicUrl }}"
+      NODE_UUID="$(cat /etc/kubernetes/node-uuid 2>/dev/null)"
+      [ -n "$NODE_UUID" ] || exit 0
+      AUTH_BODY='{"auth":{"identity":{"methods":["password"],"password":{"user":{"name":"{{ .Values.ironicAuth.username }}","password":"{{ .Values.ironicAuth.password }}","domain":{"name":"{{ .Values.ironicAuth.userDomain }}"}}}},"scope":{"system":{"all":true}}}}'
+      OUT=$(curl -sS -i --max-time 10 -H "Content-Type: application/json" -d "$AUTH_BODY" "${KEYSTONE_URL}/v3/auth/tokens" 2>/dev/null)
+      TOKEN=$(echo "$OUT" | grep -i '^X-Subject-Token:' | awk '{print $2}' | tr -d '\r')
+      [ -n "$TOKEN" ] || exit 0
+      curl -fsSL --max-time 10 \
+        -H "X-Auth-Token: ${TOKEN}" \
+        -H "X-OpenStack-Ironic-API-Version: 1.109" \
+        -H "Content-Type: application/json-patch+json" \
+        -X PATCH "${IRONIC_URL}/v1/nodes/${NODE_UUID}" \
+        -d "[{\"op\":\"add\",\"path\":\"/extra/cp_stage\",\"value\":\"${STAGE}\"}]" >/dev/null 2>&1
+      exit 0
   - path: /etc/kubernetes/publish-join.sh
     permissions: "0755"
     content: |
@@ -1043,6 +1083,7 @@ write_files:
       test -n "$DERIVED_VIP" \
         || { echo "no free address in ${VIP_SUBNET}.200-250 — abort rather than guess"; exit 1; }
       echo "$DERIVED_VIP:6443" > /etc/kubernetes/cp-endpoint
+      bash /etc/kubernetes/publish-stage.sh vip-derived-$DERIVED_VIP
       chmod 0644 /etc/kubernetes/cp-endpoint
       /etc/kubernetes/write-kube-vip-manifest.sh "$DERIVED_VIP" "$VIP_IFACE_DERIVE"
 {{- end }}
@@ -1057,8 +1098,10 @@ write_files:
       chmod 0600 /etc/kubernetes/kubeadm-init.yaml
       # Skip cert generation phases — chart-baked PKI is already on disk.
       # Kubeadm will detect existing CAs and only generate leaf certs.
+      bash /etc/kubernetes/publish-stage.sh kubeadm-init-start
       kubeadm init --upload-certs \
         --config /etc/kubernetes/kubeadm-init.yaml
+      bash /etc/kubernetes/publish-stage.sh kubeadm-init-ok
       mkdir -p /root/.kube
       cp /etc/kubernetes/admin.conf /root/.kube/config
       # CNI install. Two paths, selected by .Values.cni.install.
@@ -1107,6 +1150,7 @@ write_files:
              {{- end }}
              --wait --timeout 10m; then
           echo "CNI (cilium) installed on attempt $i"
+          bash /etc/kubernetes/publish-stage.sh cilium-installed
           break
         fi
         echo "CNI install attempt $i failed; sleeping 10s"
@@ -1697,3 +1741,4 @@ runcmd:
 {{- end -}}
 {{- end -}}
 {{- end -}}
+

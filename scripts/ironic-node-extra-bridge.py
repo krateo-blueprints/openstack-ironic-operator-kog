@@ -56,7 +56,14 @@ def ironic_headers(extra=None):
         h.update(extra)
     return h
 IRONIC_VER = os.environ.get("IRONIC_API_VERSION", "1.109")
-KOG_API = "baremetal.ogen.krateo.io/v1alpha1"
+# Both of these predate the kind rename (Node -> BaremetalNode) and were wrong:
+# the CRD serves v1-0-0, not v1alpha1, and the plural is `baremetalnodes`, not
+# `nodes`. The failure was a 403 rather than a 404 because the ServiceAccount is
+# granted `baremetalnodes` — asking for a resource it has no rule for is denied
+# before anything checks whether that resource exists. So the symptom pointed at
+# RBAC when the bug was the URL.
+KOG_API = os.environ.get("KOG_API", "baremetal.ogen.krateo.io/v1-0-0")
+KOG_RESOURCE = os.environ.get("KOG_RESOURCE", "baremetalnodes")
 INTERVAL = int(os.environ.get("BRIDGE_INTERVAL", "10"))
 
 EXTRA_KEYS = ("kubeadm_join", "cert_key")
@@ -67,7 +74,16 @@ HELM_RELEASE_SECRET_PREFIX = "sh.helm.release.v1."
 # install that just created child resources but hasn't yet recorded its
 # release secret.
 ORPHAN_MIN_AGE_SECONDS = 60
-ORPHAN_RESOURCE_PATHS = ("ports", "nodes", "nodeprovisions", "nodepowers")
+# "nodes" was stale here too — the plural is `baremetalnodes` since the kind
+# rename. Left wrong it produced a 403 (the SA has no rule for `nodes`), which
+# reads as a permissions problem rather than a typo.
+ORPHAN_RESOURCE_PATHS = ("ports", "baremetalnodes", "nodeprovisions", "nodepowers")
+
+# The reaper DELETES KOG primitives whose owning helm release has gone. That is
+# a reasonable cleanup and a bad default: on a cluster whose CRs map to physical
+# machines, a misjudged orphan is a wiped blade. It is also unrelated to this
+# process's actual job, which is mirroring node.extra. Off unless asked.
+ORPHAN_REAP_ENABLED = os.environ.get("ORPHAN_REAP_ENABLED", "false").lower() in ("1", "true", "yes")
 
 
 def log(msg):
@@ -137,7 +153,7 @@ def ironic_patch_node(uuid, ops):
 
 
 def reconcile_once(namespace):
-    body = k8s_request("GET", f"/apis/{KOG_API}/namespaces/{namespace}/nodes")
+    body = k8s_request("GET", f"/apis/{KOG_API}/namespaces/{namespace}/{KOG_RESOURCE}")
     nodes = json.loads(body).get("items", [])
     for idx, n in enumerate(nodes):
         if idx > 0:
@@ -182,7 +198,7 @@ def reconcile_once(namespace):
                 try:
                     k8s_request(
                         "PATCH",
-                        f"/apis/{KOG_API}/namespaces/{namespace}/nodes/{name}",
+                        f"/apis/{KOG_API}/namespaces/{namespace}/{KOG_RESOURCE}/{name}",
                         body=patch,
                     )
                     log(f"cleared CR.spec.extra keys {cr_to_clear} on {name}")
@@ -206,7 +222,7 @@ def reconcile_once(namespace):
         try:
             k8s_request(
                 "PATCH",
-                f"/apis/{KOG_API}/namespaces/{namespace}/nodes/{name}",
+                f"/apis/{KOG_API}/namespaces/{namespace}/{KOG_RESOURCE}/{name}",
                 body=patch,
             )
             log(f"bridged extra keys {list(deltas)} from Ironic to CR {name}")
@@ -241,6 +257,8 @@ def list_tracked_helm_releases(namespace):
 
 
 def reap_orphan_helm_artifacts(namespace, active_releases):
+    if not ORPHAN_REAP_ENABLED:
+        return
     """Clean up KOG primitives left behind by a half-failed helm install.
 
     cdc-baremetal-host generates a fresh random helm-release-name on

@@ -26,6 +26,28 @@
        operator clears upgrade.targetNode and the chart redeploys with
        the new .Values.k8sVersion baked into cloud-init. */}}
 {{- $upgradeTarget := dig "upgrade" "targetNode" "" (default (dict) .Values.controlPlane) -}}
+{{- /* v0.13.8: REVERTED the v0.13.7 "self-completing" gate. It inferred
+       "wipe this machine" from (provision_state == active AND nothing
+       published) — and that is not a transient state, it is the STEADY state
+       of a node whose cloud-init failed. So the wipe never changed the
+       condition that triggered it: blade01 was re-imaged four times in thirty
+       minutes (active -> available -> deploying -> active -> ...) until the
+       pin was cleared by hand.
+
+       The general shape, worth stating because the comment I wrote in v0.13.7
+       claimed the opposite: a one-shot destructive action must never be driven
+       by a steady-state signal that the action itself cannot change. If the
+       action fails, the signal persists, and the action repeats forever. The
+       v0.13.7 comment reasoned "active + published -> inert" and simply never
+       considered the node that never publishes, which is precisely the node
+       the pin exists for.
+
+       So the pin is back to meaning exactly one thing — render undeploy — and
+       clearing it is the operator's acknowledgement that the wipe happened.
+       That IS a two-step, and it is the correct two-step: a destructive
+       one-shot needs an acknowledgement, the way a Job needs someone to
+       observe its completion. Making it self-driving removed the only thing
+       that made it terminate. */ -}}
 {{- $undeployForUpgrade := and $upgradeTarget (eq $upgradeTarget $bootstrap.nodeName) -}}
 {{/* v0.11.0 gate: for HA clusters, hold rendering until the etcd PKI
      Secret exists in the live cluster (lookup hit). First chart apply

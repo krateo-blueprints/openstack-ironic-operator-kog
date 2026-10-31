@@ -33,6 +33,14 @@ rules:
   - apiGroups: ["baremetal.ogen.krateo.io"]
     resources: ["baremetalnodes", "baremetalnodes/status"]
     verbs: ["get", "list", "watch", "patch", "update"]
+  # The bridge lists `sh.helm.release.v1.*` Secrets to learn which releases are
+  # still tracked, so it can avoid reaping a KOG primitive whose owning release
+  # has gone. Read-only: it never writes a Secret. Without this the loop logs
+  # "list helm release secrets: HTTP Error 403" every interval and the reap
+  # safety check silently never runs.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
