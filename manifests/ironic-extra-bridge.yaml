@@ -1,0 +1,86 @@
+# Ironic node.extra -> BaremetalNode.spec.extra bridge, standing ALONE.
+#
+# This was a sidecar in wg-ironic-proxy, which is why it reached Ironic at
+# 127.0.0.1:8080 through the same-pod relay and never needed a token. That pod
+# is gone (zero proxies), and it had to go for a second reason: it ran its own
+# WireGuard instance with the SAME key and address (198.51.100.5/32) as the
+# node-level tunnel. Two peers presenting one public key means the far side's
+# endpoint flips to whichever sent last, so return traffic reaches only one of
+# them — the tunnel was being stolen back and forth, which is why no blade could
+# publish and why requests reset intermittently.
+#
+# This is NOT a proxy. It is a controller: it polls Ironic for node.extra and
+# mirrors what it finds onto the BaremetalNode CR, which is what the
+# kubernetes-cluster chart's `lookup` reads to gate replica and worker renders.
+# Nothing passes through it.
+#
+# The rendezvous direction matters and is easy to get backwards: the BLADE
+# publishes to IRONIC over its own OOB network, not to this cluster. So no
+# management-API path is needed for the join to work.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ironic-extra-bridge
+  namespace: openstack
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ironic-extra-bridge
+  namespace: openstack
+rules:
+  - apiGroups: ["baremetal.ogen.krateo.io"]
+    resources: ["baremetalnodes", "baremetalnodes/status"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ironic-extra-bridge
+  namespace: openstack
+subjects:
+  - kind: ServiceAccount
+    name: ironic-extra-bridge
+    namespace: openstack
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: ironic-extra-bridge
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ironic-extra-bridge
+  namespace: openstack
+  labels: {app: ironic-extra-bridge}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: ironic-extra-bridge}
+  template:
+    metadata:
+      labels: {app: ironic-extra-bridge}
+    spec:
+      serviceAccountName: ironic-extra-bridge
+      containers:
+        - name: bridge
+          image: python:3.13-slim
+          command: ["python3", "/scripts/ironic-node-extra-bridge.py"]
+          env:
+            - name: IRONIC_URL
+              value: http://ironic.openstack.svc.cluster.local:6385
+            - name: IRONIC_API_VERSION
+              value: "1.109"
+            - name: IRONIC_TOKEN_FILE
+              value: /ironic-token/token
+            - name: BRIDGE_INTERVAL
+              value: "10"
+          volumeMounts:
+            - {name: scripts, mountPath: /scripts, readOnly: true}
+            - {name: ironic-token, mountPath: /ironic-token, readOnly: true}
+      volumes:
+        - name: scripts
+          configMap: {name: ironic-extra-bridge-script, defaultMode: 0755}
+        - name: ironic-token
+          secret: {secretName: ironic-keystone-token}

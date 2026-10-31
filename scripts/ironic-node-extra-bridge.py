@@ -32,7 +32,29 @@ import urllib.error
 K8S_CA = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
 K8S_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 K8S_NS_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
-IRONIC_URL = "http://127.0.0.1:8080"
+# Was hardcoded to the same-pod keystone proxy. Now env-driven so the bridge can
+# run as its own Deployment with NO proxy in the path — it talks to the `ironic`
+# Service, which routes straight to the lab over the node's WireGuard tunnel.
+IRONIC_URL = os.environ.get("IRONIC_URL", "http://ironic.openstack.svc.cluster.local:6385")
+# Keystone token. Previously unnecessary because the same-pod proxy injected one;
+# standing alone, the bridge must authenticate itself. Read per request rather
+# than cached so a token refresh is picked up without a restart.
+IRONIC_TOKEN_FILE = os.environ.get("IRONIC_TOKEN_FILE", "/ironic-token/token")
+
+
+def ironic_headers(extra=None):
+    h = {"X-OpenStack-Ironic-API-Version": IRONIC_VER}
+    try:
+        with open(IRONIC_TOKEN_FILE) as f:
+            tok = f.read().strip()
+        if tok:
+            h["X-Auth-Token"] = tok
+    except OSError:
+        # No token mounted: a noauth Ironic (the local standalone env) needs none.
+        pass
+    if extra:
+        h.update(extra)
+    return h
 IRONIC_VER = os.environ.get("IRONIC_API_VERSION", "1.109")
 KOG_API = "baremetal.ogen.krateo.io/v1alpha1"
 INTERVAL = int(os.environ.get("BRIDGE_INTERVAL", "10"))
@@ -82,7 +104,7 @@ def ironic_get_node(uuid):
         try:
             req = urllib.request.Request(
                 f"{IRONIC_URL}/v1/nodes/{uuid}",
-                headers={"X-OpenStack-Ironic-API-Version": IRONIC_VER},
+                headers=ironic_headers(),
             )
             with urllib.request.urlopen(req, timeout=10) as r:
                 return json.loads(r.read())
@@ -107,10 +129,7 @@ def ironic_patch_node(uuid, ops):
     req = urllib.request.Request(
         f"{IRONIC_URL}/v1/nodes/{uuid}",
         method="PATCH",
-        headers={
-            "X-OpenStack-Ironic-API-Version": IRONIC_VER,
-            "Content-Type": "application/json-patch+json",
-        },
+        headers=ironic_headers({"Content-Type": "application/json-patch+json"}),
         data=body,
     )
     with urllib.request.urlopen(req, timeout=10) as r:
