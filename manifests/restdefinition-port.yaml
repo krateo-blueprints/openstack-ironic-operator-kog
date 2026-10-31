@@ -41,12 +41,48 @@ spec:
         method: GET
         path: /v1/ports
         identifiersMatchPolicy: OR
+        headers:
+          # Pin the microversion as a STATIC per-verb header. It cannot come from
+          # configurationFields above: oasgen emits that property as `header`
+          # (singular, from the OAS `in` value) while rest-dynamic-controller reads
+          # `headers` (plural), so the lookup misses silently (oasgen #304).
+          #
+          # With no microversion Ironic negotiates its MINIMUM, 1.1, and `pxe_enabled`
+          # did not exist until 1.19 — so every port create came back 406 Not
+          # Acceptable, and a node with no port then fails deploy with "does not have
+          # any port associated with it", three layers from the cause.
+          - name: X-OpenStack-Ironic-API-Version
+            value: "1.109"
       - action: create
         method: POST
         path: /v1/ports
+        headers:
+          # Pin the microversion as a STATIC per-verb header. It cannot come from
+          # configurationFields above: oasgen emits that property as `header`
+          # (singular, from the OAS `in` value) while rest-dynamic-controller reads
+          # `headers` (plural), so the lookup misses silently (oasgen #304).
+          #
+          # With no microversion Ironic negotiates its MINIMUM, 1.1, and `pxe_enabled`
+          # did not exist until 1.19 — so every port create came back 406 Not
+          # Acceptable, and a node with no port then fails deploy with "does not have
+          # any port associated with it", three layers from the cause.
+          - name: X-OpenStack-Ironic-API-Version
+            value: "1.109"
       - action: delete
         method: DELETE
         path: /v1/ports/{uuid}
+        headers:
+          # Pin the microversion as a STATIC per-verb header. It cannot come from
+          # configurationFields above: oasgen emits that property as `header`
+          # (singular, from the OAS `in` value) while rest-dynamic-controller reads
+          # `headers` (plural), so the lookup misses silently (oasgen #304).
+          #
+          # With no microversion Ironic negotiates its MINIMUM, 1.1, and `pxe_enabled`
+          # did not exist until 1.19 — so every port create came back 406 Not
+          # Acceptable, and a node with no port then fails deploy with "does not have
+          # any port associated with it", three layers from the cause.
+          - name: X-OpenStack-Ironic-API-Version
+            value: "1.109"
         requestFieldMapping:
           - inPath: uuid
             inCustomResource: status.uuid

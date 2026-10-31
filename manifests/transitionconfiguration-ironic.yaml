@@ -1,0 +1,43 @@
+# Singleton Configurations for the two transition kinds: NodePower and NodeProvision.
+#
+# Same rationale as nodeconfiguration-ironic.yaml -- kept OUT of the per-node chart so
+# rest-dynamic-controller can still resolve spec.configurationRef during the delete drain.
+#
+# These became MANDATORY when the apiKey security scheme was added to the OAS documents:
+# oasgen marks spec.configurationRef required on every generated kind that declares a
+# security scheme, so the chart's transition CRs are refused outright without it --
+#   NodePower "blade01-...-power-on-from-off" is invalid: spec.configurationRef: Required value
+# which surfaces as a Helm render failure on the composition, not as an auth error.
+#
+# No spec.configuration block here: the microversion is pinned as a static per-verb header
+# on each RestDefinition instead. spec.configuration.header can never work -- oasgen emits
+# the property as `header` while RDC reads `headers`, so the lookup silently misses
+# (oasgen #304). Static headers take a different, working code path.
+---
+apiVersion: baremetal.ogen.krateo.io/v1alpha1
+kind: NodePowerConfiguration
+metadata:
+  name: ironic-endpoint
+  namespace: openstack
+spec:
+  authentication:
+    apiKey:
+      header: X-Auth-Token
+      tokenRef:
+        name: ironic-keystone-token
+        namespace: openstack
+        key: token
+---
+apiVersion: baremetal.ogen.krateo.io/v1alpha1
+kind: NodeProvisionConfiguration
+metadata:
+  name: ironic-endpoint
+  namespace: openstack
+spec:
+  authentication:
+    apiKey:
+      header: X-Auth-Token
+      tokenRef:
+        name: ironic-keystone-token
+        namespace: openstack
+        key: token

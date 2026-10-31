@@ -1,4 +1,4 @@
-# RestDefinition for Ironic Node - used by oasgen-provider to generate Node CRD
+# RestDefinition for Ironic Node - used by oasgen-provider to generate BaremetalNode CRD
 # and deploy rest-dynamic-controller. Requires ConfigMap ironic-node-oas with OAS.
 #
 # Apply order:
@@ -16,7 +16,7 @@ spec:
   oasPath: configmap://openstack/ironic-node-oas/ironic_node.yaml
   resourceGroup: baremetal.ogen.krateo.io
   resource:
-    kind: Node
+    kind: BaremetalNode
     identifiers:
       - name
     additionalStatusFields:
@@ -24,7 +24,7 @@ spec:
       - provision_state
       - power_state
       - target_provision_state
-      # Inspection outputs — surfaced in Node CR status so the baremetal-discovery
+      # Inspection outputs — surfaced in BaremetalNode CR status so the baremetal-discovery
       # composition (or any operator/policy) can read inventory + completion timestamp
       # without going through openstacksdk. `properties` is the freeform object Ironic
       # populates after inspect (cpus, memory_mb, local_gb, cpu_arch, capabilities, ...).
@@ -37,31 +37,84 @@ spec:
       # automated_clean: surfaced so the chart's pre-delete Job can observe the current
       # cleanup mode setting (PATCHes it before driving target=deleted).
       - automated_clean
+      # APPEND-ONLY, so safe to add on a live CRD (removal/reorder is not).
+      # Needed because a deploy Ironic ACCEPTS (202) and then abandons is
+      # otherwise invisible: provision_state falls back to `available`,
+      # target_provision_state clears, and the transition CR reports Synced=True
+      # because the PUT genuinely succeeded. Ironic's reason exists only in
+      # last_error. A node auto-placed into maintenance after repeated failures
+      # also refuses later transitions with no visible cause.
+      - last_error
+      - maintenance
+      - maintenance_reason
     # uuid is writable on POST in Ironic (the conductor uses the supplied value instead of
     # generating one). We DROP the excludedSpecFields entry for it so callers can pin a UUID
     # via spec.uuid — required when other Nodes reference this one via parent_node and we
     # need stable IDs across re-enroll. status.uuid still mirrors what Ironic returned.
-    configurationFields:
-      - fromOpenAPI:
-          name: X-Ironic-Endpoint
-          in: header
-        fromRestDefinition:
-          actions:
-            - "*"
-      - fromOpenAPI:
-          name: X-OpenStack-Ironic-API-Version
-          in: header
-        fromRestDefinition:
-          actions:
-            - "*"
+    # The microversion is NOT a configurationField. It cannot be: oasgen generates the
+    # Configuration property as `header` (singular, taken from the OAS "in" value) while
+    # rest-dynamic-controller looks up `headers` (plural), so the lookup misses and the
+    # headers are dropped with no error. Confirmed upstream as oasgen #304; `path` and
+    # `query` match and work, `header` and `cookie` cannot.
+    #
+    # Measured here before the cause was known: X-Auth-Token reached the wire (proving the
+    # Configuration resolves and spec.authentication applies) while
+    # X-OpenStack-Ironic-API-Version never did. Ironic then negotiated its MINIMUM, 1.1 --
+    # which does not fail loudly, it silently serves the 2014 API: node lookup by name
+    # 404s (names need >= 1.5) and parent_node is rejected (needs >= 1.83).
+    #
+    # Static per-verb headers take a different code path (injected directly, after
+    # applyConfigSpec) and do ship. That is also the better home for this value: the
+    # microversion is a property of the API contract this document describes, not
+    # per-install configuration an operator should have to supply.
+    #
+    # The old keystone proxy injected this header on every call, which is why removing the
+    # proxy is what surfaced the gap.
     verbsDescription:
+      # DROP THE MASKED PASSWORD FROM THE OBSERVED BODY (both observe verbs).
+      #
+      # Ironic never returns driver_info.redfish_password; it returns the literal "******".
+      # The CR holds the real value, so spec and response can NEVER converge and RDC re-issues
+      # the update forever. Measured here: 783 PATCHes before 0.41.0's non-convergence guard
+      # tripped and set Ready=False/DriftNotConverging, whose own message names this fix --
+      # "a request/response shape divergence in the API description, fixable with
+      # responseTransform on the observe verb".
+      #
+      # Deleting the key (rather than trying to substitute the real value, which jq cannot do
+      # -- a responseTransform sees only the response, never the spec) is what actually stops
+      # it: comparison.CompareExisting walks the SPEC's keys and looks each one up in the
+      # response, and a key absent from the response is skipped outright. A key present with
+      # "******" is a difference; a key that is not there is not compared at all.
+      #
+      # This loses nothing. Drift on a write-only field that the API refuses to disclose is
+      # not detectable by any client, so there was never a real signal here to give up -- only
+      # a false one. Changing the password still works: it goes out on the next update like
+      # any other driver_info field, it just can't be confirmed by reading it back.
+      #
+      # Needed on BOTH verbs because exactly one of them produces the observed body
+      # (restResources.go picks `get` for a known resource, `findby` before the uuid is known)
+      # and each normalizes with only its own transforms. findby applies it per list item,
+      # before matching, so the shape is the same in both cases: a single node object.
+      #
+      # Upstream as oasgen #309 -- the generic form of this is any API that masks a write-only
+      # field on read.
       - action: findby
         method: GET
         path: /v1/nodes
         identifiersMatchPolicy: OR
+        headers:
+          - name: X-OpenStack-Ironic-API-Version
+            value: "1.109"
+        responseTransform:
+          inline: 'if (.driver_info | type) == "object" then .driver_info |= del(.redfish_password) else . end'
       - action: get
         method: GET
         path: /v1/nodes/{uuid}
+        headers:
+          - name: X-OpenStack-Ironic-API-Version
+            value: "1.109"
+        responseTransform:
+          inline: 'if (.driver_info | type) == "object" then .driver_info |= del(.redfish_password) else . end'
         requestFieldMapping:
           # Ironic accepts the node NAME as the {ident} in /v1/nodes/{ident}, so map the
           # path param to spec.name (always known) instead of the uuid (unknown until
@@ -71,21 +124,39 @@ spec:
       - action: create
         method: POST
         path: /v1/nodes
-      # `update` verb is enabled now that the keystone-ironic-proxy auto-translates the plain
-      # JSON body KOG sends into RFC-6902 JSON-Patch (see `_diff_to_json_patch` in
-      # scripts/keystone-ironic-proxy.py). Without that translator Ironic returns 400
-      # "Adding a non-existent attribute" or similar on a merge-style body.
+        headers:
+          - name: X-OpenStack-Ironic-API-Version
+            value: "1.109"
+      # Ironic's PATCH is RFC-6902 ONLY: it requires a JSON array of operations and
+      # rejects a merge-style object with 400 "Schema error for patch: {} is not of type
+      # 'array'". KOG emits a merge object, so this used to be translated by
+      # _diff_to_json_patch in the keystone proxy. requestTransform replaces that
+      # translation in-band, which is why the proxy is no longer needed for it.
+      #
+      # to_entries/map builds one "replace" op per field RDC wants to change. Leading
+      # "/" on the pointer is required by RFC-6902. An empty body maps to [], which
+      # Ironic accepts as a no-op -- RDC currently fires a PATCH even with nothing to
+      # change, and [] makes that harmless instead of a 400.
+      #
       # Caveat: PATCH during `cleaning` clears instance_info — keep `update` calls limited
       # to states where it is safe (manageable / available / active) by gating from the chart.
       - action: update
         method: PATCH
         path: /v1/nodes/{uuid}
+        headers:
+          - name: X-OpenStack-Ironic-API-Version
+            value: "1.109"
+        requestTransform:
+          inline: 'to_entries | map({op: "replace", path: ("/" + .key), value: .value})'
         requestFieldMapping:
           - inPath: uuid
             inCustomResource: spec.name
       - action: delete
         method: DELETE
         path: /v1/nodes/{uuid}
+        headers:
+          - name: X-OpenStack-Ironic-API-Version
+            value: "1.109"
         requestFieldMapping:
           # Ironic accepts the node NAME as the {ident} in /v1/nodes/{ident}, so map the
           # path param to spec.name (always known) instead of the uuid (unknown until

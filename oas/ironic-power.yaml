@@ -12,10 +12,17 @@ servers:
   - url: http://ironic.openstack.svc.cluster.local:6385
     description: Ironic API (proxied by keystone-ironic-proxy)
 
+# Applies the apiKey scheme defined under components. The token itself comes from the
+# <Kind>Configuration's spec.authentication.apiKey.tokenRef; where no tokenRef is
+# configured (the local standalone Ironic runs noauth) no header is sent, so the same
+# document serves both the noauth local env and a Keystone-protected real Ironic.
+security:
+  - apiKey: []
+
 paths:
   /v1/nodes:
     get:
-      summary: List nodes (findby — never matches on node_id, used as 202/Pending guard)
+      summary: List nodes (findby — matched on node_id, lifted from `name` by a responseTransform)
       operationId: listNodes
       responses:
         '200':
@@ -47,6 +54,14 @@ paths:
           description: Accepted (async; empty body)
 
 components:
+  # Keystone token, sent verbatim as X-Auth-Token (NOT a Bearer token).
+  # Needs oasgen >= 0.19.0 for apiKey, and >= 0.26.1 so the verbose request dump redacts
+  # credential headers rather than printing X-Auth-Token in cleartext.
+  securitySchemes:
+    apiKey:
+      type: apiKey
+      in: header
+      name: X-Auth-Token
   parameters:
     node_id:
       name: node_id
