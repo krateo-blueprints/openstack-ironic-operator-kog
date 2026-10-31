@@ -2,7 +2,10 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "KubernetesCluster Chart Values",
   "type": "object",
-  "required": ["clusterName", "k8sVersion"],
+  "required": [
+    "clusterName",
+    "k8sVersion"
+  ],
   "properties": {
     "clusterName": {
       "type": "string",
@@ -13,20 +16,57 @@
       "description": "kubelet/kubeadm package version, e.g. v1.31.4."
     },
     "cni": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "properties": {
-        "install": {"type": "string"},
-        "manifestUrl": {"type": "string"}
+        "install": {
+          "type": "string"
+        },
+        "manifestUrl": {
+          "type": "string"
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Cilium chart version, used only when install=cilium. Pin a stable release; pre-releases do not belong under real hardware."
+        },
+        "helmVersion": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Helm release fetched onto the CP blade for the cilium install path (Debian trixie ships no helm package)."
+        }
       }
     },
     "network": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "properties": {
-        "podCIDR": {"type": "string"},
-        "serviceCIDR": {"type": "string"},
+        "podCIDR": {
+          "type": "string"
+        },
+        "serviceCIDR": {
+          "type": "string"
+        },
         "managementApiReachability": {
-          "type": ["string", "null"],
-          "enum": [null, "kube-vip", "metallb", "external-lb", "nodeport-dns"],
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            null,
+            "kube-vip",
+            "metallb",
+            "external-lb",
+            "nodeport-dns"
+          ],
           "description": "How the management cluster's API is reached from bare-metal blades. Pure documentation hint today; future milestones may branch on this. See docs/USER-GUIDE.md 'Cluster ingress'."
         }
       }
@@ -34,71 +74,207 @@
     "image": {
       "type": "object",
       "properties": {
-        "source":   {"type": ["string", "null"]},
-        "checksum": {"type": ["string", "null"]}
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "checksum": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
-    "lifecycleNamespace": {"type": ["string", "null"]},
+    "lifecycleNamespace": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "configurationRef": {
       "type": "object",
       "properties": {
-        "name":      {"type": "string"},
-        "namespace": {"type": "string"}
+        "name": {
+          "type": "string"
+        },
+        "namespace": {
+          "type": "string"
+        }
       }
     },
-    "ironicApiUrl":     {"type": "string"},
-    "ironicApiVersion": {"type": "string"},
+    "ironicApiUrl": {
+      "type": "string"
+    },
+    "ironicApiVersion": {
+      "type": "string"
+    },
     "ironicAuth": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "description": "Keystone credentials baked into the CP cloud-init so publish-join.sh can PATCH Ironic node.extra directly.",
       "properties": {
-        "authUrl":    {"type": ["string", "null"]},
-        "ironicUrl":  {"type": ["string", "null"]},
-        "username":   {"type": ["string", "null"]},
-        "password":   {"type": ["string", "null"]},
-        "userDomain": {"type": ["string", "null"]}
+        "authUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "ironicUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "username": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "password": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "userDomain": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
     "managementCluster": {
       "type": "object",
       "description": "Endpoint + auth used by the CP cloud-init to kubectl-patch its own Node CR's spec.extra.kubeadm_join.",
       "properties": {
-        "apiUrl":                  {"type": ["string", "null"]},
-        "caBundle":                {"type": ["string", "null"]},
-        "serviceAccountName":      {"type": ["string", "null"]},
-        "serviceAccountNamespace": {"type": ["string", "null"]}
+        "apiUrl": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "caBundle": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "serviceAccountName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "serviceAccountNamespace": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
     "controlPlane": {
       "type": "object",
       "properties": {
         "endpoint": {
-          "type": ["string", "null"],
-          "description": "Stable address kubeadm advertises as the cluster apiserver. Empty for single-CP; required for HA (must point at a load-balanced VIP)."
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "OPTIONAL since 0.13.2. Leave unset and the bootstrap CP DERIVES a free VIP in its own subnet (arping DAD, scanning down from the top) and publishes it to spec.extra.cp_endpoint, which the chart reads on the next render. Set it only to pin a specific address, e.g. one reserved outside the DHCP range."
         },
         "etcd": {
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "description": "v0.11.0: external etcd config for HA clusters. Ignored when nodes[] has <=1 entry (single-CP uses kubeadm stacked etcd).",
           "properties": {
-            "aptPackage":            {"type": ["string", "null"]},
-            "snapshotImage":         {"type": ["string", "null"]},
-            "snapshotSchedule":      {"type": ["string", "null"]},
-            "snapshotRetentionDays": {"type": ["integer", "null"]}
+            "aptPackage": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "snapshotImage": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "snapshotSchedule": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "snapshotRetentionDays": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
           }
         },
         "nodes": {
-          "type": ["array", "null"],
+          "type": [
+            "array",
+            "null"
+          ],
           "description": "Preferred HA shape. Index 0 = bootstrap CP. 1, 3, or 5 entries.",
           "items": {
             "type": "object",
             "properties": {
-              "nodeName":    {"type": ["string", "null"]},
-              "nodeUuid":    {"type": ["string", "null"]},
-              "parentNode":  {"type": ["string", "null"]},
-              "oobIp":       {"type": ["string", "null"], "description": "v0.11.0: OOB-network IP for this CP. REQUIRED for HA (cpNodes > 1) so etcd peer URLs land on the stable management NIC."},
-              "driver":      {"type": ["string", "null"]},
-              "driver_info": {"type": ["object", "null"]},
-              "ports":       {"type": ["array", "null"]}
+              "nodeName": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "nodeUuid": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "parentNode": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "oobIp": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "DEPRECATED and unused since 0.13.2. The bootstrap CP's etcd address is now DERIVED on the node and published to its own BaremetalNode spec.extra.etcd_ip; replicas resolve it at runtime. Kept only so existing CRs that still set it remain valid."
+              },
+              "driver": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "driver_info": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "ports": {
+                "type": [
+                  "array",
+                  "null"
+                ]
+              }
             }
           }
         },
@@ -106,37 +282,121 @@
           "type": "object",
           "description": "Legacy single-CP shape. Ignored when controlPlane.nodes[] is non-empty.",
           "properties": {
-            "nodeName":    {"type": ["string", "null"]},
-            "nodeUuid":    {"type": ["string", "null"]},
-            "parentNode":  {"type": ["string", "null"]},
-            "driver":      {"type": ["string", "null"]},
-            "driver_info": {"type": ["object", "null"]},
-            "ports":       {"type": ["array", "null"]}
+            "nodeName": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "nodeUuid": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "parentNode": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "driver": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "driver_info": {
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "ports": {
+              "type": [
+                "array",
+                "null"
+              ]
+            }
           }
         },
         "upgrade": {
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "description": "Milestone 5a day-2 lever for k8s upgrade by-reimage. Pin one CP nodeName at a time to drive it through undeploy -> redeploy.",
           "properties": {
-            "targetNode": {"type": ["string", "null"]}
+            "targetNode": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         },
         "recovery": {
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "description": "Milestone 5c day-2 lever for failed CP recovery.",
           "properties": {
             "failedNodes": {
-              "type": ["array", "null"],
+              "type": [
+                "array",
+                "null"
+              ],
               "items": {
                 "type": "object",
                 "properties": {
-                  "nodeName":     {"type": ["string", "null"]},
-                  "nodeUuid":     {"type": ["string", "null"]},
-                  "parentNode":   {"type": ["string", "null"]},
-                  "driver":       {"type": ["string", "null"]},
-                  "driver_info":  {"type": ["object", "null"]},
-                  "ports":        {"type": ["array", "null"]},
-                  "undeployMode": {"type": ["string", "null"], "enum": [null, "full", "none"]}
+                  "nodeName": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "nodeUuid": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "parentNode": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "driver": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "driver_info": {
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "ports": {
+                    "type": [
+                      "array",
+                      "null"
+                    ]
+                  },
+                  "undeployMode": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "enum": [
+                      null,
+                      "full",
+                      "none"
+                    ]
+                  }
                 }
               }
             }
@@ -145,45 +405,139 @@
       }
     },
     "workers": {
-      "type": ["object", "null"],
+      "type": [
+        "object",
+        "null"
+      ],
       "properties": {
         "drainTimeout": {
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "description": "Passed to `kubectl drain --timeout=` in the Milestone 5b drain Jobs. Defaults to 5m."
         },
         "nodes": {
-          "type": ["array", "null"],
+          "type": [
+            "array",
+            "null"
+          ],
           "items": {
             "type": "object",
             "properties": {
-              "nodeName":    {"type": ["string", "null"]},
-              "nodeUuid":    {"type": ["string", "null"]},
-              "parentNode":  {"type": ["string", "null"]},
-              "driver":      {"type": ["string", "null"]},
-              "driver_info": {"type": ["object", "null"]},
-              "ports":       {"type": ["array", "null"]}
+              "nodeName": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "nodeUuid": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "parentNode": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "driver": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "driver_info": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "ports": {
+                "type": [
+                  "array",
+                  "null"
+                ]
+              }
             }
           }
         },
         "removed": {
-          "type": ["array", "null"],
+          "type": [
+            "array",
+            "null"
+          ],
           "description": "Workers being drained + undeployed. Move an entry here from `nodes` to start the removal flow.",
           "items": {
             "type": "object",
             "properties": {
-              "nodeName":     {"type": ["string", "null"]},
-              "nodeUuid":     {"type": ["string", "null"]},
-              "parentNode":   {"type": ["string", "null"]},
-              "driver":       {"type": ["string", "null"]},
-              "driver_info":  {"type": ["object", "null"]},
-              "ports":        {"type": ["array", "null"]},
+              "nodeName": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "nodeUuid": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "parentNode": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "driver": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "driver_info": {
+                "type": [
+                  "object",
+                  "null"
+                ]
+              },
+              "ports": {
+                "type": [
+                  "array",
+                  "null"
+                ]
+              },
               "undeployMode": {
-                "type": ["string", "null"],
-                "enum": [null, "full", "none"],
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "enum": [
+                  null,
+                  "full",
+                  "none"
+                ],
                 "description": "Ironic cleanup pass between deleted and available. full=standard clean_steps, none=skip (fast, dirty). Requires baremetal:node:disable_cleaning policy for none."
               }
             }
           }
+        }
+      }
+    },
+    "debug": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "properties": {
+        "connectorVerbose": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "Forward krateo.io/connector-verbose to every BaremetalHost this cluster renders, so a failed Ironic transition reports its faultstring instead of a bare status code."
         }
       }
     }

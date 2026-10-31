@@ -4,7 +4,7 @@
 # (controlPlane.nodes[] — 1, 3, or 5 entries). This template handles
 # index 0: the bootstrap CP, which runs
 # `kubeadm init --upload-certs --certificate-key=<key>` and publishes
-# BOTH kubeadm_join AND cert_key into its own Node CR's spec.extra.
+# BOTH kubeadm_join AND cert_key into its own BaremetalNode CR's spec.extra.
 # Replica CPs are rendered by lifecycle-cp-replicas.yaml gated on
 # cert_key being present.
 #
@@ -63,6 +63,16 @@ spec:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   enableInspection: false
+  # v0.13.3: pass the verbose flag through to each BaremetalHost, which forwards
+  # it to the generated node CR as krateo.io/connector-verbose. Without this a
+  # failed Ironic transition inside a CLUSTER deploy surfaces as a bare
+  # "unexpected status: 400" with the faultstring discarded, because only the
+  # standalone baremetal-host path could turn verbosity on. That made the one
+  # place a six-blade deploy can fail the one place it could not be diagnosed.
+  {{- with ($.Values.debug).connectorVerbose }}
+  debug:
+    connectorVerbose: {{ . }}
+  {{- end }}
   online: true
   image:
     {{- include "kubernetes-cluster.image" . | nindent 4 }}

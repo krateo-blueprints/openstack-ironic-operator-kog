@@ -1,6 +1,6 @@
 # Scoped SA + Role + Token Secret used by the CP cloud-init to patch its
-# own Node CR's spec.extra.kubeadm_join. The Role grants ONLY the patch
-# verb on a single Node CR (the CP's), so the token leak surface is
+# own BaremetalNode CR's spec.extra.kubeadm_join. The Role grants ONLY the patch
+# verb on a single BaremetalNode CR (the CP's), so the token leak surface is
 # minimised: a compromised CP can only DoS its own join-command publish.
 #
 # k8s 1.24+ doesn't auto-create tokens for ServiceAccounts; the manually
@@ -33,7 +33,7 @@ rules:
   - apiGroups:
       - baremetal.ogen.krateo.io
     resources:
-      - nodes
+      - baremetalnodes
     # All CPs in controlPlane.nodes[] are granted patch on their own Node
     # CR's spec.extra (kubeadm_join, and for HA also cert_key). Bootstrap
     # CP needs this in the normal path; replicas need it for cert-key

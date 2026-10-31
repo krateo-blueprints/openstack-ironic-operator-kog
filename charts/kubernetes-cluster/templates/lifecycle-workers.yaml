@@ -1,7 +1,7 @@
 # Render one BaremetalHost per worker. Two flavours:
 #
 # 1. Workers in spec.workers.nodes — normal deploy. FSM gate is the
-#    captured kubeadm-join command in the CP Node CR's
+#    captured kubeadm-join command in the CP BaremetalNode CR's
 #    spec.extra.kubeadm_join (live lookup). Empty -> nothing renders;
 #    cdc re-picks-up on next reconcile.
 #
@@ -50,6 +50,16 @@ spec:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   enableInspection: false
+  # v0.13.3: pass the verbose flag through to each BaremetalHost, which forwards
+  # it to the generated node CR as krateo.io/connector-verbose. Without this a
+  # failed Ironic transition inside a CLUSTER deploy surfaces as a bare
+  # "unexpected status: 400" with the faultstring discarded, because only the
+  # standalone baremetal-host path could turn verbosity on. That made the one
+  # place a six-blade deploy can fail the one place it could not be diagnosed.
+  {{- with ($.Values.debug).connectorVerbose }}
+  debug:
+    connectorVerbose: {{ . }}
+  {{- end }}
   online: true
   image:
     {{- include "kubernetes-cluster.image" $ | nindent 4 }}
@@ -105,6 +115,16 @@ spec:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   enableInspection: false
+  # v0.13.3: pass the verbose flag through to each BaremetalHost, which forwards
+  # it to the generated node CR as krateo.io/connector-verbose. Without this a
+  # failed Ironic transition inside a CLUSTER deploy surfaces as a bare
+  # "unexpected status: 400" with the faultstring discarded, because only the
+  # standalone baremetal-host path could turn verbosity on. That made the one
+  # place a six-blade deploy can fail the one place it could not be diagnosed.
+  {{- with ($.Values.debug).connectorVerbose }}
+  debug:
+    connectorVerbose: {{ . }}
+  {{- end }}
   image:
     {{- include "kubernetes-cluster.image" $ | nindent 4 }}
   undeploy: true

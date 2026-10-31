@@ -1,11 +1,11 @@
-{{- define "kubernetes-cluster.nodeApiVersion" -}}baremetal.ogen.krateo.io/v1alpha1{{- end -}}
+{{- define "kubernetes-cluster.nodeApiVersion" -}}baremetal.ogen.krateo.io/v1-0-0{{- end -}}
 
 {{/* Per-node CR kind/apiVersion. The chart renders BaremetalHost
      (unified composition) instead of BaremetalLifecycle so we can lean
      on the v0.3.4 widened `spec.undeploy` gate for drain & undeploy
      (Milestone 5b) and image swaps (Milestone 5a). Single CR per node
      throughout its lifecycle. */}}
-{{- define "kubernetes-cluster.lifecycleApiVersion" -}}composition.krateo.io/v0-4-5{{- end -}}
+{{- define "kubernetes-cluster.lifecycleApiVersion" -}}composition.krateo.io/v0-5-5{{- end -}}
 {{- define "kubernetes-cluster.lifecycleKind" -}}BaremetalHost{{- end -}}
 
 {{- define "kubernetes-cluster.lifecycleNamespace" -}}
@@ -22,7 +22,7 @@
      single-node spec.controlPlane.node for back-compat with single-CP
      deployments. Index 0 is the BOOTSTRAP CP — the one that runs
      `kubeadm init --upload-certs` and publishes both kubeadm_join and
-     cert_key on its own Node CR. Replica CPs (index 1..N-1) join via
+     cert_key on its own BaremetalNode CR. Replica CPs (index 1..N-1) join via
      `kubeadm join --control-plane --certificate-key`. */}}
 {{- define "kubernetes-cluster.cpNodes" -}}
 {{- $cp := default (dict) .Values.controlPlane -}}
@@ -59,10 +59,10 @@
 {{- end -}}
 {{- end -}}
 
-{{/* The bootstrap CP's certificate-key, read live from the CP Node CR's
+{{/* The bootstrap CP's certificate-key, read live from the CP BaremetalNode CR's
      spec.extra.cert_key. Empty until the bootstrap CP's cloud-init has
      finished `kubeadm init --upload-certs --certificate-key=$KEY` AND
-     patched its own Node CR. This is the gate that controls whether
+     patched its own BaremetalNode CR. This is the gate that controls whether
      replica CPs render — without the key they can't decrypt the
      uploaded kubeadm-certs Secret. The TTL is 2h (kubeadm hard-coded).
 
@@ -74,7 +74,7 @@
 {{- define "kubernetes-cluster.certKey" -}}
 {{- $ns  := include "kubernetes-cluster.lifecycleNamespace" . -}}
 {{- $cp  := include "kubernetes-cluster.cpNodeName"          . -}}
-{{- $node := lookup (include "kubernetes-cluster.nodeApiVersion" .) "Node" $ns $cp -}}
+{{- $node := lookup (include "kubernetes-cluster.nodeApiVersion" .) "BaremetalNode" $ns $cp -}}
 {{- if $node -}}
 {{- $extra := dig "spec" "extra" (dict) $node -}}
 {{- $ck    := index $extra "cert_key" -}}
@@ -82,14 +82,39 @@
 {{- end -}}
 {{- end -}}
 
-{{/* The captured `kubeadm join` command, read live from the CP Node CR's
+{{/* The bootstrap CP's own etcd address, read live from its BaremetalNode CR's
+     spec.extra.etcd_ip. Published by publish-join.sh from the address the node
+     DERIVED for itself (see cp-init.sh ADVERTISE_IP).
+
+     v0.13.2: this replaces .controlPlane.nodes[].oobIp. An IP typed into the CR
+     is a fact about one lab frozen into desired state: it cannot be validated
+     at render time, it goes stale when a lease moves, and the same number had
+     to be kept consistent by hand with the advertise address the node derives
+     anyway. The node is the only thing that reliably knows its own address, so
+     it publishes it through the rendezvous that already carries kubeadm_join
+     and cert_key.
+
+     Empty until the bootstrap CP has run cp-init.sh and patched itself, which
+     makes it an FSM gate for replica CPs exactly like cert_key. */}}
+{{- define "kubernetes-cluster.bootstrapEtcdIp" -}}
+{{- $ns  := include "kubernetes-cluster.lifecycleNamespace" . -}}
+{{- $cp  := include "kubernetes-cluster.cpNodeName"          . -}}
+{{- $node := lookup (include "kubernetes-cluster.nodeApiVersion" .) "BaremetalNode" $ns $cp -}}
+{{- if $node -}}
+{{- $extra := dig "spec" "extra" (dict) $node -}}
+{{- $ip    := index $extra "etcd_ip" -}}
+{{- if $ip -}}{{- $ip -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The captured `kubeadm join` command, read live from the CP BaremetalNode CR's
      spec.extra.kubeadm_join. Empty until the CP cloud-init has finished
-     `kubeadm init` AND patched its own Node CR. This is the FSM gate
+     `kubeadm init` AND patched its own BaremetalNode CR. This is the FSM gate
      that controls whether worker BaremetalLifecycles get rendered. */}}
 {{- define "kubernetes-cluster.joinCommand" -}}
 {{- $ns  := include "kubernetes-cluster.lifecycleNamespace" . -}}
 {{- $cp  := include "kubernetes-cluster.cpNodeName"          . -}}
-{{- $node := lookup (include "kubernetes-cluster.nodeApiVersion" .) "Node" $ns $cp -}}
+{{- $node := lookup (include "kubernetes-cluster.nodeApiVersion" .) "BaremetalNode" $ns $cp -}}
 {{- if $node -}}
 {{- $extra := dig "spec" "extra" (dict) $node -}}
 {{- $jc    := index $extra "kubeadm_join" -}}
@@ -191,16 +216,48 @@ services:
      See docs/USER-GUIDE.md "Cluster ingress" section for option matrix. */}}
 {{- define "kubernetes-cluster.controlPlaneEndpoint" -}}
 {{- $cp := default (dict) .Values.controlPlane -}}
-{{- if $cp.endpoint -}}{{- $cp.endpoint -}}{{- end -}}
+{{- if $cp.endpoint -}}
+{{- $cp.endpoint -}}
+{{- else -}}
+{{- /* v0.13.2: DERIVED. No endpoint declared, so use the one the bootstrap CP
+       picked for itself and published to spec.extra.cp_endpoint. Empty on the
+       first render — which is correct and is the same two-phase shape the etcd
+       PKI and cert_key gates already rely on: the bootstrap boots with no
+       endpoint (kubeadm then advertises its own primary IP, the single-CP
+       path), derives a free VIP, claims it with kube-vip, publishes it, and
+       the NEXT reconcile renders replicas and workers against it. */ -}}
+{{- $ep := include "kubernetes-cluster.publishedCpEndpoint" . -}}
+{{- if $ep -}}{{- $ep -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The control-plane endpoint the bootstrap CP DERIVED and published to its
+     own BaremetalNode CR's spec.extra.cp_endpoint.
+
+     v0.13.2: this is why controlPlane.endpoint is no longer required. A VIP
+     typed into the CR is an address the chart cannot validate: nothing checks
+     it is inside the blades' subnet (the kube-vip interface lookup silently
+     finds no NIC if it is not), and nothing checks it is unused. The bootstrap
+     node can check both, because it is ON that subnet — so it probes and
+     chooses, and the chart learns the answer. */}}
+{{- define "kubernetes-cluster.publishedCpEndpoint" -}}
+{{- $ns  := include "kubernetes-cluster.lifecycleNamespace" . -}}
+{{- $cp  := include "kubernetes-cluster.cpNodeName"          . -}}
+{{- $node := lookup (include "kubernetes-cluster.nodeApiVersion" .) "BaremetalNode" $ns $cp -}}
+{{- if $node -}}
+{{- $extra := dig "spec" "extra" (dict) $node -}}
+{{- $ep    := index $extra "cp_endpoint" -}}
+{{- if $ep -}}{{- $ep -}}{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/* Strip the optional ":port" off controlPlane.endpoint and return just
      the host (or IP). Used by the kube-vip static-pod manifest to know
      which address to claim. Empty when the user hasn't set endpoint. */}}
 {{- define "kubernetes-cluster.controlPlaneVip" -}}
-{{- $cp := default (dict) .Values.controlPlane -}}
-{{- if $cp.endpoint -}}
-{{- regexReplaceAll ":[0-9]+$" $cp.endpoint "" -}}
+{{- $ep := include "kubernetes-cluster.controlPlaneEndpoint" . -}}
+{{- if $ep -}}
+{{- regexReplaceAll ":[0-9]+$" $ep "" -}}
 {{- end -}}
 {{- end -}}
 
@@ -212,9 +269,12 @@ services:
 
        - etcd CA (cert + key, 10y validity)
        - apiserver-etcd-client cert (cert + key, 10y, signed by CA)
-       - per-CP etcd server cert (cert + key, 10y, IP+DNS SANs, signed
-         by CA) — requires user to supply .controlPlane.nodes[].oobIp
-         so the SAN matches what apiserver/peers dial
+       - per-CP etcd server cert: NOT minted here. kubeadm mints it on the
+         node from the chart-supplied CA, so its SANs come from the node's
+         own addresses. This is why 0.13.2 could drop
+         .controlPlane.nodes[].oobIp outright: the comment previously
+         claimed the SAN needed a declared IP, but nothing in this chart
+         ever generated that cert
 
      Stability: certs are generated ONCE on the first chart render via
      genCA / genSignedCert. Subsequent renders `lookup` the persisted
@@ -265,7 +325,7 @@ services:
      version. Embedded in cloud-init userData via /etc/kubernetes/
      .deployed-hash, published to Ironic.node.extra.deployed_configdrive_
      hash by publish-deployed-hash.sh in runcmd's last step, then
-     mirrored to Node CR.spec.extra by the bridge sidecar. The
+     mirrored to BaremetalNode CR.spec.extra by the bridge sidecar. The
      baremetal-host chart's shouldAutoRedeploy compares this value to
      the BH-baked configDriveHashInput (also = .Chart.Version when
      rendered) — match means the running OS is the chart's intended
@@ -561,7 +621,7 @@ services:
   content: |
     #!/bin/bash
     # Publish the chart-baked deploy hash to Ironic.node.extra.
-    # deployed_configdrive_hash. Bridge sidecar mirrors to Node CR
+    # deployed_configdrive_hash. Bridge sidecar mirrors to BaremetalNode CR
     # spec.extra. baremetal-host chart's shouldAutoRedeploy compares
     # current chart-rendered hash vs spec.extra value. Match = OS is
     # in chart's intended state. Drift = teardown OR chart bump → fire
@@ -601,9 +661,9 @@ services:
 {{/* Cloud-init userData for the CONTROL PLANE node. Installs kubeadm,
      runs `kubeadm init` (with --control-plane-endpoint when set),
      applies the CNI, then mints a join token and publishes it onto the
-     CP's own Node CR via `kubectl patch` against the management cluster.
+     CP's own BaremetalNode CR via `kubectl patch` against the management cluster.
      The patch path is spec.extra.kubeadm_join — chosen because spec.extra
-     is a writable, KOG-reconciled field in the Node CRD (Ironic round-
+     is a writable, KOG-reconciled field in the BaremetalNode CRD (Ironic round-
      trip is handled by the rest-dynamic-controller; we don't fight it).
 
      Token rotation: kubeadm-token-refresh.timer fires every 12h and re-
@@ -699,7 +759,7 @@ write_files:
     permissions: "0644"
     content: |
       [Unit]
-      Description=Mint a fresh kubeadm join token and publish it onto our Node CR
+      Description=Mint a fresh kubeadm join token and publish it onto our BaremetalNode CR
       Wants=network-online.target
       After=network-online.target
 
@@ -732,7 +792,7 @@ write_files:
       # reach the lab Ironic API over its OOB network, but CANNOT reach
       # the management cluster's API (wg tunnel routes one direction
       # only on this lab). The ironic-extra-bridge sidecar in
-      # wg-ironic-proxy propagates extra back into the k8s Node CR's
+      # wg-ironic-proxy propagates extra back into the k8s BaremetalNode CR's
       # spec.extra, where the chart's lookup picks it up.
       #
       # Called once from cloud-init at boot, then every 12h by
@@ -765,6 +825,33 @@ write_files:
       if [ -f /etc/kubernetes/cert-key ]; then
         CERT_KEY=$(cat /etc/kubernetes/cert-key)
         PATCH+=',{"op":"add","path":"/extra/cert_key","value":"'$CERT_KEY'"}'
+      fi
+      # v0.13.2: publish THIS node's own etcd address, DERIVED here rather
+      # than declared in values.
+      #
+      # Replica CPs need the bootstrap's etcd client URL to add themselves as
+      # members. That used to come from controlPlane.nodes[0].oobIp — an IP
+      # typed into the CR by hand, which is a fact about one lab hard-coded
+      # into the chart, wrong the moment a lease moves and impossible to
+      # validate at render time. The node knows its own address; nobody else
+      # reliably does.
+      #
+      # /etc/kubernetes/etcd-ip is written by cp-init.sh, which already
+      # derives ADVERTISE_IP for exactly this reason. Reusing that value
+      # keeps the etcd peer address and the apiserver advertise address
+      # consistent by construction instead of by the operator typing the
+      # same number into two places.
+      if [ -f /etc/kubernetes/etcd-ip ]; then
+        ETCD_IP=$(cat /etc/kubernetes/etcd-ip)
+        PATCH+=',{"op":"add","path":"/extra/etcd_ip","value":"'$ETCD_IP'"}'
+      fi
+      # v0.13.2: publish the DERIVED control-plane endpoint, so the chart's
+      # next render gives replicas and workers a VIP nobody had to type in.
+      # Written by cp-init.sh only when the cluster is HA and no endpoint was
+      # declared; absent otherwise, which leaves any declared value untouched.
+      if [ -f /etc/kubernetes/cp-endpoint ]; then
+        CP_ENDPOINT=$(cat /etc/kubernetes/cp-endpoint)
+        PATCH+=',{"op":"add","path":"/extra/cp_endpoint","value":"'$CP_ENDPOINT'"}'
       fi
       PATCH+=']'
 
@@ -916,6 +1003,49 @@ write_files:
       # authentication failed" when downloading uploaded-certs.
       echo "{{ include "kubernetes-cluster.kubeadmCertKey" . }}" > /etc/kubernetes/cert-key
       chmod 0600 /etc/kubernetes/cert-key
+      # v0.13.2: persist the DERIVED advertise address so publish-join.sh can
+      # hand it to replica CPs as the bootstrap etcd endpoint. See the
+      # etcd_ip block there for why this is derived and not an input.
+      echo "$ADVERTISE_IP" > /etc/kubernetes/etcd-ip
+      chmod 0644 /etc/kubernetes/etcd-ip
+{{- if and (gt (len (fromYamlArray (include "kubernetes-cluster.cpNodes" .))) 1) (not (include "kubernetes-cluster.controlPlaneEndpoint" .)) }}
+      # v0.13.2: DERIVE the control-plane VIP. HA cluster, no endpoint declared.
+      #
+      # Picked here rather than in values because this node can verify what the
+      # chart cannot: that the address is inside the blades' own subnet (the
+      # kube-vip interface lookup matches on /24, and silently finds no NIC for
+      # an address outside it) and that nothing currently answers for it.
+      #
+      # Scans DOWN from the top of the subnet: DHCP pools conventionally
+      # allocate upward from the bottom, so the top is the least contended end.
+      # `arping -D` is duplicate-address-detection — the same check a DHCP
+      # client does before accepting a lease.
+      #
+      # NOTE this is first-free-at-probe-time, not a reservation. If this
+      # subnet has no DHCP-excluded range, a later lease could in principle
+      # collide; kube-vip re-announces continuously so the VIP would win ARP,
+      # but the honest fix is an excluded range, declared as a RANGE rather
+      # than as one hand-picked address.
+      apt-get install -y iputils-arping >/dev/null 2>&1 || true
+      VIP_SUBNET=$(echo "$ADVERTISE_IP" | awk -F. '{print $1"."$2"."$3}')
+      VIP_IFACE_DERIVE=$(ip -o -4 addr show \
+        | awk -v p="${VIP_SUBNET}." '$4 ~ "^"p {print $2; exit}')
+      DERIVED_VIP=""
+      for last in $(seq 250 -1 200); do
+        cand="${VIP_SUBNET}.${last}"
+        [ "$cand" = "$ADVERTISE_IP" ] && continue
+        if arping -D -q -c 2 -w 3 -I "$VIP_IFACE_DERIVE" "$cand" >/dev/null 2>&1; then
+          DERIVED_VIP="$cand"
+          echo "derived control-plane VIP $DERIVED_VIP on $VIP_IFACE_DERIVE (arping DAD found it free)"
+          break
+        fi
+      done
+      test -n "$DERIVED_VIP" \
+        || { echo "no free address in ${VIP_SUBNET}.200-250 — abort rather than guess"; exit 1; }
+      echo "$DERIVED_VIP:6443" > /etc/kubernetes/cp-endpoint
+      chmod 0644 /etc/kubernetes/cp-endpoint
+      /etc/kubernetes/write-kube-vip-manifest.sh "$DERIVED_VIP" "$VIP_IFACE_DERIVE"
+{{- end }}
       # v0.12.5: restore PKI from /etc/kubernetes/pki-chart/ to where
       # kubeadm expects it. Survives kubeadm reset because pki-chart/
       # is untouched by reset.
@@ -931,18 +1061,67 @@ write_files:
         --config /etc/kubernetes/kubeadm-init.yaml
       mkdir -p /root/.kube
       cp /etc/kubernetes/admin.conf /root/.kube/config
-      # v0.12.4: retry CNI apply — apiserver may take a few seconds to
+      # CNI install. Two paths, selected by .Values.cni.install.
+      #
+      # v0.12.4: retry either way — the apiserver may take a few seconds to
       # be ready right after `kubeadm init` completes. Without retry, a
-      # single apply at the wrong moment leaves the cluster CNI-less,
+      # single attempt at the wrong moment leaves the cluster CNI-less,
       # and all nodes (CP + workers) stay NotReady forever.
+      export KUBECONFIG=/etc/kubernetes/admin.conf
+      {{- if eq (.Values.cni.install | default "flannel") "cilium" }}
+      # CILIUM — installed with HELM, not a manifest, because that is
+      # Cilium's canonical install path. The single-file quick-install.yaml
+      # is deprecated upstream and hard-codes choices we must vary (most
+      # importantly ipam.mode), so applying it would mean shipping a CNI
+      # configured for someone else's cluster.
+      #
+      # Debian trixie has no helm package, so fetch a pinned release
+      # tarball. Pinned rather than `get-helm-3` because that script
+      # installs whatever is newest at blade-boot time, which makes the
+      # cluster a function of the day it was built.
+      HELM_VER={{ .Values.cni.helmVersion | default "v3.16.4" | quote }}
+      curl -fsSL "https://get.helm.sh/helm-${HELM_VER}-linux-amd64.tar.gz" -o /tmp/helm.tgz
+      tar -xzf /tmp/helm.tgz -C /tmp
+      install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
+      helm repo add cilium https://helm.cilium.io/
+      helm repo update
       for i in $(seq 1 12); do
-        if KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f {{ .Values.cni.manifestUrl }}; then
+        # ipam.mode=kubernetes makes Cilium allocate from the podCIDR
+        # kubeadm already assigned to each Node, instead of its own
+        # cluster-pool default (10.0.0.0/8). Without it the CNI and the
+        # cluster disagree about pod addressing and routing silently
+        # breaks across nodes.
+        #
+        # k8sServiceHost/Port point cilium-agent at the control-plane
+        # endpoint directly rather than at the in-cluster kubernetes
+        # Service. kube-proxy is still present so the Service would work,
+        # but on an HA cluster the endpoint is the kube-vip VIP and going
+        # direct removes a dependency on kube-proxy being healthy first.
+        if helm upgrade --install cilium cilium/cilium \
+             --version {{ .Values.cni.version | default "1.20.4" }} \
+             --namespace kube-system \
+             --set ipam.mode=kubernetes \
+             {{- with include "kubernetes-cluster.controlPlaneVip" . }}
+             --set k8sServiceHost={{ . }} \
+             --set k8sServicePort=6443 \
+             {{- end }}
+             --wait --timeout 10m; then
+          echo "CNI (cilium) installed on attempt $i"
+          break
+        fi
+        echo "CNI install attempt $i failed; sleeping 10s"
+        sleep 10
+      done
+      {{- else }}
+      for i in $(seq 1 12); do
+        if kubectl apply -f {{ .Values.cni.manifestUrl }}; then
           echo "CNI applied on attempt $i"
           break
         fi
         echo "CNI apply attempt $i failed; sleeping 10s"
         sleep 10
       done
+      {{- end }}
   - path: /etc/kubernetes/publish-workload-kubeconfig.sh
     permissions: "0755"
     content: |
@@ -954,7 +1133,7 @@ write_files:
       # blade06.
       #
       # Authenticates as the chart's `<clusterName>-cp-publisher` SA — the
-      # same SA used by publish-join.sh for the Node CR patch. Its Role
+      # same SA used by publish-join.sh for the BaremetalNode CR patch. Its Role
       # grants `secrets: create, get` in {{ default .Release.Namespace .Values.managementCluster.serviceAccountNamespace }}
       # (see templates/rbac.yaml).
       set -uo pipefail
@@ -1030,7 +1209,7 @@ runcmd:
 {{- end -}}
 
 {{/* Cloud-init userData for a WORKER node. Installs kubeadm and runs the
-     join command that was captured live from the CP Node CR. */}}
+     join command that was captured live from the CP BaremetalNode CR. */}}
 {{- define "kubernetes-cluster.workerUserData" -}}
 {{- $jc := include "kubernetes-cluster.joinCommand" . -}}
 #cloud-config
@@ -1148,7 +1327,7 @@ runcmd:
 {{/* Cloud-init userData for a REPLICA CP node (HA). Installs kubeadm
      and runs `kubeadm join ... --control-plane --certificate-key`. The
      join command and cert_key were both published by the bootstrap CP
-     onto its own Node CR's spec.extra. Replica CPs render only when
+     onto its own BaremetalNode CR's spec.extra. Replica CPs render only when
      both lookups resolve (see lifecycle-cp-replicas.yaml gate). */}}
 {{- define "kubernetes-cluster.cpReplicaUserData" -}}
 {{- /* v0.11.4: $jc + $ck are no longer baked at template time —
@@ -1372,7 +1551,40 @@ write_files:
       # so etcdctl works on the FIRST attempt (previously used apiserver-
       # etcd-client.crt, which kubeadm only writes mid-join; the first
       # attempt's silent etcdctl failures left ghosts uncleanable).
-      BOOTSTRAP_ETCD={{ printf "https://%s:2379" (index ((include "kubernetes-cluster.cpNodes" . | fromYamlArray)) 0).oobIp | quote }}
+      # v0.13.2: resolve the bootstrap CP's etcd endpoint AT RUNTIME, from the
+      # address the bootstrap derived for itself and published to its own
+      # BaremetalNode CR's spec.extra.etcd_ip.
+      #
+      # This replaced .controlPlane.nodes[0].oobIp, a hand-typed IP. It must be
+      # a runtime read and NOT a chart `lookup`: replica BHs render
+      # CONCURRENTLY with the bootstrap (v0.11.4, so etcd can reach quorum), so
+      # at render time the bootstrap has not booted and spec.extra is empty. A
+      # render-time lookup would therefore bake an empty endpoint and the
+      # member-add would fail with a URL of "https://:2379" — which looks like
+      # an etcd problem and is not.
+      #
+      # Same credentials publish-join.sh uses for the reverse direction, and
+      # the same management API the VIP health-check path already depends on.
+      MGMT_API={{ .Values.managementCluster.apiUrl | quote }}
+      MGMT_NS={{ include "kubernetes-cluster.lifecycleNamespace" . | quote }}
+      BOOTSTRAP_NODE={{ include "kubernetes-cluster.cpNodeName" . | quote }}
+      BEARER={{ include "kubernetes-cluster.cpToken" . | quote }}
+      NODE_URL="${MGMT_API}/apis/{{ include "kubernetes-cluster.nodeApiVersion" . }}/namespaces/${MGMT_NS}/baremetalnodes/${BOOTSTRAP_NODE}"
+      BOOTSTRAP_ETCD=""
+      for i in $(seq 1 120); do
+        ETCD_IP=$(curl -k -s --max-time 5 \
+          -H "Authorization: Bearer $BEARER" \
+          "$NODE_URL" 2>/dev/null \
+          | jq -r '.spec.extra.etcd_ip // empty' 2>/dev/null)
+        if [ -n "$ETCD_IP" ]; then
+          BOOTSTRAP_ETCD="https://${ETCD_IP}:2379"
+          echo "[$(date -Iseconds)] bootstrap etcd resolved to $BOOTSTRAP_ETCD on poll $i"
+          break
+        fi
+        sleep 5
+      done
+      test -n "$BOOTSTRAP_ETCD" \
+        || { echo "bootstrap never published spec.extra.etcd_ip — abort"; exit 1; }
       ETCDCTL_AUTH="--cacert=/etc/kubernetes/pki-chart/etcd-ca.crt \
         --cert=/etc/kubernetes/pki-chart/etcd-client.crt \
         --key=/etc/kubernetes/pki-chart/etcd-client.key"
@@ -1468,7 +1680,7 @@ runcmd:
   - /etc/kubernetes/join.sh
 {{- end -}}
 
-{{/* The Bearer token used by the CP to PATCH its own Node CR. Read live
+{{/* The Bearer token used by the CP to PATCH its own BaremetalNode CR. Read live
      via lookup from the SA-bound Secret that templates/rbac.yaml
      created. Empty on the very first reconcile (Secret doesn't exist
      yet) — the chart's cp lifecycle template guards against rendering

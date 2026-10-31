@@ -55,9 +55,32 @@ spec:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   enableInspection: false
+  # v0.13.3: pass the verbose flag through to each BaremetalHost, which forwards
+  # it to the generated node CR as krateo.io/connector-verbose. Without this a
+  # failed Ironic transition inside a CLUSTER deploy surfaces as a bare
+  # "unexpected status: 400" with the faultstring discarded, because only the
+  # standalone baremetal-host path could turn verbosity on. That made the one
+  # place a six-blade deploy can fail the one place it could not be diagnosed.
+  {{- with ($.Values.debug).connectorVerbose }}
+  debug:
+    connectorVerbose: {{ . }}
+  {{- end }}
   online: true
   image:
     {{- include "kubernetes-cluster.image" $ | nindent 4 }}
+  {{- /* v0.13.5: honour controlPlane.upgrade.targetNode for REPLICA CPs too.
+         lifecycle-cp.yaml has had this since Milestone 5a, but replicas never
+         did — so a replica stuck `active` on a stale image had no re-image
+         path at all. That is not hypothetical: a CP that reached `active` from
+         an earlier, non-cluster deployment carries no publish script, so its
+         observed configdrive hash stays empty forever and
+         baremetal-host.shouldAutoRedeploy deliberately never fires (firing on
+         an empty observed hash would cycle the blade). The bootstrap CP could
+         be rescued with the lever and a replica could not. */}}
+  {{- if and (dig "upgrade" "targetNode" "" (default (dict) $.Values.controlPlane)) (eq (dig "upgrade" "targetNode" "" (default (dict) $.Values.controlPlane)) $cp.nodeName) }}
+  undeploy: true
+  undeployMode: full
+  {{- else }}
   configDrive:
     metaData:
       hostname: {{ $cp.nodeName | quote }}
@@ -72,6 +95,7 @@ spec:
       {{- $nd | nindent 6 }}
     {{- end }}
   deployedConfigDriveHash: {{ include "kubernetes-cluster.deployedConfigDriveHash" $ | quote }}
+  {{- end }}
   configurationRef:
     {{- toYaml $.Values.configurationRef | nindent 4 }}
 {{- end }}
