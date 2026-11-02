@@ -134,3 +134,56 @@ spec:
     {{- toYaml $.Values.configurationRef | nindent 4 }}
 {{- end }}
 {{- end }}
+
+{{- /* v0.13.12: workers.failedNodes[] -- undeploy a worker that never joined.
+       Symmetric with controlPlane.recovery.failedNodes[], and ungated for the
+       same reason that one is: the drain gate on workers.removed[] asks
+       `kubectl drain <node>` to succeed, which it cannot for a machine that is
+       not a cluster member, so removed[] can never open for a worker whose
+       join failed. There is no third option either, because cdc patches what
+       the chart renders and NEVER deletes what disappears from it
+       (`created:0 deleted:0 patched:10` in its own log), so dropping the entry
+       from workers.nodes[] leaves the BaremetalHost in place and the
+       baremetal-host pre-delete teardown hook is never reached.
+       Same BH NAME as the normal worker path on purpose: cdc then PATCHES the
+       live BaremetalHost to undeploy rather than creating a second one that
+       fights it for the same machine. */}}
+{{- $wFailed := default (list) (default (dict) .Values.workers).failedNodes -}}
+{{- range $idx, $w := $wFailed }}
+---
+apiVersion: {{ include "kubernetes-cluster.lifecycleApiVersion" $ }}
+kind: {{ include "kubernetes-cluster.lifecycleKind" $ }}
+metadata:
+  name: {{ printf "%s-worker-%s" $cluster $w.nodeName | quote }}
+  namespace: {{ $lcNs | quote }}
+  labels:
+    kubernetescluster.ogen.krateo.io/cluster: {{ $cluster | quote }}
+    kubernetescluster.ogen.krateo.io/role: worker
+    kubernetescluster.ogen.krateo.io/worker-role: recovering
+spec:
+  nodeName: {{ $w.nodeName | quote }}
+  nodeNamespace: {{ $lcNs | quote }}
+  {{- with $w.nodeUuid }}
+  nodeUuid: {{ . | quote }}
+  {{- end }}
+  driver: {{ $w.driver | quote }}
+  {{- with $w.driver_info }}
+  driver_info:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $w.ports }}
+  ports:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  enableInspection: false
+  {{- with ($.Values.debug).connectorVerbose }}
+  debug:
+    connectorVerbose: {{ . }}
+  {{- end }}
+  image:
+    {{- include "kubernetes-cluster.image" $ | nindent 4 }}
+  undeploy: true
+  undeployMode: {{ default "full" $w.undeployMode | quote }}
+  configurationRef:
+    {{- toYaml $.Values.configurationRef | nindent 4 }}
+{{- end }}
