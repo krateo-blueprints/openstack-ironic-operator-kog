@@ -608,6 +608,90 @@ services:
 {{- end -}}
 {{- end -}}
 
+{{/* v0.13.9: resolve the control-plane endpoint at RUNTIME from Ironic,
+     the store the bootstrap CP itself publishes to.
+
+     WHY THIS EXISTS. The VIP cannot be known at render time. The bootstrap
+     derives it by arping for a free address AFTER it boots, so every replica
+     and worker renders CONCURRENTLY with a bootstrap that has not run yet.
+     The etcd_ip poll fifteen hundred lines down already says this in full --
+     "a render-time lookup would therefore bake an empty endpoint" -- and the
+     VIP was the one value still baked. It baked empty, and three replicas ran
+     `curl -k https:///healthz` 120 times against a URL with no host, logged
+     "apiserver never became reachable", and exited 1 while Ironic reported
+     `active` for all six blades.
+
+     WHY IRONIC AND NOT THE CR. The sibling poll reads the management cluster's
+     copy of this value, which arrives there only if ironic-extra-bridge happens
+     to mirror the key. It did not: its EXTRA_KEYS allowlist predates HA, and
+     rdc then replays CR.spec.extra onto Ironic as the whole `extra` object, so
+     any key the bridge omits is DELETED from Ironic about ninety seconds after
+     the blade publishes it. The VIP's measured lifetime was 82 seconds. The
+     allowlist is fixed, but reading Ironic directly takes that entire lossy hop
+     off the join's critical path: this reads what the publisher wrote, from the
+     store it wrote it to, over the OOB network the blade already uses for
+     exactly this purpose.
+
+     Credentials and reachability are the same .Values.ironicAuth that
+     publish-deployed-hash.sh uses, and that helper is already universal across
+     cpUserData, cpReplicaUserData and workerUserData -- so nothing new is
+     granted to the blade here.
+
+     Prints the endpoint on stdout and nothing else, or exits non-zero. Callers
+     fall back to the rendered value, which is correct and non-empty for a
+     single-CP cluster, where no VIP is derived and none is published. */}}
+{{- define "kubernetes-cluster.resolveCpEndpointWriteFiles" -}}
+- path: /etc/kubernetes/resolve-cp-endpoint.sh
+  permissions: "0755"
+  content: |
+    #!/bin/bash
+    # Poll Ironic for the bootstrap CP's published extra.cp_endpoint.
+    # stdout is the endpoint ONLY -- all logging goes to the log file, so
+    # `VIP=$(bash resolve-cp-endpoint.sh)` can never capture chatter.
+    set -uo pipefail
+    exec 2>> /var/log/resolve-cp-endpoint.log
+    BOOTSTRAP={{ include "kubernetes-cluster.cpNodeName" . | quote }}
+    AUTH_URL={{ .Values.ironicAuth.authUrl | quote }}
+    IRONIC_URL={{ .Values.ironicAuth.ironicUrl | quote }}
+    USERNAME={{ .Values.ironicAuth.username | quote }}
+    PASSWORD={{ .Values.ironicAuth.password | quote }}
+    USER_DOMAIN={{ .Values.ironicAuth.userDomain | quote }}
+    BUDGET={{ (.Values.join).cpEndpointPolls | default 120 }}
+    log() { echo "[$(date -Iseconds)] $*" >&2; }
+    log "resolving cp_endpoint for bootstrap=$BOOTSTRAP budget=${BUDGET}x5s"
+    for i in $(seq 1 "$BUDGET"); do
+      TOKEN=$(curl -sS -D - -o /dev/null --max-time 15 \
+        -H "Content-Type: application/json" \
+        -d "{\"auth\":{\"identity\":{\"methods\":[\"password\"],\"password\":{\"user\":{\"name\":\"$USERNAME\",\"password\":\"$PASSWORD\",\"domain\":{\"name\":\"$USER_DOMAIN\"}}}},\"scope\":{\"system\":{\"all\":true}}}}" \
+        "$AUTH_URL/v3/auth/tokens" 2>/dev/null \
+        | grep -i 'x-subject-token' | awk '{print $2}' | tr -d '\r')
+      if [ -n "$TOKEN" ]; then
+        EP=$(curl -sS --max-time 15 \
+          -H "X-Auth-Token: $TOKEN" \
+          -H "X-OpenStack-Ironic-API-Version: 1.81" \
+          "$IRONIC_URL/v1/nodes/$BOOTSTRAP" 2>/dev/null \
+          | python3 -c "import sys,json
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    print(''); raise SystemExit(0)
+print(((d.get('extra') or {}).get('cp_endpoint') or ''))" 2>/dev/null)
+        if [ -n "$EP" ]; then
+          log "resolved cp_endpoint=$EP on poll $i"
+          printf '%s' "$EP"
+          exit 0
+        fi
+      else
+        log "poll $i: no keystone token"
+      fi
+      sleep 5
+    done
+    # Name what was being waited for. A gate that times out silently is
+    # how the previous failure stayed invisible for half an hour.
+    log "TIMEOUT: bootstrap $BOOTSTRAP never published extra.cp_endpoint"
+    exit 1
+{{- end -}}
+
 {{/* v0.12.3 (Task #91): publish-deployed-hash.sh + /etc/kubernetes/
      .deployed-hash file. Universal across cpUserData, cpReplicaUserData,
      workerUserData. */}}
@@ -1239,6 +1323,7 @@ write_files:
 {{- include "kubernetes-cluster.kubeadmPkiWriteFiles" . | nindent 2 }}
 {{- include "kubernetes-cluster.kubeadmInitWriteFiles" . | nindent 2 }}
 {{- include "kubernetes-cluster.publishDeployedHashWriteFiles" . | nindent 2 }}
+{{- include "kubernetes-cluster.resolveCpEndpointWriteFiles" . | nindent 2 }}
 runcmd:
   # v0.12.7: publish FIRST so the bridge-mirrored observed hash matches
   # current within ~15s of boot — well before bh-chart's 60s reconcile
@@ -1340,7 +1425,20 @@ write_files:
       # the discovery token against the apiserver's TLS cert hash).
       exec >> /var/log/join.log 2>&1
       set -x
-      VIP={{ include "kubernetes-cluster.controlPlaneEndpoint" . | quote }}
+      # v0.13.9: resolve the endpoint at RUNTIME from Ironic. The rendered
+      # value is kept ONLY as the single-CP fallback, where no VIP is derived
+      # and none is ever published. For HA it is empty at render time by
+      # construction -- replicas render concurrently with a bootstrap that has
+      # not booted -- and baking it is what produced `https:///healthz`.
+      VIP_RENDERED={{ include "kubernetes-cluster.controlPlaneEndpoint" . | quote }}
+      VIP=$(bash /etc/kubernetes/resolve-cp-endpoint.sh) || VIP=""
+      if [ -z "$VIP" ]; then
+        VIP="$VIP_RENDERED"
+        echo "[$(date -Iseconds)] Ironic published no extra.cp_endpoint; falling back to rendered endpoint '"'"'$VIP'"'"'"
+      fi
+      # Name what is missing. A gate that aborts without saying what it waited
+      # for is how the previous failure stayed invisible for thirty minutes.
+      test -n "$VIP" || { echo "no control-plane endpoint: the bootstrap published no extra.cp_endpoint to Ironic AND the chart rendered none - cannot join"; exit 1; }
       TOKEN={{ include "kubernetes-cluster.bootstrapToken" . | quote }}
       # Wait for apiserver via VIP, ~10 min budget.
       for i in $(seq 1 120); do
@@ -1361,6 +1459,7 @@ write_files:
         --token "$TOKEN" \
         --discovery-token-unsafe-skip-ca-verification
 {{- include "kubernetes-cluster.publishDeployedHashWriteFiles" . | nindent 2 }}
+{{- include "kubernetes-cluster.resolveCpEndpointWriteFiles" . | nindent 2 }}
 runcmd:
   # v0.12.7: publish FIRST (see bootstrap CP rationale).
   - bash /etc/kubernetes/publish-deployed-hash.sh
@@ -1549,7 +1648,20 @@ write_files:
       # hash is computed at runtime from the chart-distributed
       # /etc/kubernetes/pki/ca.crt (same CA on every CP via the
       # kubeadmPkiWriteFiles helper).
-      VIP={{ include "kubernetes-cluster.controlPlaneEndpoint" . | quote }}
+      # v0.13.9: resolve the endpoint at RUNTIME from Ironic. The rendered
+      # value is kept ONLY as the single-CP fallback, where no VIP is derived
+      # and none is ever published. For HA it is empty at render time by
+      # construction -- replicas render concurrently with a bootstrap that has
+      # not booted -- and baking it is what produced `https:///healthz`.
+      VIP_RENDERED={{ include "kubernetes-cluster.controlPlaneEndpoint" . | quote }}
+      VIP=$(bash /etc/kubernetes/resolve-cp-endpoint.sh) || VIP=""
+      if [ -z "$VIP" ]; then
+        VIP="$VIP_RENDERED"
+        echo "[$(date -Iseconds)] Ironic published no extra.cp_endpoint; falling back to rendered endpoint '"'"'$VIP'"'"'"
+      fi
+      # Name what is missing. A gate that aborts without saying what it waited
+      # for is how the previous failure stayed invisible for thirty minutes.
+      test -n "$VIP" || { echo "no control-plane endpoint: the bootstrap published no extra.cp_endpoint to Ironic AND the chart rendered none - cannot join"; exit 1; }
       TOKEN={{ include "kubernetes-cluster.bootstrapToken" . | quote }}
       CERT_KEY={{ include "kubernetes-cluster.kubeadmCertKey" . | quote }}
       # v0.12.8: derive ADVERTISE_IP from the VIP's /24 — same trick the
@@ -1717,6 +1829,7 @@ write_files:
 {{- include "kubernetes-cluster.kubeadmPkiWriteFiles" . | nindent 2 }}
 {{- include "kubernetes-cluster.kubeadmJoinWriteFiles" . | nindent 2 }}
 {{- include "kubernetes-cluster.publishDeployedHashWriteFiles" . | nindent 2 }}
+{{- include "kubernetes-cluster.resolveCpEndpointWriteFiles" . | nindent 2 }}
 runcmd:
   # v0.12.7: publish FIRST (see bootstrap CP rationale).
   - bash /etc/kubernetes/publish-deployed-hash.sh
