@@ -66,7 +66,24 @@ KOG_API = os.environ.get("KOG_API", "baremetal.ogen.krateo.io/v1-0-0")
 KOG_RESOURCE = os.environ.get("KOG_RESOURCE", "baremetalnodes")
 INTERVAL = int(os.environ.get("BRIDGE_INTERVAL", "10"))
 
-EXTRA_KEYS = ("kubeadm_join", "cert_key")
+# Every key publish-join.sh / publish-stage.sh writes into Ironic.node.extra
+# MUST be listed here, or it is published and then silently never reaches
+# Kubernetes. That gap cost an entire HA bootstrap: the bootstrap CP derived
+# its VIP via arping, wrote 192.168.0.250:6443 to /etc/kubernetes/cp-endpoint
+# and PATCHed all four keys into Ironic in one json-patch -- but this tuple
+# held only two, so `cp_endpoint` and `etcd_ip` never landed on the CR. The
+# chart's controlPlaneEndpoint helper falls back to spec.extra.cp_endpoint,
+# read an empty string, and baked `curl https:///healthz` into every replica's
+# join.sh. All three replicas polled a URL with no host 120 times and aborted;
+# blade01 stayed the only node in a cluster that reported `active` on all six.
+#
+# DELIBERATELY ABSENT: deployed_configdrive_hash. baremetal-host's
+# shouldAutoRedeploy fires when the observed hash is NON-EMPTY and differs
+# from the chart-rendered one, and that rendered value is .Chart.Version
+# rather than a content hash. Mirroring it would arm a re-image of every
+# blade on every chart bump. Make it a real content hash first; until then
+# leaving it unmirrored is what keeps the gate shut.
+EXTRA_KEYS = ("kubeadm_join", "cert_key", "etcd_ip", "cp_endpoint", "cp_stage")
 
 HELM_RELEASE_SECRET_PREFIX = "sh.helm.release.v1."
 # Don't reap a KOG primitive whose helm-release-name doesn't match a
