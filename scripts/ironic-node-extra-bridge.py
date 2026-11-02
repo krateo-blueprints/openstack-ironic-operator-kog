@@ -210,7 +210,14 @@ def reconcile_once(namespace):
                     log(f"clear Ironic.extra {name}: {e}")
             cr_to_clear = [k for k in EXTRA_KEYS if k in cr_extra]
             if cr_to_clear:
-                merged = {k: v for k, v in cr_extra.items() if k not in cr_to_clear}
+                # RFC 7386 merge-patch: a key that is merely ABSENT from the
+                # patch is left UNCHANGED. Rebuilding the dict without the
+                # managed keys therefore deleted nothing at all, and this
+                # branch logged "cleared ..." on every single poll while the
+                # stale values sat in the CR untouched. Only an explicit null
+                # removes a key. The Ironic side never had this bug because it
+                # sends JSON-Patch `remove` operations.
+                merged = {k: None for k in cr_to_clear}
                 patch = json.dumps({"spec": {"extra": merged}}).encode()
                 try:
                     k8s_request(
