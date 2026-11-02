@@ -540,6 +540,10 @@
           "description": "Forward krateo.io/connector-verbose to every BaremetalHost this cluster renders, so a failed Ironic transition reports its faultstring instead of a bare status code."
         }
       }
+    },
+    "lifecycleApiVersion": {
+      "type": "string",
+      "description": "apiVersion of the child BaremetalHost composition (e.g. composition.krateo.io/v0-5-6). Must track the baremetal-host CompositionDefinition version: core-provider stops serving the previous version on a bump, and a stale value fails every render."
     }
   }
 }

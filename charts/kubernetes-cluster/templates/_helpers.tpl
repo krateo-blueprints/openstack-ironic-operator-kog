@@ -5,7 +5,18 @@
      on the v0.3.4 widened `spec.undeploy` gate for drain & undeploy
      (Milestone 5b) and image swaps (Milestone 5a). Single CR per node
      throughout its lifecycle. */}}
-{{- define "kubernetes-cluster.lifecycleApiVersion" -}}composition.krateo.io/v0-5-5{{- end -}}
+{{/* v0.13.11: the child BaremetalHost apiVersion. This WAS the literal
+     `composition.krateo.io/v0-5-5`, which wedged the whole composition the
+     moment baremetal-host was bumped to 0.5.6: core-provider stops serving
+     the old CRD version, chart-inspector then fails every render with
+     "no matches for kind BaremetalHost in version composition.krateo.io/v0-5-5",
+     cdc reports `Cannot observe external resource` in a loop, and NOTHING
+     reconciles -- the parent and child charts are in lockstep through a
+     string neither declares. Overridable now, so the next bump is a value
+     change rather than a chart release. */}}
+{{- define "kubernetes-cluster.lifecycleApiVersion" -}}
+{{- default "composition.krateo.io/v0-5-6" .Values.lifecycleApiVersion -}}
+{{- end -}}
 {{- define "kubernetes-cluster.lifecycleKind" -}}BaremetalHost{{- end -}}
 
 {{- define "kubernetes-cluster.lifecycleNamespace" -}}
