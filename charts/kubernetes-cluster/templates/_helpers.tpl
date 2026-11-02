@@ -563,6 +563,19 @@ services:
     kubernetesVersion: {{ .Values.k8sVersion }}
 {{- if $cpe }}
     controlPlaneEndpoint: {{ $cpe | quote }}
+{{- else if gt (len (fromYamlArray (include "kubernetes-cluster.cpNodes" .))) 1 }}
+    {{/* v0.13.10: HA with no declared endpoint. $cpe is EMPTY at render time
+         by construction -- the VIP is derived by arping after this node boots
+         -- so `if $cpe` omitted this line entirely and kubeadm init ran with
+         no controlPlaneEndpoint. kubeadm only accepts `--control-plane` joins
+         when the endpoint was set AT INIT TIME, so the cluster was permanently
+         single-CP: controlPlaneEndpoint empty in kubeadm-config, and the VIP
+         absent from the apiserver cert SANs (measured: SANs held only
+         10.96.0.1 and the node's own 192.168.0.201). Replicas then failed for
+         a second, louder reason and this one stayed hidden underneath.
+         Substituted by cp-init.sh from the derived VIP, exactly as
+         __ADVERTISE_IP__ and __CERT_KEY__ already are. */}}
+    controlPlaneEndpoint: __CONTROL_PLANE_ENDPOINT__
 {{- end }}
     networking:
       podSubnet: {{ .Values.network.podCIDR | quote }}
@@ -1175,10 +1188,28 @@ write_files:
       # kubeadm expects it. Survives kubeadm reset because pki-chart/
       # is untouched by reset.
       bash /usr/local/bin/restore-chart-pki.sh
+      # v0.13.10: the control-plane endpoint is known only now, after the
+      # arping derivation above wrote /etc/kubernetes/cp-endpoint. Without
+      # this substitution kubeadm init runs with no controlPlaneEndpoint and
+      # the cluster can never accept a --control-plane join.
+      CP_ENDPOINT_SUB=""
+      if [ -s /etc/kubernetes/cp-endpoint ]; then
+        CP_ENDPOINT_SUB=$(cat /etc/kubernetes/cp-endpoint)
+      fi
       sed -e "s|__ADVERTISE_IP__|$ADVERTISE_IP|g" \
           -e "s|__CERT_KEY__|$(cat /etc/kubernetes/cert-key)|g" \
+          -e "s|__CONTROL_PLANE_ENDPOINT__|${CP_ENDPOINT_SUB}|g" \
         /etc/kubernetes/kubeadm-init.yaml.template \
         > /etc/kubernetes/kubeadm-init.yaml
+      # Fail loudly rather than init a cluster that can never become HA: an
+      # unsubstituted placeholder, or an endpoint line left empty, both mean
+      # the derivation did not produce a VIP.
+      if grep -q "__CONTROL_PLANE_ENDPOINT__" /etc/kubernetes/kubeadm-init.yaml \
+         || grep -qE "^\s*controlPlaneEndpoint:\s*(\"\")?\s*$" /etc/kubernetes/kubeadm-init.yaml; then
+        echo "controlPlaneEndpoint unresolved: HA cluster requires a VIP at init time, derivation produced none — abort"
+        exit 1
+      fi
+      grep -E "controlPlaneEndpoint|advertiseAddress" /etc/kubernetes/kubeadm-init.yaml
       chmod 0600 /etc/kubernetes/kubeadm-init.yaml
       # Skip cert generation phases — chart-baked PKI is already on disk.
       # Kubeadm will detect existing CAs and only generate leaf certs.
