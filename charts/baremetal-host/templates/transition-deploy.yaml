@@ -14,6 +14,50 @@
      undeploy field is a "hold at available" signal; deploy should respect it. */}}
 {{- if and (eq (include "baremetal-host.provisionState" .) "available") (hasKey .Values "image") .Values.image.source (not .Values.undeploy) }}
 {{- $configdrive := include "baremetal-host.configdrive" . }}
+{{/* v0.5.8: REFUSE to deploy with an empty configdrive when one was expected.
+
+     A deploy fired without `configdrive` writes the image, boots, and reports
+     `active` -- correctly, because the image write did succeed -- while the
+     machine runs no cloud-init at all. No ssh_pwauth, no packages, no kubeadm,
+     nothing. It is indistinguishable from success at every layer that reports:
+     Ironic says active, the BaremetalHost says deployed, the composition says
+     Ready. Measured on blade01 tonight, the bootstrap control plane:
+
+       blade01  instance_info keys: ['image_checksum','image_source']
+       blade04  instance_info keys: ['configdrive','image_checksum',...]
+
+     blade01 had NO configdrive key. It sat `active` with a booted Debian and an
+     empty /etc/kubernetes for half an hour while I looked for the cluster.
+
+     It happens because the parent chart gates the BaremetalHost's configDrive
+     behind a Helm `lookup` of the PKI Secret, so a render that loses the lookup
+     produces an empty configDrive -- and `{{ with $configdrive }}` then quietly
+     drops the field instead of refusing to proceed.
+
+     `hasKey .Values "configDrive"` distinguishes "cloud-init was intended and is
+     missing" from a deliberate bare-image deploy, which stays allowed. */}}
+{{- if and (hasKey .Values "configDrive") (not $configdrive) }}
+{{/* Render a marker instead of the transition, so the refusal is VISIBLE.
+     A gate that declines silently is how blade01 cost half an hour. */}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-deploy-blocked" .Release.Name | trunc 63 | trimSuffix "-" }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: baremetal-host
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    baremetal.ogen.krateo.io/deploy-blocked: "true"
+data:
+  reason: |
+    Deploy NOT fired for node {{ .Values.nodeName }}: spec.configDrive was
+    supplied but rendered EMPTY, so the deploy would write the image and boot a
+    machine that runs no cloud-init while reporting `active`.
+    Most likely cause: the parent chart's configDrive is gated behind a Helm
+    `lookup` (the kubeadm PKI Secret) and that lookup did not resolve on the
+    render that produced this release. Re-reconcile once the Secret exists.
+    This marker disappears on its own when a non-empty configDrive renders.
+{{- else }}
 apiVersion: {{ include "baremetal-host.nodeApiVersion" . }}
 kind: NodeProvision
 metadata:
@@ -39,6 +83,7 @@ spec:
   configdrive:
     {{- . | nindent 4 }}
   {{- end }}
+{{- end }}
 {{- end }}
 {{- end }}
 {{- end }}

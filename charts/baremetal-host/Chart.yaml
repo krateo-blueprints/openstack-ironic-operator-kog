@@ -15,4 +15,4 @@ maintainers:
 - name: openstack-ironic-operator
 name: baremetal-host
 type: application
-version: 0.5.7
+version: 0.5.8
