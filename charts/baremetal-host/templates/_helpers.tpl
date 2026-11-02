@@ -178,7 +178,44 @@
     {{- $created := dig "metadata" "creationTimestamp" "" $node -}}
     {{- if $created -}}
       {{- $ageSec := sub (now | unixEpoch) (toDate "2006-01-02T15:04:05Z" $created | unixEpoch) -}}
-      {{- if gt $ageSec 900 -}}yes{{- end -}}
+      {{/* v0.5.7: suppress while a recent undeploy exists, exactly as
+           shouldAutoRedeploy does, and for a sharper reason.
+
+           THE ANCHOR BELOW IS WRONG and this guard is what makes it survivable.
+           `$created` is the BaremetalNode CR's creationTimestamp -- the age of
+           the RECORD, not of the current deploy attempt. v0.4.4 chose it
+           because it is "stable across BH-chart helm revisions", which is true
+           and is precisely the defect: once the CR is older than 900s, and it
+           always is within fifteen minutes of first enrolment, this condition
+           is PERMANENTLY TRUE. Every deploy transits `wait call-back`. So every
+           deploy was being judged stuck the instant it started and torn back
+           down:
+
+             available -> deploy -> wait call-back -> undeploy -> available -> ...
+
+           A node escaped only by racing `wait call-back` -> `active` between
+           two 60s cdc reconciles. Measured on a six-node rebuild: five won the
+           race, blade05 lost it nineteen times, and because load widens the
+           window the whole thing reads as resource starvation. It is not. It is
+           deterministic for any node whose record is a quarter of an hour old.
+
+           The real fix is to anchor on how long the node has been IN this
+           state -- Ironic's `provision_updated_at` -- which is not in the
+           BaremetalNode CRD's status today and so needs a RestDefinition
+           change. Until then this suppression bounds the damage to one
+           undeploy per ten minutes instead of one per reconcile, which is
+           enough to let a deploy finish. */}}
+      {{- $undeployName := printf "%s-undeploy" .Release.Name | trunc 63 | trimSuffix "-" -}}
+      {{- $recent := lookup (include "baremetal-host.nodeApiVersion" .) "NodeProvision" .Release.Namespace $undeployName -}}
+      {{- $suppressed := false -}}
+      {{- if $recent -}}
+        {{- $uc := dig "metadata" "creationTimestamp" "" $recent -}}
+        {{- if $uc -}}
+          {{- $uAge := sub (now | unixEpoch) (toDate "2006-01-02T15:04:05Z" $uc | unixEpoch) -}}
+          {{- if lt (int $uAge) 600 -}}{{- $suppressed = true -}}{{- end -}}
+        {{- end -}}
+      {{- end -}}
+      {{- if and (gt $ageSec 900) (not $suppressed) -}}yes{{- end -}}
     {{- end -}}
   {{- end -}}
 {{- end -}}
