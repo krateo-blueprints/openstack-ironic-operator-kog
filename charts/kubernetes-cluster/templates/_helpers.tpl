@@ -664,16 +664,18 @@ services:
      Prints the endpoint on stdout and nothing else, or exits non-zero. Callers
      fall back to the rendered value, which is correct and non-empty for a
      single-CP cluster, where no VIP is derived and none is published. */}}
-{{- define "kubernetes-cluster.resolveCpEndpointWriteFiles" -}}
-- path: /etc/kubernetes/resolve-cp-endpoint.sh
+{{- define "kubernetes-cluster.resolveNodeExtraWriteFiles" -}}
+- path: /etc/kubernetes/resolve-node-extra.sh
   permissions: "0755"
   content: |
     #!/bin/bash
-    # Poll Ironic for the bootstrap CP's published extra.cp_endpoint.
+    # Poll Ironic for a key of the bootstrap CP's published node.extra.
+    #   $1 = key name (default cp_endpoint)
     # stdout is the endpoint ONLY -- all logging goes to the log file, so
-    # `VIP=$(bash resolve-cp-endpoint.sh)` can never capture chatter.
+    # `VIP=$(bash resolve-node-extra.sh cp_endpoint)` can never capture chatter.
     set -uo pipefail
-    exec 2>> /var/log/resolve-cp-endpoint.log
+    exec 2>> /var/log/resolve-node-extra.log
+    KEY="${1:-cp_endpoint}"
     BOOTSTRAP={{ include "kubernetes-cluster.cpNodeName" . | quote }}
     AUTH_URL={{ .Values.ironicAuth.authUrl | quote }}
     IRONIC_URL={{ .Values.ironicAuth.ironicUrl | quote }}
@@ -682,7 +684,7 @@ services:
     USER_DOMAIN={{ .Values.ironicAuth.userDomain | quote }}
     BUDGET={{ (.Values.join).cpEndpointPolls | default 120 }}
     log() { echo "[$(date -Iseconds)] $*" >&2; }
-    log "resolving cp_endpoint for bootstrap=$BOOTSTRAP budget=${BUDGET}x5s"
+    log "resolving $KEY for bootstrap=$BOOTSTRAP budget=${BUDGET}x5s"
     for i in $(seq 1 "$BUDGET"); do
       TOKEN=$(curl -sS -D - -o /dev/null --max-time 15 \
         -H "Content-Type: application/json" \
@@ -690,13 +692,13 @@ services:
         "$AUTH_URL/v3/auth/tokens" 2>/dev/null \
         | grep -i 'x-subject-token' | awk '{print $2}' | tr -d '\r')
       if [ -n "$TOKEN" ]; then
-        EP=$(curl -sS --max-time 15 \
+        EP=$(KEY="$KEY" curl -sS --max-time 15 \
           -H "X-Auth-Token: $TOKEN" \
           -H "X-OpenStack-Ironic-API-Version: 1.81" \
           "$IRONIC_URL/v1/nodes/$BOOTSTRAP" 2>/dev/null \
-          | python3 -c "import sys,json; d=json.load(sys.stdin); print((d.get('extra') or {}).get('cp_endpoint') or '')" 2>/dev/null)
+          | python3 -c "import sys,json; d=json.load(sys.stdin); import os; print((d.get('extra') or {}).get(os.environ['KEY']) or '')" 2>/dev/null)
         if [ -n "$EP" ]; then
-          log "resolved cp_endpoint=$EP on poll $i"
+          log "resolved $KEY=$EP on poll $i"
           printf '%s' "$EP"
           exit 0
         fi
@@ -707,7 +709,7 @@ services:
     done
     # Name what was being waited for. A gate that times out silently is
     # how the previous failure stayed invisible for half an hour.
-    log "TIMEOUT: bootstrap $BOOTSTRAP never published extra.cp_endpoint"
+    log "TIMEOUT: bootstrap $BOOTSTRAP never published extra.$KEY"
     exit 1
 {{- end -}}
 
@@ -1360,7 +1362,7 @@ write_files:
 {{- include "kubernetes-cluster.kubeadmPkiWriteFiles" . | nindent 2 }}
 {{- include "kubernetes-cluster.kubeadmInitWriteFiles" . | nindent 2 }}
 {{- include "kubernetes-cluster.publishDeployedHashWriteFiles" . | nindent 2 }}
-{{- include "kubernetes-cluster.resolveCpEndpointWriteFiles" . | nindent 2 }}
+{{- include "kubernetes-cluster.resolveNodeExtraWriteFiles" . | nindent 2 }}
 runcmd:
   # v0.12.7: publish FIRST so the bridge-mirrored observed hash matches
   # current within ~15s of boot — well before bh-chart's 60s reconcile
@@ -1468,7 +1470,7 @@ write_files:
       # construction -- replicas render concurrently with a bootstrap that has
       # not booted -- and baking it is what produced `https:///healthz`.
       VIP_RENDERED={{ include "kubernetes-cluster.controlPlaneEndpoint" . | quote }}
-      VIP=$(bash /etc/kubernetes/resolve-cp-endpoint.sh) || VIP=""
+      VIP=$(bash /etc/kubernetes/resolve-node-extra.sh cp_endpoint) || VIP=""
       if [ -z "$VIP" ]; then
         VIP="$VIP_RENDERED"
         echo "[$(date -Iseconds)] Ironic published no extra.cp_endpoint; falling back to rendered endpoint '"'"'$VIP'"'"'"
@@ -1496,7 +1498,7 @@ write_files:
         --token "$TOKEN" \
         --discovery-token-unsafe-skip-ca-verification
 {{- include "kubernetes-cluster.publishDeployedHashWriteFiles" . | nindent 2 }}
-{{- include "kubernetes-cluster.resolveCpEndpointWriteFiles" . | nindent 2 }}
+{{- include "kubernetes-cluster.resolveNodeExtraWriteFiles" . | nindent 2 }}
 runcmd:
   # v0.12.7: publish FIRST (see bootstrap CP rationale).
   - bash /etc/kubernetes/publish-deployed-hash.sh
@@ -1691,7 +1693,7 @@ write_files:
       # construction -- replicas render concurrently with a bootstrap that has
       # not booted -- and baking it is what produced `https:///healthz`.
       VIP_RENDERED={{ include "kubernetes-cluster.controlPlaneEndpoint" . | quote }}
-      VIP=$(bash /etc/kubernetes/resolve-cp-endpoint.sh) || VIP=""
+      VIP=$(bash /etc/kubernetes/resolve-node-extra.sh cp_endpoint) || VIP=""
       if [ -z "$VIP" ]; then
         VIP="$VIP_RENDERED"
         echo "[$(date -Iseconds)] Ironic published no extra.cp_endpoint; falling back to rendered endpoint '"'"'$VIP'"'"'"
@@ -1758,26 +1760,27 @@ write_files:
       #
       # Same credentials publish-join.sh uses for the reverse direction, and
       # the same management API the VIP health-check path already depends on.
-      MGMT_API={{ .Values.managementCluster.apiUrl | quote }}
-      MGMT_NS={{ include "kubernetes-cluster.lifecycleNamespace" . | quote }}
-      BOOTSTRAP_NODE={{ include "kubernetes-cluster.cpNodeName" . | quote }}
-      BEARER={{ include "kubernetes-cluster.cpToken" . | quote }}
-      NODE_URL="${MGMT_API}/apis/{{ include "kubernetes-cluster.nodeApiVersion" . }}/namespaces/${MGMT_NS}/baremetalnodes/${BOOTSTRAP_NODE}"
-      BOOTSTRAP_ETCD=""
-      for i in $(seq 1 120); do
-        ETCD_IP=$(curl -k -s --max-time 5 \
-          -H "Authorization: Bearer $BEARER" \
-          "$NODE_URL" 2>/dev/null \
-          | jq -r '.spec.extra.etcd_ip // empty' 2>/dev/null)
-        if [ -n "$ETCD_IP" ]; then
-          BOOTSTRAP_ETCD="https://${ETCD_IP}:2379"
-          echo "[$(date -Iseconds)] bootstrap etcd resolved to $BOOTSTRAP_ETCD on poll $i"
-          break
-        fi
-        sleep 5
-      done
-      test -n "$BOOTSTRAP_ETCD" \
-        || { echo "bootstrap never published spec.extra.etcd_ip — abort"; exit 1; }
+      # v0.13.14: read etcd_ip from IRONIC, not from the management cluster.
+      #
+      # This polled $MGMT_API (http://198.51.100.5:8443) with a bearer token and
+      # jq. It returned empty 120 times and aborted with "bootstrap never
+      # published spec.extra.etcd_ip" -- while the value was sitting in both
+      # Ironic AND the CR the whole time (etcd_ip=192.168.0.201). The channel
+      # was dead, not the data: that address and port belonged to the wg proxy
+      # pod removed for "zero proxies", and it is plain HTTP against an
+      # apiserver port besides.
+      #
+      # The blade publishes to Ironic over its own OOB network and never needs
+      # a management-API path for the join -- ironic-extra-bridge's own header
+      # comment says exactly this. cp_endpoint already resolves that way and
+      # worked on the first try ("resolved cp_endpoint=192.168.0.250:6443 on
+      # poll 53"); etcd_ip was simply left on the old channel. One source of
+      # truth now, the one the publisher writes to.
+      ETCD_IP=$(bash /etc/kubernetes/resolve-node-extra.sh etcd_ip) || ETCD_IP=""
+      test -n "$ETCD_IP" \
+        || { echo "bootstrap never published extra.etcd_ip to Ironic — abort"; exit 1; }
+      BOOTSTRAP_ETCD="https://${ETCD_IP}:2379"
+      echo "[$(date -Iseconds)] bootstrap etcd resolved to $BOOTSTRAP_ETCD"
       ETCDCTL_AUTH="--cacert=/etc/kubernetes/pki-chart/etcd-ca.crt \
         --cert=/etc/kubernetes/pki-chart/etcd-client.crt \
         --key=/etc/kubernetes/pki-chart/etcd-client.key"
@@ -1866,7 +1869,7 @@ write_files:
 {{- include "kubernetes-cluster.kubeadmPkiWriteFiles" . | nindent 2 }}
 {{- include "kubernetes-cluster.kubeadmJoinWriteFiles" . | nindent 2 }}
 {{- include "kubernetes-cluster.publishDeployedHashWriteFiles" . | nindent 2 }}
-{{- include "kubernetes-cluster.resolveCpEndpointWriteFiles" . | nindent 2 }}
+{{- include "kubernetes-cluster.resolveNodeExtraWriteFiles" . | nindent 2 }}
 runcmd:
   # v0.12.7: publish FIRST (see bootstrap CP rationale).
   - bash /etc/kubernetes/publish-deployed-hash.sh
