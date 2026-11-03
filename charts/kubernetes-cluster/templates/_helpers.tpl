@@ -867,6 +867,26 @@ write_files:
         | sed -e 's|/usr/lib/cni|/opt/cni/bin|g' \
               -e 's|SystemdCgroup = false|SystemdCgroup = true|g' \
         > /etc/containerd/config.toml
+      # v0.13.17: ASSERT the substitution landed, do not assume it.
+      #
+      # Both seds are string matches against whatever `containerd config
+      # default` emits, and that output changed shape in containerd 2.x:
+      # config `version = 3` with renamed plugin paths. If the SystemdCgroup
+      # match silently misses, containerd runs cgroupfs while kubelet defaults
+      # to systemd, and the mismatch kills containers roughly every 11 seconds
+      # — observed as etcd and apiserver flapping 14-28 times in a fresh
+      # bringup. That failure is expensive to diagnose and trivial to detect
+      # here, so detect it here.
+      grep -q 'SystemdCgroup = true' /etc/containerd/config.toml || {
+        echo "containerd config: SystemdCgroup=true NOT set after patching." >&2
+        echo "  `containerd config default` output shape probably changed" >&2
+        echo "  (containerd 2.x uses config version 3). kubelet defaults to" >&2
+        echo "  cgroupDriver: systemd, so proceeding would flap every ~11s." >&2
+        echo "  containerd version: $(containerd --version 2>&1)" >&2
+        grep -n 'SystemdCgroup' /etc/containerd/config.toml >&2 || echo "  no SystemdCgroup key at all" >&2
+        exit 1
+      }
+      echo "containerd config: SystemdCgroup=true confirmed ($(containerd --version 2>&1 | awk '{print $3}'))"
       # systemctl enable --now doesn't restart a unit that's already
       # running; Debian's containerd apt-package enables+starts on
       # install, so without an explicit restart the new config.toml is
@@ -1486,6 +1506,26 @@ write_files:
         | sed -e 's|/usr/lib/cni|/opt/cni/bin|g' \
               -e 's|SystemdCgroup = false|SystemdCgroup = true|g' \
         > /etc/containerd/config.toml
+      # v0.13.17: ASSERT the substitution landed, do not assume it.
+      #
+      # Both seds are string matches against whatever `containerd config
+      # default` emits, and that output changed shape in containerd 2.x:
+      # config `version = 3` with renamed plugin paths. If the SystemdCgroup
+      # match silently misses, containerd runs cgroupfs while kubelet defaults
+      # to systemd, and the mismatch kills containers roughly every 11 seconds
+      # — observed as etcd and apiserver flapping 14-28 times in a fresh
+      # bringup. That failure is expensive to diagnose and trivial to detect
+      # here, so detect it here.
+      grep -q 'SystemdCgroup = true' /etc/containerd/config.toml || {
+        echo "containerd config: SystemdCgroup=true NOT set after patching." >&2
+        echo "  `containerd config default` output shape probably changed" >&2
+        echo "  (containerd 2.x uses config version 3). kubelet defaults to" >&2
+        echo "  cgroupDriver: systemd, so proceeding would flap every ~11s." >&2
+        echo "  containerd version: $(containerd --version 2>&1)" >&2
+        grep -n 'SystemdCgroup' /etc/containerd/config.toml >&2 || echo "  no SystemdCgroup key at all" >&2
+        exit 1
+      }
+      echo "containerd config: SystemdCgroup=true confirmed ($(containerd --version 2>&1 | awk '{print $3}'))"
       # systemctl enable --now doesn't restart a unit that's already
       # running; Debian's containerd apt-package enables+starts on
       # install, so without an explicit restart the new config.toml is
@@ -1641,6 +1681,26 @@ write_files:
         | sed -e 's|/usr/lib/cni|/opt/cni/bin|g' \
               -e 's|SystemdCgroup = false|SystemdCgroup = true|g' \
         > /etc/containerd/config.toml
+      # v0.13.17: ASSERT the substitution landed, do not assume it.
+      #
+      # Both seds are string matches against whatever `containerd config
+      # default` emits, and that output changed shape in containerd 2.x:
+      # config `version = 3` with renamed plugin paths. If the SystemdCgroup
+      # match silently misses, containerd runs cgroupfs while kubelet defaults
+      # to systemd, and the mismatch kills containers roughly every 11 seconds
+      # — observed as etcd and apiserver flapping 14-28 times in a fresh
+      # bringup. That failure is expensive to diagnose and trivial to detect
+      # here, so detect it here.
+      grep -q 'SystemdCgroup = true' /etc/containerd/config.toml || {
+        echo "containerd config: SystemdCgroup=true NOT set after patching." >&2
+        echo "  `containerd config default` output shape probably changed" >&2
+        echo "  (containerd 2.x uses config version 3). kubelet defaults to" >&2
+        echo "  cgroupDriver: systemd, so proceeding would flap every ~11s." >&2
+        echo "  containerd version: $(containerd --version 2>&1)" >&2
+        grep -n 'SystemdCgroup' /etc/containerd/config.toml >&2 || echo "  no SystemdCgroup key at all" >&2
+        exit 1
+      }
+      echo "containerd config: SystemdCgroup=true confirmed ($(containerd --version 2>&1 | awk '{print $3}'))"
       # systemctl enable --now doesn't restart a unit that's already
       # running; Debian's containerd apt-package enables+starts on
       # install, so without an explicit restart the new config.toml is
