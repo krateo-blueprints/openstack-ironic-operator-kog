@@ -820,13 +820,31 @@ write_files:
       # since 2026-02-01". The packages themselves still come from
       # pkgs.k8s.io over HTTPS; this only disables the signature check.
       echo "deb [trusted=yes] https://pkgs.k8s.io/core:/stable:/{{ regexReplaceAll "^(v[0-9]+\\.[0-9]+).*" .Values.k8sVersion "${1}" }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
+      # v0.13.17: containerd 2.x, from Docker's repo, for CONFORMANCE.
+      #
+      # Debian trixie offers containerd 1.7.24 and NOTHING ELSE
+      # (apt-cache policy: Candidate: 1.7.24~ds1-6+deb13u1). The CNCF suite's
+      #   [sig-node] ImageVolume ... (common/node/image_volume.go:119)
+      # mounts an OCI image as a volume, which requires runtime support that
+      # landed in the containerd 2.x line. On 1.7.24 the test pod never reaches
+      # Running and the spec times out after five minutes. It is not a
+      # configuration problem and no feature gate fixes it: the capability is
+      # absent from the runtime, so this is a property of the BASE IMAGE rather
+      # than of the chart's logic.
+      #
+      # download.docker.com is what the Kubernetes documentation prescribes and
+      # what certified installers use, and `containerd.io` tracks the 2.x line
+      # while staying apt-managed. Same `trusted=yes` rationale as the k8s repo
+      # above: trixie's sqv rejects v3 signature packets, the transport is still
+      # HTTPS, and this only skips the signature check.
+      echo "deb [trusted=yes] https://download.docker.com/linux/debian trixie stable" > /etc/apt/sources.list.d/docker.list
       apt-get update
       # Resolve the full Debian package version including the upstream
       # revision suffix (older minors ship -1.1, v1.36+ ships -2.1, etc.)
       # by querying apt-cache rather than hard-coding `-1.1`.
       K8S_PKG_VER=$(apt-cache madison kubelet | awk -v v="{{ trimPrefix "v" .Values.k8sVersion }}" '$3 ~ "^"v"-" {print $3; exit}')
       test -n "$K8S_PKG_VER"
-      apt-get install -y kubelet="$K8S_PKG_VER" kubeadm="$K8S_PKG_VER" kubectl="$K8S_PKG_VER" containerd etcd-client jq
+      apt-get install -y kubelet="$K8S_PKG_VER" kubeadm="$K8S_PKG_VER" kubectl="$K8S_PKG_VER" containerd.io etcd-client jq
       apt-mark hold kubelet kubeadm kubectl
       bash /etc/kubernetes/publish-stage.sh k8s-packages-installed
       # Debian 13 trixie's containerd ships with bin_dir = "/usr/lib/cni" by
@@ -1422,13 +1440,31 @@ write_files:
       # sqv rejects the k8s repo Release.key as Signature Packet v3 not considered
       # secure since 2026-02-01. Packages still come from pkgs.k8s.io over HTTPS.
       echo "deb [trusted=yes] https://pkgs.k8s.io/core:/stable:/{{ regexReplaceAll "^(v[0-9]+\\.[0-9]+).*" .Values.k8sVersion "${1}" }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
+      # v0.13.17: containerd 2.x, from Docker's repo, for CONFORMANCE.
+      #
+      # Debian trixie offers containerd 1.7.24 and NOTHING ELSE
+      # (apt-cache policy: Candidate: 1.7.24~ds1-6+deb13u1). The CNCF suite's
+      #   [sig-node] ImageVolume ... (common/node/image_volume.go:119)
+      # mounts an OCI image as a volume, which requires runtime support that
+      # landed in the containerd 2.x line. On 1.7.24 the test pod never reaches
+      # Running and the spec times out after five minutes. It is not a
+      # configuration problem and no feature gate fixes it: the capability is
+      # absent from the runtime, so this is a property of the BASE IMAGE rather
+      # than of the chart's logic.
+      #
+      # download.docker.com is what the Kubernetes documentation prescribes and
+      # what certified installers use, and `containerd.io` tracks the 2.x line
+      # while staying apt-managed. Same `trusted=yes` rationale as the k8s repo
+      # above: trixie's sqv rejects v3 signature packets, the transport is still
+      # HTTPS, and this only skips the signature check.
+      echo "deb [trusted=yes] https://download.docker.com/linux/debian trixie stable" > /etc/apt/sources.list.d/docker.list
       apt-get update
       # Resolve the full Debian package version including upstream revision
       # suffix (older minors -1.1, v1.36+ -2.1, etc.) via apt-cache instead
       # of hard-coding `-1.1`.
       K8S_PKG_VER=$(apt-cache madison kubelet | awk -v v="{{ trimPrefix "v" .Values.k8sVersion }}" '$3 ~ "^"v"-" {print $3; exit}')
       test -n "$K8S_PKG_VER"
-      apt-get install -y kubelet="$K8S_PKG_VER" kubeadm="$K8S_PKG_VER" containerd jq
+      apt-get install -y kubelet="$K8S_PKG_VER" kubeadm="$K8S_PKG_VER" containerd.io jq
       apt-mark hold kubelet kubeadm
       # Debian 13 trixie's containerd ships with bin_dir = "/usr/lib/cni" by
       # default. Flannel's install-cni-plugin initContainer (and kubeadm)
@@ -1559,13 +1595,31 @@ write_files:
       # since 2026-02-01". The packages themselves still come from
       # pkgs.k8s.io over HTTPS; this only disables the signature check.
       echo "deb [trusted=yes] https://pkgs.k8s.io/core:/stable:/{{ regexReplaceAll "^(v[0-9]+\\.[0-9]+).*" .Values.k8sVersion "${1}" }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
+      # v0.13.17: containerd 2.x, from Docker's repo, for CONFORMANCE.
+      #
+      # Debian trixie offers containerd 1.7.24 and NOTHING ELSE
+      # (apt-cache policy: Candidate: 1.7.24~ds1-6+deb13u1). The CNCF suite's
+      #   [sig-node] ImageVolume ... (common/node/image_volume.go:119)
+      # mounts an OCI image as a volume, which requires runtime support that
+      # landed in the containerd 2.x line. On 1.7.24 the test pod never reaches
+      # Running and the spec times out after five minutes. It is not a
+      # configuration problem and no feature gate fixes it: the capability is
+      # absent from the runtime, so this is a property of the BASE IMAGE rather
+      # than of the chart's logic.
+      #
+      # download.docker.com is what the Kubernetes documentation prescribes and
+      # what certified installers use, and `containerd.io` tracks the 2.x line
+      # while staying apt-managed. Same `trusted=yes` rationale as the k8s repo
+      # above: trixie's sqv rejects v3 signature packets, the transport is still
+      # HTTPS, and this only skips the signature check.
+      echo "deb [trusted=yes] https://download.docker.com/linux/debian trixie stable" > /etc/apt/sources.list.d/docker.list
       apt-get update
       # Resolve the full Debian package version including the upstream
       # revision suffix (older minors ship -1.1, v1.36+ ships -2.1, etc.)
       # by querying apt-cache rather than hard-coding `-1.1`.
       K8S_PKG_VER=$(apt-cache madison kubelet | awk -v v="{{ trimPrefix "v" .Values.k8sVersion }}" '$3 ~ "^"v"-" {print $3; exit}')
       test -n "$K8S_PKG_VER"
-      apt-get install -y kubelet="$K8S_PKG_VER" kubeadm="$K8S_PKG_VER" kubectl="$K8S_PKG_VER" containerd etcd-client jq
+      apt-get install -y kubelet="$K8S_PKG_VER" kubeadm="$K8S_PKG_VER" kubectl="$K8S_PKG_VER" containerd.io etcd-client jq
       apt-mark hold kubelet kubeadm kubectl
       # Debian 13 trixie's containerd ships with bin_dir = "/usr/lib/cni" by
       # default. Flannel's install-cni-plugin initContainer (and kubeadm)
