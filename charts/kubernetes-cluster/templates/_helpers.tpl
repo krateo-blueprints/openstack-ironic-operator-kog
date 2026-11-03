@@ -568,6 +568,27 @@ services:
       advertiseAddress: __ADVERTISE_IP__
       bindPort: 6443
     certificateKey: __CERT_KEY__
+    {{/* v0.13.20: pin the kubelet's node-ip.
+         Without this the init config has NO nodeRegistration at all, so
+         kubelet auto-detects its node IP and on a dual-NIC blade picks the
+         FIRST interface — the OOB network — while everything else the chart
+         configures sits on the data network. Measured on blade01:
+
+           advertiseAddress:  192.168.0.201   (data)
+           etcd peer URL:     192.168.0.201   (data)
+           derived VIP:       192.168.0.250   (data, enp2s0)
+           node InternalIP:   172.19.74.123   (OOB)  <- the odd one out
+           KUBELET_KUBEADM_ARGS=""                   <- no --node-ip anywhere
+
+         The CP REPLICAS were already correct because their JoinConfiguration
+         carries nodeRegistration.kubeletExtraArgs; only the bootstrap and the
+         workers lacked it, which is why blade02/03 reported data-network
+         addresses and blade01 and the workers did not. __ADVERTISE_IP__ is
+         already substituted by the same sed that fills advertiseAddress. */}}
+    nodeRegistration:
+      kubeletExtraArgs:
+        - name: node-ip
+          value: __ADVERTISE_IP__
     ---
     apiVersion: kubeadm.k8s.io/v1beta4
     kind: ClusterConfiguration
@@ -1629,6 +1650,23 @@ write_files:
       # Use --discovery-token-unsafe-skip-ca-verification — the bootstrap
       # token's signature validates cluster identity, so MITM on the
       # CA cert delivery is detected at token verification time.
+      # v0.13.20: pin the worker's node-ip too. `kubeadm join` has no
+      # --node-ip flag in its CLI form, so it goes to the kubelet via
+      # /etc/default/kubelet, which kubeadm's systemd drop-in sources. Derived
+      # from the VIP's /24 so workers report the same network as the control
+      # plane; without it kubelet picks the first NIC (the OOB network) and the
+      # cluster reports addresses on two different networks.
+      NODE_IP_PREFIX=$(echo "$VIP" | awk -F: '{print $1}' | awk -F. '{print $1"."$2"."$3"."}')
+      NODE_IP=$(ip -o -4 addr show \
+        | awk -v p="$NODE_IP_PREFIX" '$4 ~ "^"p {sub("/.*","",$4); print $4; exit}')
+      if [ -n "$NODE_IP" ]; then
+        echo "KUBELET_EXTRA_ARGS=--node-ip=$NODE_IP" > /etc/default/kubelet
+        echo "worker node-ip pinned to $NODE_IP (from VIP prefix $NODE_IP_PREFIX)"
+      else
+        # Not fatal: the join still works, the node just reports whichever
+        # address kubelet picks. Say so rather than failing a working join.
+        echo "WARNING: no address in $NODE_IP_PREFIX0/24; leaving node-ip to kubelet autodetect" >&2
+      fi
       kubeadm join "$VIP" \
         --token "$TOKEN" \
         --discovery-token-unsafe-skip-ca-verification
