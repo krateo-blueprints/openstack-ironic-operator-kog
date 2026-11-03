@@ -1309,11 +1309,44 @@ write_files:
         # cluster disagree about pod addressing and routing silently
         # breaks across nodes.
         #
-        # k8sServiceHost/Port point cilium-agent at the control-plane
-        # endpoint directly rather than at the in-cluster kubernetes
-        # Service. kube-proxy is still present so the Service would work,
-        # but on an HA cluster the endpoint is the kube-vip VIP and going
-        # direct removes a dependency on kube-proxy being healthy first.
+        # v0.13.18: k8sServiceHost/Port are resolved at RUNTIME.
+        #
+        # They used to come from the controlPlaneVip helper, which is EMPTY on
+        # every HA render for the same reason the VIP bake was: the address is
+        # derived by arping after this node boots, so the chart cannot know it.
+        # The flags were therefore omitted entirely, and that was survivable
+        # only while kube-proxy existed to implement the in-cluster `kubernetes`
+        # Service.
+        #
+        # With kubeProxyReplacement=true and the kube-proxy addon skipped,
+        # NOTHING implements that Service until Cilium itself is up — so
+        # cilium-agent cannot reach the apiserver, its init container
+        # crash-loops, and `helm --wait` sits for its full ten minutes before
+        # failing. Measured: `Init:CrashLoopBackOff`, 7 restarts, two helm
+        # attempts burning "context deadline exceeded" back to back.
+        #
+        # /etc/kubernetes/cp-endpoint was written by the arping derivation
+        # above and holds the VIP; ADVERTISE_IP is this node's own address and
+        # is the single-CP fallback. Both are known by this point.
+        CILIUM_K8S_HOST=""; CILIUM_K8S_PORT="6443"
+        if [ -s /etc/kubernetes/cp-endpoint ]; then
+          CILIUM_K8S_HOST=$(cut -d: -f1 < /etc/kubernetes/cp-endpoint)
+          CILIUM_K8S_PORT=$(cut -d: -f2 < /etc/kubernetes/cp-endpoint)
+        fi
+        [ -n "$CILIUM_K8S_HOST" ] || CILIUM_K8S_HOST="$ADVERTISE_IP"
+        {{- if (.Values.cni).kubeProxyReplacement }}
+        # Fail loudly rather than spend two hours in `helm --wait`: without an
+        # apiserver address Cilium cannot start, and with kube-proxy skipped
+        # there is no fallback path for it to find one.
+        [ -n "$CILIUM_K8S_HOST" ] || {
+          echo "kubeProxyReplacement=true but no apiserver address for cilium-agent:" >&2
+          echo "  /etc/kubernetes/cp-endpoint: $(cat /etc/kubernetes/cp-endpoint 2>/dev/null || echo '<absent>')" >&2
+          echo "  ADVERTISE_IP: ${ADVERTISE_IP:-<empty>}" >&2
+          echo "  kube-proxy is skipped, so nothing implements the kubernetes Service — abort" >&2
+          exit 1
+        }
+        {{- end }}
+        echo "cilium: k8sServiceHost=$CILIUM_K8S_HOST k8sServicePort=$CILIUM_K8S_PORT"
         if helm upgrade --install cilium cilium/cilium \
              --version {{ .Values.cni.version | default "1.20.4" }} \
              --namespace kube-system \
@@ -1321,10 +1354,8 @@ write_files:
              {{- if (.Values.cni).kubeProxyReplacement }}
              --set kubeProxyReplacement=true \
              {{- end }}
-             {{- with include "kubernetes-cluster.controlPlaneVip" . }}
-             --set k8sServiceHost={{ . }} \
-             --set k8sServicePort=6443 \
-             {{- end }}
+             --set k8sServiceHost="$CILIUM_K8S_HOST" \
+             --set k8sServicePort="$CILIUM_K8S_PORT" \
              --wait --timeout 10m; then
           echo "CNI (cilium) installed on attempt $i"
           bash /etc/kubernetes/publish-stage.sh cilium-installed
