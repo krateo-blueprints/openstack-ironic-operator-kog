@@ -24,6 +24,24 @@ k8sVersion: v1.36.6
 cni:
   install: cilium
   version: "1.20.4"
+  # v0.13.16: replace kube-proxy with Cilium's BPF implementation.
+  #
+  # Required for CONFORMANCE. The CNCF suite's
+  #   [sig-network] HostPort — no conflict between pods with same hostPort,
+  #                            different hostIP and protocol [Conformance]
+  # fails otherwise, because nothing implements hostPort: Cilium only does so
+  # under kube-proxy replacement, and it is not chained with the `portmap` CNI
+  # plugin either. Measured on a live cluster with kube-proxy 6/6 Ready and
+  # `kube-proxy-replacement: false` — a running kube-proxy does NOT cover it.
+  #
+  # Also unblocks Service type=LoadBalancer: Cilium LB-IPAM and L2
+  # announcements both require this to be true.
+  #
+  # When true the kube-proxy addon is skipped at `kubeadm init`, so it is never
+  # installed rather than installed and deleted. k8sServiceHost/Port must be
+  # set for cilium-agent to reach the apiserver without a Service — they
+  # already are, from the derived VIP.
+  kubeProxyReplacement: true
   # Helm is fetched onto the CP blade at this version (Debian trixie has
   # no helm package). Only used by the cilium path.
   helmVersion: v3.16.4

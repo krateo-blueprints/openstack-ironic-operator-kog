@@ -1230,6 +1230,12 @@ write_files:
       # Kubeadm will detect existing CAs and only generate leaf certs.
       bash /etc/kubernetes/publish-stage.sh kubeadm-init-start
       kubeadm init --upload-certs \
+        {{- if (.Values.cni).kubeProxyReplacement }}
+        {{- /* Never install kube-proxy rather than install-then-delete:
+               Cilium replaces it, and a kube-proxy that briefly owns the
+               iptables rules then disappears leaves stale chains behind. */}}
+        --skip-phases=addon/kube-proxy \
+        {{- end }}
         --config /etc/kubernetes/kubeadm-init.yaml
       bash /etc/kubernetes/publish-stage.sh kubeadm-init-ok
       mkdir -p /root/.kube
@@ -1274,6 +1280,9 @@ write_files:
              --version {{ .Values.cni.version | default "1.20.4" }} \
              --namespace kube-system \
              --set ipam.mode=kubernetes \
+             {{- if (.Values.cni).kubeProxyReplacement }}
+             --set kubeProxyReplacement=true \
+             {{- end }}
              {{- with include "kubernetes-cluster.controlPlaneVip" . }}
              --set k8sServiceHost={{ . }} \
              --set k8sServicePort=6443 \
