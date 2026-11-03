@@ -1,0 +1,83 @@
+# ONE NodeProvision per node. Its `target` is computed; see
+# baremetal-host.transitionTarget in _helpers.tpl for the full reasoning.
+#
+# This replaces transition-deploy / -undeploy / -manage / -inspect / -provide /
+# -clean, each of which rendered its OWN CR gated on the state it was trying to
+# leave. cdc patches what the chart renders and never deletes what disappears
+# from it, so those CRs outlived their gates and kept driving stale targets.
+# Measured: blade05 held `-deploy` (target=active) and `-undeploy`
+# (target=deleted) at the same time and oscillated indefinitely, with the
+# `-undeploy` CR absent from its release's manifest across three successful
+# helm upgrades and still present in the cluster.
+#
+# One name means cdc can only ever PATCH this object, so two contradictory
+# intents cannot coexist. It is rendered UNCONDITIONALLY (given a nodeName and
+# not detached) for the same reason: anything conditional gets left behind
+# holding its last target the moment the condition closes.
+#
+# MIGRATION: the old per-transition CRs cannot be removed by the chart, by cdc,
+# or by helm — nothing deletes them. They must be deleted once, by hand, when
+# upgrading to 0.6.0. After that this design cannot produce another orphan.
+{{- if .Values.nodeName }}
+{{- if not (include "baremetal-host.detached" .) }}
+{{- $target := include "baremetal-host.transitionTarget" . }}
+{{- $configdrive := include "baremetal-host.configdrive" . }}
+{{- $needsConfigdrive := and (eq $target "active") (hasKey .Values "configDrive") }}
+{{- if and $needsConfigdrive (not $configdrive) }}
+{{/* Refuse, visibly. A deploy with an empty configdrive writes the image,
+     boots, and reports `active` while running no cloud-init at all — which is
+     indistinguishable from success at every layer that reports. blade01 sat
+     `active` with an empty /etc/kubernetes for half an hour this way. The
+     parent chart gates configDrive behind a Helm `lookup` of the PKI Secret,
+     so a render that loses the lookup yields an empty one. */}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ printf "%s-deploy-blocked" .Release.Name | trunc 63 | trimSuffix "-" }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: baremetal-host
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    baremetal.ogen.krateo.io/deploy-blocked: "true"
+data:
+  reason: |
+    No provision fired for node {{ .Values.nodeName }}: target was `active` and
+    spec.configDrive was supplied but rendered EMPTY. Deploying would write the
+    image and boot a machine that runs no cloud-init while Ironic reports
+    `active`. The parent chart gates configDrive behind a Helm `lookup` of the
+    kubeadm PKI Secret; that lookup did not resolve on the render that produced
+    this release. Clears itself once a non-empty configDrive renders.
+{{- else }}
+apiVersion: {{ include "baremetal-host.nodeApiVersion" . }}
+kind: NodeProvision
+metadata:
+  name: {{ printf "%s-transition" .Release.Name | trunc 63 | trimSuffix "-" }}
+  namespace: {{ include "baremetal-host.nodeNamespace" . }}
+  {{- if (.Values.debug).connectorVerbose }}
+  annotations:
+    # See values.yaml debug.connectorVerbose. Makes RDC dump the full HTTP
+    # exchange with Ironic, including the faultstring it otherwise drops.
+    krateo.io/connector-verbose: "true"
+  {{- end }}
+  labels:
+    app.kubernetes.io/name: baremetal-host
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    baremetal.ogen.krateo.io/transition: {{ $target | quote }}
+spec:
+  configurationRef:
+    name: {{ include "baremetal-host.configName" . }}
+    namespace: {{ include "baremetal-host.nodeNamespace" . }}
+  node_id: {{ .Values.nodeName | quote }}
+  target: {{ $target | quote }}
+  {{- if and (eq $target "clean") .Values.cleanSteps }}
+  clean_steps: {{- toYaml .Values.cleanSteps | nindent 4 }}
+  {{- end }}
+  {{- if eq $target "active" }}
+  {{- with $configdrive }}
+  configdrive:
+    {{- . | nindent 4 }}
+  {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

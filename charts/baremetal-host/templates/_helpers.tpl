@@ -163,6 +163,62 @@
      threshold (Helm uses BH.metadata.creationTimestamp which is
      stable across renders). Worst case: stuck hardware cycles every
      ~25-30 min; operator can mark spec.detached=true to suppress. */}}
+{{/* v0.6.0: THE desired provision target for this node — one value, computed
+     from desired state and observed state, driving ONE NodeProvision CR.
+
+     WHY THIS REPLACES SIX TEMPLATES. Each transition used to render its own CR
+     (`-deploy` target=active, `-undeploy` target=deleted, plus manage/inspect/
+     provide/clean), gated on the state it was trying to leave. cdc PATCHES what
+     the chart renders and NEVER deletes what disappears from it, so a CR
+     outlived the condition that produced it and then kept driving its old
+     target. Measured on blade05: `-deploy` (target=active) and `-undeploy`
+     (target=deleted) existed SIMULTANEOUSLY, rdc drove the node both ways, and
+     it oscillated available -> deploying -> wait call-back -> available
+     indefinitely. The `-undeploy` CR was absent from its release's rendered
+     manifest across three successful helm upgrades and still present in the
+     cluster.
+
+     So the fix is not a better gate, it is removing the ability to hold two
+     contradictory intents at once. One CR, one name, one target, always
+     rendered — cdc patches it in place and there is never a stale sibling.
+
+     ALWAYS RENDERED is load-bearing. A conditionally-rendered CR would be left
+     behind holding its last target the moment the condition closed, which is
+     precisely the bug. So every state maps to some valid target; where no
+     transition is currently applicable the terminal intent is used and Ironic
+     rejects it with a 409, which is noise rather than harm (22 such 409s
+     measured tonight, all absorbed).
+
+     stuckCallback is DELIBERATELY NOT CONSULTED. It judged "stuck" from the
+     BaremetalNode CR's creationTimestamp — the age of the record, not of the
+     attempt — so it was permanently true and tore down every deploy that
+     reached `wait call-back`. 0.5.7 bounded it; it has no place in a computed
+     target until it can be anchored on Ironic's `provision_updated_at`, which
+     the CRD's status does not carry. Recovering a genuinely hung deploy is
+     worth having and is NOT worth a predicate that fires on every healthy one. */}}
+{{- define "baremetal-host.transitionTarget" -}}
+{{- $state := include "baremetal-host.provisionState" . -}}
+{{- $teardown := or .Values.undeploy (include "baremetal-host.shouldAutoRedeploy" .) -}}
+{{- if $teardown -}}
+deleted
+{{- else if eq $state "enroll" -}}
+manage
+{{- else if eq $state "manageable" -}}
+{{- if and .Values.enableInspection (not (include "baremetal-host.inspectionFinishedAt" .)) -}}
+inspect
+{{- else if .Values.cleanSteps -}}
+clean
+{{- else -}}
+provide
+{{- end -}}
+{{- else -}}
+{{- /* available -> active; and for transient or settled states (deploying,
+       wait call-back, active, cleaning) `active` is the terminal intent and a
+       no-op once reached. */ -}}
+active
+{{- end -}}
+{{- end -}}
+
 {{- define "baremetal-host.shouldRecoverStuckCallback" -}}
 {{- $state := include "baremetal-host.provisionState" . -}}
 {{- if eq $state "wait call-back" -}}
