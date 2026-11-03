@@ -617,7 +617,19 @@ services:
     discovery:
       bootstrapToken:
         token: {{ $tok | quote }}
-        apiServerEndpoint: {{ $cpe | quote }}
+        {{/* v0.13.19: a PLACEHOLDER, substituted by join.sh from the
+             runtime-resolved endpoint. It was `$cpe` -- the render-time
+             controlPlaneEndpoint helper -- which is empty for every HA render
+             because the VIP is derived by arping after the bootstrap boots. So
+             this rendered `apiServerEndpoint: ""` and kubeadm refused the
+             config outright:
+               discovery.bootstrapToken: Required value: APIServerEndpoint is not set
+               apiServerEndpoint: Invalid value: "": missing port in address
+             join.sh had already resolved the VIP correctly for its healthz
+             poll; the value simply never reached this file. Third surface of
+             the same render-time/runtime split, after join.sh's own VIP and
+             kubeadm-init.yaml's controlPlaneEndpoint. */}}
+        apiServerEndpoint: __CP_ENDPOINT__
         caCertHashes:
           - "sha256:__CA_HASH__"
     controlPlane:
@@ -2014,9 +2026,21 @@ write_files:
         sed -e "s|__ADVERTISE_IP__|$ADVERTISE_IP|g" \
             -e "s|__CA_HASH__|$CA_HASH|g" \
             -e "s|__CERT_KEY__|$CERT_KEY|g" \
+            -e "s|__CP_ENDPOINT__|$VIP|g" \
           /etc/kubernetes/kubeadm-join.yaml.template \
           > /etc/kubernetes/kubeadm-join.yaml
         chmod 0600 /etc/kubernetes/kubeadm-join.yaml
+        # Refuse before burning five kubeadm attempts on a config that cannot
+        # work. kubeadm's own message is clear, but it arrives once per attempt
+        # and says nothing about WHERE the endpoint was supposed to come from.
+        if grep -q "__CP_ENDPOINT__" /etc/kubernetes/kubeadm-join.yaml \
+           || grep -qE "^\s*apiServerEndpoint:\s*(\"\")?\s*$" /etc/kubernetes/kubeadm-join.yaml; then
+          echo "[$(date -Iseconds)] apiServerEndpoint unresolved in kubeadm-join.yaml" >&2
+          echo "  VIP as resolved by join.sh: '${VIP:-<empty>}'" >&2
+          echo "  resolver log: $(tail -1 /var/log/resolve-node-extra.log 2>/dev/null)" >&2
+          exit 1
+        fi
+        grep -E "apiServerEndpoint|advertiseAddress" /etc/kubernetes/kubeadm-join.yaml
         if kubeadm join --config /etc/kubernetes/kubeadm-join.yaml; then
           JOIN_OK=yes
           break
