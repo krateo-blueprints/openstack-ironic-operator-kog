@@ -1,0 +1,38 @@
+# Opt-in inspect step (enableInspection: true). Rendered through the FULL inspect window
+# (manageable + inspecting + inspect wait) so the CR persists across the BMC round-trip;
+# if it disappeared during `inspecting` then re-rendered on return to manageable KOG would
+# see a fresh CR and re-fire PUT target=inspect, looping forever.
+#
+# Gated on (inspection_finished_at == "") so we don't keep inspecting after the first
+# completed roundtrip — once Ironic populated inspection_finished_at, we drop the CR and
+# transition-provide takes over.
+{{- if .Values.nodeName }}
+{{- if not (include "baremetal-host.detached" .) }}
+{{- $state := include "baremetal-host.provisionState" . }}
+{{- $finished := include "baremetal-host.inspectionFinishedAt" . }}
+{{- if and .Values.enableInspection (not $finished)
+        (or (eq $state "manageable") (eq $state "inspecting") (eq $state "inspect wait")) }}
+apiVersion: {{ include "baremetal-host.nodeApiVersion" . }}
+kind: NodeProvision
+metadata:
+  name: {{ .Release.Name }}-inspect
+  namespace: {{ include "baremetal-host.nodeNamespace" . }}
+  {{- if (.Values.debug).connectorVerbose }}
+  annotations:
+    # See values.yaml debug.connectorVerbose. Makes RDC dump the full HTTP exchange
+    # with Ironic for this transition, including the faultstring it otherwise drops.
+    krateo.io/connector-verbose: "true"
+  {{- end }}
+  labels:
+    app.kubernetes.io/name: baremetal-host
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    baremetal.ogen.krateo.io/transition: inspect
+spec:
+  configurationRef:
+    name: {{ include "baremetal-host.configName" . }}
+    namespace: {{ include "baremetal-host.nodeNamespace" . }}
+  node_id: {{ .Values.nodeName | quote }}
+  target: inspect
+{{- end }}
+{{- end }}
+{{- end }}

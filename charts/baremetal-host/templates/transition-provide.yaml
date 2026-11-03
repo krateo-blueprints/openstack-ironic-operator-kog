@@ -1,0 +1,35 @@
+# manageable -> available. Gated so it does NOT race transition-inspect when
+# enableInspection is true and inspection hasn't completed yet.
+{{- if .Values.nodeName }}
+{{- if not (include "baremetal-host.detached" .) }}
+{{- if eq (include "baremetal-host.provisionState" .) "manageable" }}
+{{- $okToProvide := true }}
+{{- if .Values.enableInspection }}
+{{- if not (include "baremetal-host.inspectionFinishedAt" .) }}{{- $okToProvide = false }}{{- end }}
+{{- end }}
+{{- if $okToProvide }}
+apiVersion: {{ include "baremetal-host.nodeApiVersion" . }}
+kind: NodeProvision
+metadata:
+  name: {{ .Release.Name }}-provide
+  namespace: {{ include "baremetal-host.nodeNamespace" . }}
+  {{- if (.Values.debug).connectorVerbose }}
+  annotations:
+    # See values.yaml debug.connectorVerbose. Makes RDC dump the full HTTP exchange
+    # with Ironic for this transition, including the faultstring it otherwise drops.
+    krateo.io/connector-verbose: "true"
+  {{- end }}
+  labels:
+    app.kubernetes.io/name: baremetal-host
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    baremetal.ogen.krateo.io/transition: provide
+spec:
+  configurationRef:
+    name: {{ include "baremetal-host.configName" . }}
+    namespace: {{ include "baremetal-host.nodeNamespace" . }}
+  node_id: {{ .Values.nodeName | quote }}
+  target: provide
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}
