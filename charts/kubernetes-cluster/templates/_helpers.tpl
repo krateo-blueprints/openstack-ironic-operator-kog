@@ -692,15 +692,22 @@ services:
         "$AUTH_URL/v3/auth/tokens" 2>/dev/null \
         | grep -i 'x-subject-token' | awk '{print $2}' | tr -d '\r')
       if [ -n "$TOKEN" ]; then
-        EP=$(KEY="$KEY" curl -sS --max-time 15 \
+        EP=$(curl -sS --max-time 15 \
           -H "X-Auth-Token: $TOKEN" \
           -H "X-OpenStack-Ironic-API-Version: 1.81" \
           "$IRONIC_URL/v1/nodes/$BOOTSTRAP" 2>/dev/null \
-          | python3 -c "import sys,json; d=json.load(sys.stdin); import os; print((d.get('extra') or {}).get(os.environ['KEY']) or '')" 2>/dev/null)
+          | python3 -c "import sys,json; print((json.load(sys.stdin).get('extra') or {}).get(sys.argv[1]) or '')" "$KEY" 2>/dev/null)
         if [ -n "$EP" ]; then
           log "resolved $KEY=$EP on poll $i"
           printf '%s' "$EP"
           exit 0
+        fi
+        # Say so when the call SUCCEEDED but the key was not there. Without
+        # this the loop is indistinguishable from "not published yet", which
+        # is how a KeyError in this very pipeline burned a whole deploy cycle
+        # looking like a patient wait.
+        if [ -z "$EP" ] && { [ "$i" = "1" ] || [ $((i % 20)) = "0" ]; }; then
+          log "poll $i: token ok, but extra.$KEY not present in the response"
         fi
       else
         log "poll $i: no keystone token"
