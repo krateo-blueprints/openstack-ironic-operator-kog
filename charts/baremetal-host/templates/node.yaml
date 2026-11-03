@@ -2,6 +2,7 @@
 # spec.configDrive (see _helpers.tpl). Only emit instance_info when image.source is set,
 # otherwise Ironic complains about empty image_source on the way to active.
 {{- if .Values.nodeName }}
+{{- include "baremetal-host.validateConfigDrive" . -}}
 {{- $instanceInfo := include "baremetal-host.instanceInfo" . | fromYaml }}
 {{- $cdHash := include "baremetal-host.configDriveHash" . }}
 apiVersion: {{ include "baremetal-host.nodeApiVersion" . }}

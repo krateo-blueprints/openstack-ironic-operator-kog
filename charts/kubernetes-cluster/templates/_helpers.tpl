@@ -694,12 +694,7 @@ services:
           -H "X-Auth-Token: $TOKEN" \
           -H "X-OpenStack-Ironic-API-Version: 1.81" \
           "$IRONIC_URL/v1/nodes/$BOOTSTRAP" 2>/dev/null \
-          | python3 -c "import sys,json
-try:
-    d=json.load(sys.stdin)
-except Exception:
-    print(''); raise SystemExit(0)
-print(((d.get('extra') or {}).get('cp_endpoint') or ''))" 2>/dev/null)
+          | python3 -c "import sys,json; d=json.load(sys.stdin); print((d.get('extra') or {}).get('cp_endpoint') or '')" 2>/dev/null)
         if [ -n "$EP" ]; then
           log "resolved cp_endpoint=$EP on poll $i"
           printf '%s' "$EP"

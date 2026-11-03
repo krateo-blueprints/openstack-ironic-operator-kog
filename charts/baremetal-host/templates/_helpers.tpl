@@ -50,8 +50,45 @@
      canonical Ironic shape with snake_case keys: {meta_data, user_data, network_data} —
      this is the dict form documented for the provision PUT body (microversion >= 1.60).
      Used by transition-deploy.yaml. */}}
+{{/* v0.6.2: see the comment in configdrive. Called from node.yaml too, because
+     node.yaml renders unconditionally while configdrive is only reached through
+     the state-gated deploy template -- so a guard living only there cannot be
+     exercised by `helm template`, which is exactly how the broken user-data
+     shipped in the first place. */}}
+{{- define "baremetal-host.validateConfigDrive" -}}
+{{- $cd := .Values.configDrive | default dict -}}
+{{- if $cd.userData -}}
+{{- $parsed := fromYaml $cd.userData -}}
+{{- if hasKey $parsed "Error" -}}
+{{- fail (printf "configDrive.userData for node %s is not valid YAML, so cloud-init would silently discard ALL of it and boot an inert machine that still reports `active`. Parser said: %s" (.Values.nodeName | default "<unnamed>") (get $parsed "Error")) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "baremetal-host.configdrive" -}}
 {{- $cd := .Values.configDrive | default dict -}}
+{{/* v0.6.2: FAIL THE RENDER if userData is not parseable YAML.
+
+     cloud-init silently discards user-data it cannot parse. The network stage
+     still runs (network_data is a separate document), so the machine boots,
+     gets its NICs, answers SSH, and Ironic reports `active` -- while no
+     ssh_pwauth, no write_files and no runcmd were ever applied. Every layer
+     reports success and the machine does nothing.
+
+     Measured: kubernetes-cluster 0.13.9 added a multi-line `python3 -c`
+     snippet to resolve-cp-endpoint.sh whose continuation lines sat at column 3
+     and so dedented out of the enclosing `content: |` block scalar. That
+     invalidated the WHOLE cloud-config:
+
+       ParserError ... expected <block end>, but found '?'
+       in "<unicode string>", line 903, column 3:   try:
+
+     49,704 bytes of user-data, attached to the node, entirely inert. It cost
+     two full six-node rebuilds to find, because nothing anywhere reports it.
+
+     A render that fails is recoverable in seconds. A deploy that boots an
+     inert machine is not distinguishable from success at any layer. */}}
+{{- include "baremetal-host.validateConfigDrive" . -}}
 {{- if or $cd.metaData $cd.userData $cd.networkData -}}
 {{- $out := dict "meta_data" ($cd.metaData | default dict) "user_data" ($cd.userData | default "") "network_data" ($cd.networkData | default dict) -}}
 {{- toYaml $out -}}
