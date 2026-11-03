@@ -493,13 +493,26 @@ When a symptom survives one chart cut, the next move is **diagnostics on the liv
 
 Concretely: SSH into the CP, run the relevant `grep`/`journalctl`/`crictl` commands, read the output. The 11-second etcd kill that started this whole journey was visible from `grep cgroupDriver` + `grep SystemdCgroup` in under a minute — we'd burned nine chart cuts speculating before doing that. Don't repeat that mistake.
 
-### Two traps that report success
+### Three traps that report success
 
 Both of these cost most of a day, and both share a shape: **the layer you are watching reports success while the thing you care about has failed.**
 
 **Ironic `active` is not "the node booted".** It means Ironic wrote a disk image, which it did. Whether cloud-init then ran, got a route, installed packages or reached `kubeadm init` is invisible from Ironic — and invisible from the cluster, because a node whose cloud-init aborted publishes nothing, which is indistinguishable from a node whose cloud-init is still running. Port probes do not disambiguate it either: an installed-but-unconfigured kubelet listens on nothing, exactly like an uninstalled one. The only instrument that answers is the blade's own `/var/log/install-k8s.log`.
 
 **Deleting the CR is not decommissioning the machine.** See the Terminating row above.
+
+**Invalid cloud-config is discarded in silence, and the network stage still runs.** cloud-init parses user-data as one YAML document. If any part of it is malformed the whole thing is dropped — no error on the console, nothing in Ironic, nothing in the CR. But `network_data` is a *separate* document, so the machine still boots, still configures both NICs, still answers SSH on its data address, and Ironic still reports `active`. What it does **not** do is apply `ssh_pwauth`, `write_files` or `runcmd` — so there is no kubelet, no kubeadm, and an empty `/etc/kubernetes`.
+
+Two full six-node rebuilds died on this. The cause was a multi-line `python3 -c` snippet whose continuation lines sat at column 3 and so dedented out of the enclosing `content: |` block scalar:
+
+```
+ParserError: expected <block end>, but found '?'
+in "<unicode string>", line 903, column 3:   try:
+```
+
+49,704 bytes of user-data, attached to the node, entirely inert. The tell is **sshd offering only `publickey`** long after deploy while the NICs are up: network stage yes, config stage no.
+
+`baremetal-host` ≥ 0.6.2 fails the render when `configDrive.userData` does not parse, naming the node and quoting the parser. Keep that guard. And when editing an embedded script, keep every line indented inside its block — a single-line `python3 -c` instead of a multi-line one, as the node-uuid lookup already does.
 
 ### Never drive a destructive one-shot from observed state
 
@@ -522,8 +535,43 @@ Every wrong conclusion in this repo's history has been a negative result trusted
 | "core-provider lacks pods RBAC" | `can-i` named a non-existent SA (`core-provider`, not `krateo-core-provider`) |
 | "the release renders 0 BaremetalHosts" | wrong release name; cdc suffixes it (use the `krateo.io/release-name` label) |
 | "five children were orphaned" | looked 60s after apply; they were mid-deletion |
+| "exactly one conformance spec failed" | the grep matched one of **two** failure formats; counting distinct `In [It] at:` sites gave 2 |
+| "cdc never surfaces helm's client log" | the logger **is** wired; its output is discarded behind *two* gates (a `connector-verbose` annotation **and** controller debug logging). Satisfying one gives silence identical to satisfying neither |
+| "`k8sServiceHost` is already set" | `grep -c` returned 1 — matching a **comment**, not the flag. `grep -c -- '--set k8sServiceHost'` returned 0 |
+| "hydrophone failed to start" | the blade had been **re-imaged**; anything installed on it by hand was gone with the disk |
+| "the run is already in progress" | `pgrep -f "hydrophone --conformance"` matched **its own command line** |
+| "six reconciles show `deleted:0`, so deletion is broken" | none of those reconciles **removed** anything; `deleted:0` is correct for a render with nothing to delete |
+| "revision 40 and 41 both show 0 BaremetalHosts" | both revisions had been **pruned** by helm's history limit — the control (`wc -l` = 0) proved the read failed, not that the manifest was empty |
 
 **Pair every negative with a known positive.** `grep` for a string you know exists. Probe a host you know answers. If the control fails too, you have an instrument problem, not a finding.
+
+### A render-time value that can only be known at runtime
+
+The chart renders **before the machine exists**. So any value derived from the provisioned machine — the VIP chosen by `arping`, the join token, the etcd endpoint — is **empty at render time**, always, on a fresh HA deploy. And Helm's `{{ if $x }}` / `{{ with $x }}` *silently omit the whole block* when `$x` is empty, so the failure presents as an **absence** rather than an error.
+
+Four surfaces hit this in a single day, each with a different downstream symptom:
+
+| Where | What was baked | Symptom |
+|---|---|---|
+| `join.sh` | `VIP={{ controlPlaneEndpoint }}` | `curl -k https:///healthz` — a URL with no host — 120 times, then abort |
+| `kubeadm-init.yaml` | `{{ if $cpe }}controlPlaneEndpoint{{ end }}` | line omitted entirely; kubeadm refuses `--control-plane` joins forever after, so the cluster can never become HA |
+| `kubeadm-join.yaml` | `apiServerEndpoint: {{ $cpe }}` | `APIServerEndpoint is not set`, five attempts per replica — while `join.sh` had *already resolved the VIP correctly* |
+| Cilium install | `{{ with controlPlaneVip }}--set k8sServiceHost{{ end }}` | flags omitted. Harmless while kube-proxy existed; the moment it was replaced, nothing implemented the `kubernetes` Service, cilium-agent could not reach the apiserver, and `helm --wait` burned 10 minutes per attempt |
+
+The rule:
+
+> If a value is derived from the provisioned machine, resolve it **at runtime, on the machine, from the store the machine publishes to**. Never bake it at render time. Keep the rendered value only as an explicitly-documented fallback for the topology where it *is* knowable (single-CP), and make the failure path say which value was missing.
+
+`resolve-node-extra.sh <key>` is that mechanism: it reads `node.extra` from Ironic — the store the blade itself publishes to, over the OOB network it already uses — so it depends on neither the management API nor the CR mirror.
+
+**Auditing for the rest of the class is harder than it looks.** Grepping for `NAME={{ include ... }}` finds nothing, because the real instances are a local template variable (`{{- $cpe := include ... }}` used far below) or a flag inside a `with` block. The pass that works:
+
+1. find every `define` whose body contains `lookup` — those are the render-time-empty helpers;
+2. close over helpers that *include* one of those;
+3. find local `$vars` assigned from any of them;
+4. then search for uses of those vars **and** of the helpers directly, anywhere in emitted content.
+
+That found 22 emission sites, of which two were still genuine risks after the first three were fixed.
 
 ---
 
