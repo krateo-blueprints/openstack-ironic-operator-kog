@@ -177,6 +177,54 @@ a re-image would silently take away. The suite does **not** run on boot by
 default — it takes about two hours — and the runcmd entry is last so a failed
 download can never be mistaken for a failed cluster.
 
+**It did not work until 2026-11-04, and the way it failed is the point.** The
+installer fetched its checksum manifest from `<base>/checksums.txt`. That asset
+does not exist: hydrophone publishes `hydrophone_<version>_checksums.txt`, with
+the leading `v` stripped from the tag, and has done so for all nine releases.
+So `curl --fail` returned 404, the script refused to install an unverified
+binary — correctly — and exited 1. Being last in `runcmd`, it never gated
+bring-up. Measured in an amd64 Debian 13 container, which is what the blades
+run:
+
+```
++ curl --fail -sSL -o .../sums .../v0.8.0/checksums.txt
+curl: (22) The requested URL returned error: 404
+FATAL: no checksums.txt for v0.8.0; refusing to install unverified binary
+hydrophone after: ABSENT
+/var/lib/conformance: No such file or directory
+```
+
+The remedy had acquired the disease it was written to cure: a runner baked in
+so a re-image could not silently remove it, which silently installed nothing.
+`--fail` and the refusal-to-install were both right; the URL was wrong, so good
+error handling converted a typo into a silent no-op. **A correct guard on a
+wrong target still fails closed, and failing closed quietly is the shape that
+survives review.**
+
+Three things changed. The checksum name is now derived (`${VER#v}`) and held in
+a variable, so the URL and the error message cannot drift apart again — the old
+message named `checksums.txt` and was perfectly accurate about a file that had
+never existed. A failure now leaves `INSTALL-FAILED.txt` in the output
+directory, because previously the directory was not created at all and "the
+runner failed" was indistinguishable from "the runner was never enabled" at the
+one place anyone looks. And `hydrophone --version` prints a multi-line build
+block whose first line is the program name, so the `| head -1` that recorded
+what got installed recorded `hydrophone` and no version; it now parses the
+`version:` row and writes it into `HOW-TO-RUN.txt`.
+
+**Why this was not caught by running it on blade01.** blade01 already has a
+hand-installed hydrophone, so the script short-circuits on `command -v` and
+reports success without ever reaching the download. The only environment that
+can exercise the install path is one where the binary is absent — the arm that
+looks redundant is the only one that measures anything.
+
+Six arms, all in one container run: fresh install; re-run with the binary
+already present; a bogus version, which must fail **and** leave the marker
+(exit 22, `hydrophone: ABSENT`, marker written); and the checksum verification
+against both a corrupted tarball (`FAILED`, exit 1) and the real one (`OK`,
+exit 0) — because a verification step that cannot reject anything is decoration,
+and the refusal-to-install is the whole reason the checksum is fetched.
+
 ---
 
 ## 4. How the pieces reach each other
@@ -323,6 +371,20 @@ cluster could never have been HA. The trap within the trap: `curl -k` returned
 200 against the apiserver, which looked like proof it worked. It was not — the
 certificate SANs did not contain the VIP. The fix is placeholders substituted
 at runtime, plus assertions that fail loudly.
+
+**And the inverse: a healthy fleet that reports failure forever.** Every
+`BaremetalHost` sits at `Ready=False`, reason `Creating`, message *"1 of 4
+managed children are not ready: nodepowers/..."* — permanently, on a cluster
+where all six machines are `active` and powered on. That is correct. A
+`NodePower` CR exists to fire one `PUT .../states/power`; Ironic answers `202`,
+which sets `Ready=False/Pending`, and that Pending condition is precisely the
+guard that stops the PUT re-firing on the next Observe. A transition CR that
+reached `Ready=True` would be one that had lost its only protection against
+repeating a power operation. So **`Synced`, not `Ready`, is the health column
+for anything owning a transition CR** — and `kubectl get baremetalhosts` shows
+`Ready`. Checked here on 2026-11-04 rather than assumed: `Synced=True
+ReconcileSuccess` on all six, `provision_state=active` and `power_state=power
+on` on all six `BaremetalNode`s.
 
 **Whole-map replay.** `rest-dynamic-controller` sends a `spec` field holding a
 map **entire** on every update. Where the CR models only part of what the

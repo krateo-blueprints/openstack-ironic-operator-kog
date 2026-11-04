@@ -797,16 +797,64 @@ services:
     OUT={{ $out | quote }}
     BASE="https://github.com/kubernetes-sigs/hydrophone/releases/download/${VER}"
     TAR="hydrophone_Linux_x86_64.tar.gz"
+    # The checksum asset is NOT "checksums.txt" -- it is name_version_checksums.txt
+    # with the leading "v" stripped from the tag. Verified against all nine
+    # hydrophone releases (v0.1.0..v0.8.0), so this is the project's pattern and
+    # not a quirk of one tag. Held in a variable precisely so the URL and the
+    # error message below cannot drift apart again: the old message named
+    # "checksums.txt" and was perfectly accurate about a file that never existed.
+    SUMS="hydrophone_${VER#v}_checksums.txt"
+
+    # One EXIT trap, set once, doing both jobs. Bash keeps a SINGLE EXIT trap,
+    # so the `trap 'rm -rf "$WORK"' EXIT` that used to live inside the else
+    # branch would silently REPLACE any trap set out here -- which is how a
+    # failure marker added later would quietly never be written.
+    WORK=""
+    # Distinguishes the two ways this script can fail. With runOnBoot the suite
+    # itself runs here, so "nonzero exit" alone cannot tell "no binary" from
+    # "binary fine, suite failed" -- and a marker claiming hydrophone is absent
+    # when it is sitting on the node sends the reader to the wrong problem.
+    INSTALLED=0
+    mkdir -p "$OUT"
+    cleanup() {
+      rc=$?
+      if [ -n "$WORK" ]; then rm -rf "$WORK"; fi
+      if [ "$rc" -ne 0 ]; then
+        # Without this, a failed install leaves NOTHING in $OUT -- measured
+        # 2026-11-04: the directory was absent entirely, so the one place
+        # anyone looks was indistinguishable from "the runner was never
+        # enabled". Bring-up stays ungated; the failure stops being silent.
+        {
+          if [ "$INSTALLED" -eq 1 ]; then
+            echo "conformance SUITE failed (exit $rc) at $(date -Is)"
+            echo "hydrophone IS installed on this node; the run did not complete."
+          else
+            echo "conformance runner INSTALL failed (exit $rc) at $(date -Is)"
+            echo "Nothing was installed. hydrophone is NOT on this node."
+          fi
+          echo "Full trace: /var/log/install-conformance.log"
+        } > "$OUT/INSTALL-FAILED.txt"
+      else
+        # Clear a stale marker from an earlier failed boot.
+        rm -f "$OUT/INSTALL-FAILED.txt"
+      fi
+    }
+    trap cleanup EXIT
+
+    # `hydrophone --version` prints a MULTI-LINE build block whose first line is
+    # just the program name, so the old `| head -1` recorded "hydrophone" and no
+    # version at all -- a log line whose entire purpose is saying what got
+    # installed, saying nothing. The version is on the `version:` row.
+    hydro_ver() { hydrophone --version 2>&1 | awk '$1=="version:"{print $2; exit}'; }
 
     if command -v hydrophone >/dev/null 2>&1; then
-      echo "hydrophone already present: $(hydrophone --version 2>&1 | head -1)"
+      echo "hydrophone already present: $(hydro_ver) (chart requested $VER)"
     else
       WORK=$(mktemp -d)
-      trap 'rm -rf "$WORK"' EXIT
       # --fail so an HTTP error is an error, not an HTML file fed to tar.
       curl --fail -sSL -o "$WORK/$TAR"        "$BASE/$TAR"
-      curl --fail -sSL -o "$WORK/sums"        "$BASE/checksums.txt" || {
-        echo "FATAL: no checksums.txt for $VER; refusing to install unverified binary" >&2
+      curl --fail -sSL -o "$WORK/sums"        "$BASE/$SUMS" || {
+        echo "FATAL: cannot fetch $SUMS for $VER; refusing to install unverified binary" >&2
         exit 1
       }
       ( cd "$WORK" && grep " ${TAR}\$" sums > sums.one && sha256sum -c sums.one )
@@ -815,10 +863,10 @@ services:
       # Assert rather than assume: a tarball whose layout changed would
       # otherwise leave nothing on PATH and report success.
       command -v hydrophone >/dev/null || { echo "FATAL: hydrophone not on PATH after extract" >&2; exit 1; }
-      echo "installed: $(hydrophone --version 2>&1 | head -1)"
+      echo "installed: $(hydro_ver) (chart requested $VER)"
     fi
+    INSTALLED=1
 
-    mkdir -p "$OUT"
     {{- if $c.runOnBoot }}
     # runOnBoot is ON. ~2h. Results land in $OUT.
     env KUBECONFIG=/etc/kubernetes/admin.conf \
@@ -834,6 +882,10 @@ services:
     Takes roughly two hours. Produces e2e.log and junit_01.xml here.
     Both are what CNCF wants attached to a submission.
     EOT
+    # Append the RESOLVED version. The heredoc above is quoted on purpose, so
+    # this goes in afterwards: whoever opens this file to re-certify needs to
+    # know which runner is on the node, not which one the chart asked for.
+    echo "Runner on this node: hydrophone $(hydro_ver) (chart requested $VER)" >> "$OUT/HOW-TO-RUN.txt"
     echo "runner installed; suite NOT run (conformance.runOnBoot is false)"
     {{- end }}
 {{- end -}}
