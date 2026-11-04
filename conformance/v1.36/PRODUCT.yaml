@@ -72,10 +72,15 @@
 #
 # product_logo_url is OPTIONAL. If supplied it must be SVG, AI or EPS -- NOT a
 # PNG -- and must include the product name. Omitted, CNCF uses the company logo.
+# branding/krateo-akmon-logo.svg satisfies both rules and is served publicly at
+# the URL below; it is left commented out until the vendor decision is made,
+# because a logo is a claim about who is certifying.
+#
+# product_logo_url: https://raw.githubusercontent.com/krateo-blueprints/openstack-ironic-operator-kog/main/branding/krateo-akmon-logo.svg
 
 vendor: TODO                      # pending the decision above
-name: TODO                        # pending the decision above
-version: v0.13.21                 # the PRODUCT version, not Kubernetes'
+name: Krateo Akmon
+version: v0.13.22                 # the PRODUCT version, not Kubernetes'
 website_url: https://krateo.io
 repo_url: https://github.com/krateo-blueprints/openstack-ironic-operator-kog
 documentation_url: https://docs.krateo.io
