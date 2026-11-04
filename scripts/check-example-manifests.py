@@ -144,6 +144,36 @@ def check(files, charts, valid_config_kinds, root, resource_kinds_map=None):
                     f"Generated kinds: {', '.join(sorted(resource_kinds_map))}"
                 )
 
+            # A RestDefinition declaring MORE THAN ONE identifier without an
+            # explicit AND policy gets OR by default, and OR returns on the
+            # FIRST identifier that matches -- so a non-unique identifier can
+            # bind the CR to an arbitrary other object. Measured 2026-11-04 on
+            # an isolated fixture: a CR naming `child-b` adopted `enclosure-a`,
+            # reported Synced=True, and DELETING the CR destroyed enclosure-a
+            # while child-b was never touched. See tests/identifier-arms/.
+            #
+            # Every production RestDefinition here declares exactly ONE
+            # identifier, so this repo is not exposed today. This rule exists so
+            # that adding a second one cannot introduce the hazard silently.
+            if kind == "RestDefinition":
+                res = (d.get("spec") or {}).get("resource") or {}
+                ids = res.get("identifiers") or []
+                if len(ids) > 1:
+                    for v in res.get("verbsDescription") or []:
+                        if v.get("action") != "findby":
+                            continue
+                        pol = str(v.get("identifiersMatchPolicy", "")).strip().upper()
+                        if pol != "AND":
+                            problems.append(
+                                f"{rel}: {res.get('kind')} declares {len(ids)} identifiers "
+                                f"{ids} with findby policy "
+                                f"{v.get('identifiersMatchPolicy', '(omitted -> OR)')!r}. "
+                                f"OR matches on the FIRST identifier that matches, so a "
+                                f"non-unique one can bind -- and delete -- an unrelated "
+                                f"object. Set identifiersMatchPolicy: AND, or reduce to one "
+                                f"identifier."
+                            )
+
             if kind in KIND_TO_CHART and av.startswith("composition.krateo.io/"):
                 want = charts.get(KIND_TO_CHART[kind])
                 if want and av != want:
@@ -184,12 +214,24 @@ def doc_snippets(tmpdir):
 
 
 def targets():
-    """manifests a reader is meant to apply"""
+    """manifests a reader is meant to apply, plus every production RestDefinition"""
     out = sorted(glob.glob(os.path.join(REPO, "examples/**/*.yaml"), recursive=True))
     out += sorted(
         f for f in glob.glob(os.path.join(REPO, "manifests/*.yaml"))
         if "example" in os.path.basename(f) or "quickstart" in os.path.basename(f)
     )
+    # The RestDefinitions themselves, for the multi-identifier rule. They are
+    # not "manifests a reader applies" but they are where the identifier hazard
+    # would be introduced, and a rule over a file list that excludes its own
+    # subject screens nothing -- which is what happened when this rule was
+    # first added.
+    #
+    # tests/ is deliberately NOT included: tests/identifier-arms/ contains an
+    # intentionally-exposed ArmOr fixture whose whole purpose is to exhibit the
+    # hazard, and screening it would make the check fail by design. That
+    # exclusion is asserted in self_test() rather than assumed, so moving or
+    # deleting the fixture cannot quietly empty it.
+    out += sorted(glob.glob(os.path.join(REPO, "manifests/restdefinition-*.yaml")))
     return out
 
 
@@ -256,6 +298,31 @@ def self_test():
             "apiVersion: composition.krateo.io/v0-0-1\nkind: SomethingElse\n"
             "metadata:\n  name: x\n")
 
+        # MULTI-IDENTIFIER ARMS (oasgen-provider#444). OR returns on the FIRST
+        # identifier that matches, so a non-unique one can bind the CR to an
+        # arbitrary other object -- and deleting the CR then DELETES that
+        # object. Measured 2026-11-04: a CR naming `child-b` destroyed
+        # `enclosure-a`. These arms are what make the rule's pass over this
+        # repo's seven single-identifier RestDefinitions mean something.
+        def restdef(name, ids, policy_line):
+            return write(name,
+                "apiVersion: ogen.krateo.io/v1alpha1\nkind: RestDefinition\n"
+                "metadata:\n  name: x\n  namespace: openstack\n"
+                "spec:\n  oasPath: configmap://x/y/z.yaml\n"
+                "  resourceGroup: g.ogen.krateo.io\n  resource:\n    kind: K\n"
+                "    identifiers:\n" + "".join(f"      - {i}\n" for i in ids) +
+                "    verbsDescription:\n      - action: findby\n"
+                "        method: GET\n        path: /v1/things\n" + policy_line)
+
+        multi_or_omitted = restdef("rd-multi-omitted.yaml", ["a", "b"], "")
+        multi_or_explicit = restdef("rd-multi-or.yaml", ["a", "b"],
+                                    "        identifiersMatchPolicy: OR\n")
+        multi_and = restdef("rd-multi-and.yaml", ["a", "b"],
+                            "        identifiersMatchPolicy: AND\n")
+        single_or = restdef("rd-single-or.yaml", ["a"],
+                            "        identifiersMatchPolicy: OR\n")
+        single_omitted = restdef("rd-single-omitted.yaml", ["a"], "")
+
         for label, files, want_hit in (
             # the rules fire on what they should
             ("a stale apiVersion is caught", [bad_version], True),
@@ -271,6 +338,15 @@ def self_test():
             ("a resource on the Configuration version is caught", [bad_res_version], True),
             ("a kind no RestDefinition generates is caught", [ghost_kind], True),
             ("a correct generated resource passes", [good_res], False),
+            # multi-identifier policy: fires on the hazard...
+            ("2 identifiers with the policy OMITTED is caught", [multi_or_omitted], True),
+            ("2 identifiers with an explicit OR is caught", [multi_or_explicit], True),
+            # ...and leaves the safe shapes alone. Without these three the rule
+            # could be tightened to "any OR policy" and nothing would notice,
+            # which would flag all seven of this repo's RestDefinitions.
+            ("2 identifiers with AND passes", [multi_and], False),
+            ("ONE identifier with OR passes", [single_or], False),
+            ("ONE identifier with the policy omitted passes", [single_omitted], False),
         ):
             cases += 1
             problems, seen = check(files, charts, valid, td, rmap)
@@ -286,6 +362,25 @@ def self_test():
         _, seen = check([good], charts, valid, td, rmap)
         if seen != 1:
             failures.append(f"resource counting is wrong: saw {seen}, expected 1")
+
+        # THE EXCLUSION IS ITSELF TESTED. targets() deliberately omits tests/,
+        # because tests/identifier-arms/ holds an intentionally-exposed ArmOr
+        # fixture. If that fixture is moved or deleted, the exclusion silently
+        # protects nothing and this rule loses the only known-positive it has
+        # in the tree. Borrowed from a peer whose test made them justify an
+        # exclusion instead of assuming it.
+        cases += 1
+        fixture = os.path.join(REPO, "tests/identifier-arms/restdefinitions.yaml")
+        if not os.path.exists(fixture):
+            failures.append(
+                "tests/identifier-arms/restdefinitions.yaml is gone -- targets() excludes "
+                "tests/ for its sake, so the exclusion now covers nothing")
+        else:
+            probs, _ = check([fixture], charts, valid, td, rmap)
+            if not probs:
+                failures.append(
+                    "the deliberately-exposed ArmOr fixture no longer trips the "
+                    "multi-identifier rule -- either the fixture or the rule changed")
 
     print(f"  self-test: {cases} cases")
     for f in failures:
