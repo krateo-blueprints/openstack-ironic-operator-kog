@@ -356,9 +356,20 @@ Worth its own section, because the conclusion generalises beyond this repo.
    policy is inert while selector-scoped watching is active, and the
    unlabelled-CR case is unreachable wherever the chart can be installed.
 
-   The one genuine window is a **migration**, not a steady state: a CR created
-   under 0.27.x, where label stamping shipped but scoped watching had not,
-   could pre-exist unlabelled and become invisible on upgrade to 0.28.0+.
+   There is no migration window either. An unlabelled CR predating the policy
+   is **backfilled** on the next RestDefinition reconcile, by a pass that
+   selects on label *absence* (`!krateo.io/oas-version`) and is therefore
+   self-limiting — once it has run the list comes back empty, so it runs every
+   reconcile rather than being a migration step someone could skip. Three
+   independent mechanisms, then: admission stamping with no client filtering
+   (measured above), a chart floor that refuses to install below 1.36, and the
+   backfill.
+
+   The version-dependent behaviour did exist, for exactly one release: at
+   0.27.0 the label was written by the policy *or*, below 1.36 where that API
+   does not exist, by the controller. 0.28.0 raised the floor and made the
+   policy required, closing it by removing the second code path rather than
+   maintaining both.
 
 ---
 
