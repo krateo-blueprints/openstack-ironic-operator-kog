@@ -618,6 +618,46 @@ Serialisation follows the body schema, not the spec, so Ironic keeps seeing
 because its OAS declares the path parameter in the body schema deliberately —
 the two cases come apart on that one line.
 
+### Baseline measured 2026-11-04 on 0.50.0 AND 0.51.0 — the defect is live on a tag
+
+Taken on an **isolated** kind cluster (own kubeconfig, fake-driver Ironic,
+nothing near the fleet) with the real `restdefinition-provision`, `-power` and
+`-port` manifests, so the eventual 0.51.1 run is a **difference** rather than a
+prediction read on its own.
+
+| kind | 0.50.0 | 0.51.0 | the key |
+|---|---|---|---|
+| `nodeprovisions` | `node_id` **absent** | `node_id` **absent** | — |
+| `nodepowers` | `node_id` **absent** | `node_id` **absent** | — |
+| `ports` | `uuid` **absent** | `uuid` **absent** | control arm |
+
+Property sets are **identical** across the two versions, not merely
+similar — `['X-OpenStack-Ironic-API-Version','clean_steps','configdrive','configurationRef','target']`
+for provision, `[...,'target','timeout']` for power, and for ports
+`['address','configurationRef','extra','local_link_connection','node_uuid','physical_network','portgroup_uuid','pxe_enabled']`.
+Note `ports` keeps `node_uuid` (a body field) while losing `uuid` (the mapped
+path parameter), which is the suppression and its boundary in one object.
+
+**0.51.0 does not carry #419's fix**, confirmed independently by the
+maintainer: #421 is the fix and it is an **unmerged draft**, so it is in no
+tag. The two adjacent 0.51.0 log lines are #410 (`excludedSpecFields`, a
+different suppression path) and #409 (a *warning* about an omitted parameter).
+0.51.0 unblocks *cutting* 0.51.1; it does not unblock this probe.
+
+**The change control matters more than the result here.** A first attempt read
+the CRDs after upgrading and found them unchanged — but the resourceVersions
+had not moved (`22053/22069/22086` before and after), because re-applying an
+unchanged RestDefinition is a no-op and nothing regenerated. That "no change"
+would have been a stale schema, not a measurement. Deleting and recreating the
+three RestDefinitions forced regeneration by the 0.51.0 binary
+(`22863/22874/22887`), and only then is "identical" a fact. Checked first that
+all three kinds had **zero** live CRs, because deleting a RestDefinition fires
+the external DELETE on any that exist.
+
+**So prediction 3 now has the prior state it needs.** "`ports`' `uuid` stays
+absent after the fix" was a weak claim while nobody had established it was
+absent before; it is established on both tagged versions now.
+
 **What the 0.51.1 run should show — written down before running it**, so the
 result is read against a prediction rather than rationalised after:
 
