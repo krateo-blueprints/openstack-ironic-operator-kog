@@ -676,6 +676,20 @@ re-render — **fires the external DELETE on every live CR of the kind**. With
 six `BaremetalNode`s and twelve `Port`s on the fleet, that means de-enrolling
 machines from Ironic. It is not available in production.
 
+> **DO NOT use this nudge on `ports`, `portgroups`, `allocations` or
+> `deploytemplates` until oasgen #455 is resolved.** All four declare
+> `excludedSpecFields: [uuid]` while their OAS declares `uuid` as a
+> **path-level** `required: true` parameter on `/v1/<kind>/{uuid}`, and their
+> verbs use that path. From oasgen 0.51.0 (#410/#414) the exclusion is
+> *refused* rather than applied, so a regeneration puts `uuid` back into the
+> spec **and into `required`** — and all 12 live `Port` CRs have
+> `spec.uuid` empty, correctly, because Ironic assigns it. Regenerating those
+> kinds would invalidate every one of them and make the kind uncreatable.
+>
+> **So the unregenerated CRDs are currently protecting this fleet from a
+> schema change.** Uncomfortable, and the reason upstream has put automatic
+> regeneration on hold until #455 has a migration story.
+
 **The safe path is to edit the referenced OAS document**, because `oasHash`
 *is* hashed:
 
