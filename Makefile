@@ -240,6 +240,19 @@ check-examples:   # every manifest a reader is told to apply would actually appl
 	python3 scripts/check-example-manifests.py --self-test && \
 		python3 scripts/check-example-manifests.py
 
+check-mapping-sources:   # every request-direction fieldMapping reads from a field that EXISTS
+	# A mapping declares `inPath: X <- inCustomResource: spec.Y`, and declaring it
+	# has a side effect: oasgen removes X's spec property. So when Y == X the
+	# mapping's own declaration deletes the field it reads from, and the parameter
+	# resolves to nothing on the wire -- oasgen-provider #419, which cost five days
+	# here because the 406 it produced went unread.
+	#
+	# This reads the DOCUMENTS, so it answers before a single API call, and it is
+	# calibrated the hard way: it must find the two known-broken mappings and will
+	# exit NON-ZERO if it finds zero, because #421 is still an unmerged draft and a
+	# clean run therefore means the screen broke, not that the repo healed.
+	python3 -I scripts/check-mapping-sources.py
+
 chart-host-pinned:   # restore the chart versions the LIVE CompositionDefinitions pin
 	# `chart-host` publishes whatever is in Chart.yaml today. The chartrepo pod has
 	# no volumes, so a cluster restart wipes everything it serves and leaves the

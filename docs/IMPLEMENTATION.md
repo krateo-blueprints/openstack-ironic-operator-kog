@@ -908,3 +908,53 @@ release plus the two before it, so v1.36 stays submittable while 1.37 and 1.38
 are current. After that the suite must be re-run against a newer release —
 which is a chart flag now rather than a hand-install, so resuming late costs a
 bring-up and two hours rather than a rediscovery.
+
+### §9.7 — a document-level screen for #419, and the #457 audit that produced it
+
+oasgen #457 asks a question we had not asked: `mappingSuppliedParams` is built
+once over **every** verb into one flat map keyed by parameter name, with no verb
+context, so a mapping declared on one verb removes the spec property for **all**
+verbs. A verb with neither a mapping of its own nor a status source then has
+nowhere left to read the value from, and nothing warns.
+
+Audited all seven RestDefinitions, per verb, per required parameter:
+
+```
+UNRESOLVABLE combinations: NONE
+```
+
+with two rows worth naming:
+
+| resource | verb | resolvable by |
+|---|---|---|
+| `ports` | `GET /v1/ports/{uuid}` | `status` **only** |
+| `NodePower`, `NodeProvision` | `PUT` | `mapped-here` **only** |
+
+`ports` is fine via status, exactly as #457 predicted. The second row is the
+interesting one, because it made the audit's own weakness visible: **"mapped-here"
+is necessary, not sufficient.** A mapping is only usable if its *source* exists —
+and #419 is precisely a mapping whose source is the property the mapping itself
+suppressed. The first audit would have cleared it.
+
+Refining it to check each mapping's `inCustomResource` actually resolves:
+
+```
+restdefinition-port.yaml       DELETE  uuid     <- status.uuid    OK
+restdefinition-power.yaml      PUT     node_id  <- spec.node_id   BROKEN (mapping-suppressed)
+restdefinition-provision.yaml  PUT     node_id  <- spec.node_id   BROKEN (mapping-suppressed)
+```
+
+That is **#419, found from the documents alone** — no cluster, no API call. It is
+shipped as `scripts/check-mapping-sources.py` / `make check-mapping-sources`.
+
+Its calibration is the part worth keeping. #421 is an unmerged draft, so the two
+broken mappings **cannot** legitimately be clean, which means a zero is not good
+news — it is a broken instrument. The screen therefore carries the two known rows
+explicitly and **exits non-zero when it finds none**. Verified three ways: it
+finds the two known rows (exit 0), refuses a run where the defect was removed
+from a copy (exit 2), and flags a planted third mapping with a non-existent
+status source (exit 1).
+
+This is [[calibrate-before-trusting-a-zero]] applied to a static check rather
+than to a measurement, and it is the first screen here that answers a wire-level
+defect without touching the wire.
