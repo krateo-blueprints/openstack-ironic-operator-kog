@@ -71,47 +71,116 @@ metadata:
   name: keystone-token-refresher
   namespace: openstack
 data:
-  refresh.sh: |
-    #!/bin/sh
-    set -eu
-    apk add --no-cache curl jq >/dev/null
+  refresh.py: |
+    #!/usr/bin/env python3
+    """Mint a system-scoped Keystone token and patch it into the Secret the
+    <Kind>Configuration CRs reference via `tokenRef`.
 
-    AUTH_URL=$(cat /creds/authUrl)
-    USERNAME=$(cat /creds/username)
-    PASSWORD=$(cat /creds/password)
-    DOMAIN=$(cat /creds/userDomain)
+    Replaces a /bin/sh version that did `apk add --no-cache curl jq` at runtime.
+    That install wrote to the root filesystem, so the container could never run
+    with `readOnlyRootFilesystem: true` (Trivy KSV-0014) -- and it also meant a
+    token refresh failed whenever the alpine mirror was unreachable, on a path
+    whose whole job is keeping credentials current.
 
-    # System-scoped: see the header comment for why project scope breaks enrol.
-    BODY=$(jq -n --arg u "$USERNAME" --arg p "$PASSWORD" --arg d "$DOMAIN" \
-      '{auth:{identity:{methods:["password"],
-         password:{user:{name:$u,password:$p,domain:{name:$d}}}},
-        scope:{system:{all:true}}}}')
+    Stdlib only, on python:3.13-slim -- the same image `ironic-extra-bridge`
+    already uses in this repo, so no new image enters the supply chain.
 
-    # -D captures headers: the token is in X-Subject-Token, not the body. This is
-    # the exact reason ESO cannot stand in for this script.
-    code=$(curl -s -o /tmp/body.json -D /tmp/head.txt -w '%{http_code}' \
-      -X POST -H 'Content-Type: application/json' \
-      --max-time 20 --data "$BODY" "${AUTH_URL}/v3/auth/tokens")
-    if [ "$code" != "201" ] && [ "$code" != "200" ]; then
-      echo "keystone auth failed: HTTP $code"; sed -e 's/[A-Za-z0-9_-]\{30,\}/<redacted>/g' /tmp/body.json; exit 1
-    fi
+    Two things the shell version got right that are easy to lose in a rewrite,
+    kept deliberately:
 
-    TOKEN=$(awk 'BEGIN{IGNORECASE=1} /^X-Subject-Token:/ {print $2}' /tmp/head.txt | tr -d '\r\n')
-    test -n "$TOKEN" || { echo "no X-Subject-Token in response"; exit 1; }
-    EXPIRES=$(jq -r '.token.expires_at // "unknown"' /tmp/body.json)
-    echo "minted token, expires_at=$EXPIRES, length=${#TOKEN}"
+      * the token is in the **X-Subject-Token response header**, not in the body.
+        That is the reason External Secrets Operator cannot stand in for this.
+      * the auth body is built by a JSON serialiser, never by string
+        interpolation. `jq --arg` was doing real work: a password containing a
+        quote or backslash would corrupt a hand-built body. `json.dumps` is the
+        equivalent guarantee.
+    """
+    import base64
+    import json
+    import os
+    import sys
+    import urllib.error
+    import urllib.request
 
-    # Patch the Secret the <Kind>Configuration CRs reference via tokenRef.
-    KAPI=https://kubernetes.default.svc
-    SA=/var/run/secrets/kubernetes.io/serviceaccount
-    B64=$(printf '%s' "$TOKEN" | base64 | tr -d '\n')
-    out=$(curl -s -o /tmp/patch.json -w '%{http_code}' \
-      --cacert "$SA/ca.crt" -H "Authorization: Bearer $(cat $SA/token)" \
-      -H 'Content-Type: application/strategic-merge-patch+json' \
-      -X PATCH "$KAPI/api/v1/namespaces/openstack/secrets/ironic-keystone-token" \
-      --data "{\"data\":{\"token\":\"$B64\"}}")
-    test "$out" = "200" || { echo "secret patch failed: HTTP $out"; cat /tmp/patch.json; exit 1; }
-    echo "ironic-keystone-token updated"
+    CREDS = "/creds"
+    SA = "/var/run/secrets/kubernetes.io/serviceaccount"
+    KAPI = "https://kubernetes.default.svc"
+    NAMESPACE = os.environ.get("TOKEN_SECRET_NAMESPACE", "openstack")
+    SECRET = os.environ.get("TOKEN_SECRET_NAME", "ironic-keystone-token")
+    TIMEOUT = 20
+
+
+    def read(path):
+        with open(path) as fh:
+            return fh.read().strip()
+
+
+    def main():
+        auth_url = read(f"{CREDS}/authUrl")
+        body = json.dumps({
+            "auth": {
+                "identity": {
+                    "methods": ["password"],
+                    "password": {"user": {
+                        "name": read(f"{CREDS}/username"),
+                        "password": read(f"{CREDS}/password"),
+                        "domain": {"name": read(f"{CREDS}/userDomain")},
+                    }},
+                },
+                # System-scoped on purpose: project scope returns 403 on
+                # baremetal:port:create. See the manifest header.
+                "scope": {"system": {"all": True}},
+            }
+        }).encode()
+
+        req = urllib.request.Request(
+            f"{auth_url}/v3/auth/tokens", data=body, method="POST",
+            headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+                # The token is a HEADER. Reading it from the body would silently
+                # yield nothing.
+                token = resp.headers.get("X-Subject-Token")
+                payload = json.loads(resp.read() or b"{}")
+        except urllib.error.HTTPError as e:
+            # Never echo the response body: it can carry request detail. The shell
+            # version redacted with a regex; not emitting it at all is stronger.
+            print(f"keystone auth failed: HTTP {e.code}", file=sys.stderr)
+            return 1
+        except urllib.error.URLError as e:
+            print(f"keystone unreachable: {e.reason}", file=sys.stderr)
+            return 1
+
+        if not token:
+            print("no X-Subject-Token in the response", file=sys.stderr)
+            return 1
+        expires = (payload.get("token") or {}).get("expires_at", "unknown")
+        print(f"minted token, expires_at={expires}, length={len(token)}")
+
+        patch = json.dumps({"data": {
+            "token": base64.b64encode(token.encode()).decode()}}).encode()
+        preq = urllib.request.Request(
+            f"{KAPI}/api/v1/namespaces/{NAMESPACE}/secrets/{SECRET}",
+            data=patch, method="PATCH",
+            headers={"Content-Type": "application/strategic-merge-patch+json",
+                     "Authorization": f"Bearer {read(f'{SA}/token')}"})
+        import ssl
+        ctx = ssl.create_default_context(cafile=f"{SA}/ca.crt")
+        try:
+            with urllib.request.urlopen(preq, timeout=TIMEOUT, context=ctx) as resp:
+                if resp.status != 200:
+                    print(f"secret patch failed: HTTP {resp.status}", file=sys.stderr)
+                    return 1
+        except urllib.error.HTTPError as e:
+            print(f"secret patch failed: HTTP {e.code}", file=sys.stderr)
+            return 1
+
+        print(f"{NAMESPACE}/{SECRET} updated")
+        return 0
+
+
+    if __name__ == "__main__":
+        sys.exit(main())
 ---
 # Every 20 minutes against a ~60 minute lifetime: two refreshes may fail
 # (Keystone restart, tunnel blip) before anything downstream sees a 401.
@@ -132,16 +201,46 @@ spec:
         spec:
           serviceAccountName: keystone-token-refresher
           restartPolicy: OnFailure
+          # Hardened 2026-11-04 (Trivy KSV-0014/0118/0001/0003/0012/0020/0021).
+          #
+          # The previous container was alpine:3.21 running `apk add --no-cache
+          # curl jq` at startup. That install writes to the root filesystem, so
+          # readOnlyRootFilesystem was impossible -- and a token refresh failed
+          # whenever the alpine mirror was unreachable, on the one path whose
+          # job is keeping credentials current. Rewritten as a stdlib-only
+          # Python script on python:3.13-slim, which `ironic-extra-bridge`
+          # already uses here, so no new image enters the supply chain.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+            seccompProfile:
+              type: RuntimeDefault
           containers:
             - name: refresh
-              image: alpine:3.21
-              command: ["/bin/sh", "/scripts/refresh.sh"]
+              image: python:3.13-slim
+              command: ["python3", "-I", "/scripts/refresh.py"]
+              securityContext:
+                readOnlyRootFilesystem: true
+                allowPrivilegeEscalation: false
+                privileged: false
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests: { cpu: 10m, memory: 32Mi }
+                limits:   { cpu: 200m, memory: 128Mi }
               volumeMounts:
                 - name: scripts
                   mountPath: /scripts
+                  readOnly: true
                 - name: creds
                   mountPath: /creds
                   readOnly: true
+                # Python needs a writable TMPDIR even though this script no
+                # longer writes temp files itself; with readOnlyRootFilesystem
+                # there is otherwise nowhere to put one.
+                - name: tmp
+                  mountPath: /tmp
           volumes:
             - name: scripts
               configMap:
@@ -150,3 +249,5 @@ spec:
             - name: creds
               secret:
                 secretName: keystone-admin-creds
+            - name: tmp
+              emptyDir: {}
