@@ -1,3 +1,30 @@
+{{/* DO NOT "FIX" spec.node_id IN THE transition-*.yaml TEMPLATES. Measured 2026-11-04.
+
+     All seven transition templates set `spec.node_id`, and the generated
+     NodeProvision / NodePower CRDs HAVE NO SUCH PROPERTY. Their served spec is
+     `{clean_steps, configdrive, configurationRef, target}` and
+     `{configurationRef, target, timeout}` respectively. A CR that sets it is rejected
+     under fieldValidation=Strict ("strict decoding error: unknown field
+     spec.node_id") and silently PRUNED otherwise — which is the path helm takes, so
+     nothing has ever reported it.
+
+     The cause is upstream and confirmed by the oasgen-provider maintainers: the
+     `requestFieldMapping` that redirects the path parameter (`node_id <- spec.node_id`)
+     also SUPPRESSES the spec property, because the suppression is meant to stop an
+     author being asked for a field the controller does not read from them — and it
+     deletes the property the mapping reads. BaremetalNode escapes it only because its
+     mapping is `uuid <- spec.name`, where the two names differ, so both survive.
+
+     AND YET the state machine works: six blades walked available -> active through
+     these exact kinds. So the node identity is arriving from somewhere other than
+     `spec.node_id`, and nobody yet knows where — oasgen is tracing it. Until that lands,
+     these templates stay as written. Removing `node_id` would be removing a field that
+     is already being dropped, which changes nothing; "correcting" it to some other
+     source would be guessing at a mechanism we have not identified. Leave it.
+
+     I also briefly reported a `requestFieldMapping` / `altFieldMapping` rename hazard
+     here. There is none — `altFieldMapping` does not exist; it was a grep artifact of
+     mine. The manifests in manifests/ are safe to apply. */}}
 {{- define "baremetal-host.nodeApiVersion" -}}baremetal.ogen.krateo.io/v1-0-0{{- end -}}
 {{- define "baremetal-host.nodeNamespace" -}}
 {{- if .Values.nodeNamespace -}}{{- .Values.nodeNamespace -}}{{- else -}}{{- .Release.Namespace -}}{{- end -}}
