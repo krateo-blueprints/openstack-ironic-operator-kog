@@ -1,40 +1,87 @@
 # CNCF Certified Kubernetes submission metadata.
 #
-# Route chosen: COMMUNITY DISTRIBUTION. CNCF treats a project with no company
-# behind it as a non-profit, so certification is free — but an individual must
-# sign the participation form as the official contact:
-#   https://github.com/cncf/k8s-conformance/blob/master/participation-form/Certified_Kubernetes_Form.md
+# Everything here except `vendor`, `name` and `contact_email_address` is settled
+# and verified. Those three wait on one decision that is not an engineering
+# question -- see "THE ONE OPEN DECISION" below.
 #
 # `type: installer` is settled by CNCF's own definitions: an installer
 # "downloads and then installs vanilla upstream Kubernetes", whereas a
 # distribution "includes patches to the upstream codebase". This installs
 # unmodified upstream from pkgs.k8s.io and patches nothing.
 #
-# FOUR VALUES STILL NEEDED — they are identity, not engineering, and I am not
-# inventing them:
-#   vendor                 the name signing the participation form
-#   name                   the product name
-#   website_url            must be public and resolve
-#   documentation_url      must be public and resolve
-#   contact_email_address  the maintainer contact for the submission
+# URL checks (the verify-conformance bot enforces both format and that URLs
+# "resolve to the correct content"), measured 2026-11-04:
+#   https://krateo.io                                                 HTTP 200
+#   https://docs.krateo.io                                            HTTP 200
+#   https://github.com/krateo-blueprints/openstack-ironic-operator-kog HTTP 200
+#   (control: a nonexistent repo under the same org returns 404, so the
+#    200s above are a real signal rather than a permissive endpoint)
+# The `braghettos/openstack-ironic-operator` remote returns 404 and therefore
+# cannot be repo_url.
 #
-# A diego.braga@krateo.io address is on file in this workspace; it is NOT used
-# here, because putting a personal address into a public submission is the
-# owner's call to make explicitly rather than mine to assume.
+# ---------------------------------------------------------------------------
+# THE ONE OPEN DECISION: which legal entity certifies.
 #
-# product_logo_url is OPTIONAL. If supplied it must be SVG, AI or EPS — NOT a
-# PNG — and must include the product name. Omitted, CNCF uses the company logo.
+# CNCF requires `vendor` to be "the name of the legal entity that is
+# certifying", and that entity "must have a signed participation form on file
+# with the CNCF". So this is a question about a company and a signature, not
+# about the software.
+#
+# Established 2026-11-04 from primary sources:
+#   * krateo.io's own footer: "(c) 2024 Krateo Srl - VAT IT04980060232",
+#     Verona. The legal entity behind Krateo is KRATEO S.R.L.
+#   * CNCF landscape.yml: "krateo" appears ZERO times. Krateo S.r.l. is not a
+#     CNCF member. (Control: the same file yields Kiratech and SUSE, so it does
+#     carry membership data.)
+#   * The same file lists "Kiratech S.p.A. (member)" under CNCF Members /
+#     Silver, plus KCSP and KCNTP entries. Kiratech IS a CNCF Silver member.
+#   * CNCF FAQ: members and non-profits pay no conformance fee; a commercial
+#     organization that does not wish to become a member pays a fee equal to
+#     joining CNCF; a "community distribution" has "no company behind it" and
+#     is treated as non-profit, hence free.
+#
+# OWNER'S CONSTRAINTS, 2026-11-04: Kiratech must not be used as the vendor,
+# and there is no budget for a conformance fee. That removes the two routes
+# that were otherwise simplest, and leaves exactly two:
+#
+#   A. vendor: Diego Braga (individual), community distribution.
+#      FREE, and explicitly contemplated: the CNCF FAQ treats community
+#      distributions as non-profits so no fee is charged, and says "we do
+#      require an individual to complete the certification" so CNCF has an
+#      official contact. Available today, costs nothing.
+#      Cost: the badge reads an individual's name, not Krateo's, and the
+#      "no company behind it" definition sits awkwardly beside a
+#      krateo-blueprints repo and krateo.io docs.
+#
+#   B. vendor: Krateo S.r.l. via CNCF's Silver-for-startups tier.
+#      The ONLY route that ends with "Certified Kubernetes - Krateo".
+#      Published eligibility (cncf.io/about/join/startups): fewer than 50
+#      employees, early-stage, cloud-native focused, open-source commitment.
+#      Krateo S.r.l. appears to meet the stated bar. CNCF does NOT publish the
+#      dues for this tier, so whether it clears "no budget" is unknown and
+#      costs one email to find out. Needs a signatory who can bind the company.
+#
+# Neither is blocked on engineering. B is worth asking before settling for A,
+# because asking is free and A forfeits the company's name on the result.
+# Silver also requires separate Linux Foundation membership, cost unstated.
+#
+# contact_email_address is deliberately left TODO at the owner's request, to be
+# decided at submission time. With a Krateo vendor a @krateo.io address is the
+# consistent choice; with route A it should be a personal one.
+# ---------------------------------------------------------------------------
+#
+# product_logo_url is OPTIONAL. If supplied it must be SVG, AI or EPS -- NOT a
+# PNG -- and must include the product name. Omitted, CNCF uses the company logo.
 
-vendor: TODO                      # e.g. the community project or individual
-name: TODO                        # e.g. "Krateo Ironic Installer"
-version: v0.13.20                 # the PRODUCT version, not Kubernetes'
-website_url: TODO
-repo_url: TODO                    # optional but expected for open source
-documentation_url: TODO
+vendor: TODO                      # pending the decision above
+name: TODO                        # pending the decision above
+version: v0.13.21                 # the PRODUCT version, not Kubernetes'
+website_url: https://krateo.io
+repo_url: https://github.com/krateo-blueprints/openstack-ironic-operator-kog
+documentation_url: https://docs.krateo.io
 type: installer
 description: >-
-  TODO — one sentence. Something close to: installs unmodified upstream
-  Kubernetes onto bare-metal nodes provisioned through OpenStack Ironic,
-  driven declaratively by Krateo compositions, with a control-plane VIP
-  discovered at runtime rather than declared.
-contact_email_address: TODO
+  Installs unmodified upstream Kubernetes on bare-metal servers provisioned
+  through OpenStack Ironic, driven declaratively by Krateo compositions, with
+  the control-plane VIP discovered at runtime rather than declared.
+contact_email_address: TODO       # pending the decision above
