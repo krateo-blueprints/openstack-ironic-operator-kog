@@ -1,7 +1,16 @@
 # Scoped SA + Role + Token Secret used by the CP cloud-init to patch its
-# own BaremetalNode CR's spec.extra.kubeadm_join. The Role grants ONLY the patch
-# verb on a single BaremetalNode CR (the CP's), so the token leak surface is
-# minimised: a compromised CP can only DoS its own join-command publish.
+# own BaremetalNode CR's spec.extra.kubeadm_join, and to publish the workload
+# kubeconfig Secret.
+#
+# The claim that stood here until v0.13.24 -- "the Role grants ONLY the patch
+# verb on a single BaremetalNode CR" -- stopped being true when the Secret rule
+# was added below, and nothing flagged the drift because the comment is at the
+# top of the file and the rule is at the bottom. Current scope, all of it:
+#   * get + patch on the CP BaremetalNode CRs named in controlPlane.nodes[]
+#     (restricted by resourceNames; a worker's CR is NOT reachable -- verified
+#     with `can-i patch baremetalnodes/<worker>` -> no)
+#   * create on secrets (cannot be name-restricted; see below)
+#   * get + patch on the one workload-kubeconfig Secret this chart owns
 #
 # k8s 1.24+ doesn't auto-create tokens for ServiceAccounts; the manually
 # crafted Secret below requests one.
@@ -46,17 +55,44 @@ rules:
     verbs:
       - get
       - patch
-  # Workload kubeconfig delivery (Milestone 5b). The CP cloud-init
-  # creates a Secret named <clusterName>-workload-kubeconfig with its
-  # admin.conf so the drain Jobs can talk to the workload apiserver.
-  # `get` lets the CP test for idempotency before POST.
+  # Workload kubeconfig delivery (Milestone 5b). The CP cloud-init POSTs a
+  # Secret named <clusterName>-workload-kubeconfig holding its admin.conf, so
+  # the drain Jobs can reach the workload apiserver.
+  #
+  # v0.13.24: this used to be one rule granting `create, get` on ALL secrets in
+  # this namespace, with a comment saying `get` was for an idempotency check
+  # before POST. Two things were wrong, both found by Trivy KSV-0113 on
+  # 2026-11-04 and then confirmed with `kubectl auth can-i`:
+  #
+  #   1. The script never GETs. It POSTs and, on 409, PATCHes -- and `patch`
+  #      was NOT granted. Measured: `can-i patch secrets` -> no. So the
+  #      idempotent re-publish path 403'd on every second boot. It had never
+  #      run: a first boot POSTs 201 and exits, so only a RE-provision reaches
+  #      the 409 branch.
+  #   2. The unrestricted `get` covered every Secret here, including
+  #      <clusterName>-kubeadm-pki. Measured: `can-i get secrets` -> yes.
+  #      Narrower than it looks in practice (a control plane already holds its
+  #      own PKI on disk) but the grant was both too wide AND unused.
+  #
+  # `create` cannot be narrowed by resourceNames -- the object name is not
+  # available to authorization on a create -- so it stays unrestricted and is
+  # kept in its own rule. get/patch are restricted to the single Secret this
+  # chart owns.
   - apiGroups:
       - ""
     resources:
       - secrets
     verbs:
       - create
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    resourceNames:
+      - {{ include "kubernetes-cluster.workloadKubeconfigSecretName" . | quote }}
+    verbs:
       - get
+      - patch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

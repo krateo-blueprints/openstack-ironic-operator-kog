@@ -386,6 +386,27 @@ for anything owning a transition CR** — and `kubectl get baremetalhosts` shows
 ReconcileSuccess` on all six, `provision_state=active` and `power_state=power
 on` on all six `BaremetalNode`s.
 
+**A verb granted but never used, beside a verb used but never granted.** The
+CP publisher Role carried `create, get` on **all** secrets in the lifecycle
+namespace. The script never issues a `get` — it POSTs and, on `409`, PATCHes —
+and `patch` was not granted. So the over-broad grant was dead, and the path
+that needed a grant 403'd. It had never run: a first boot POSTs `201` and
+exits, so only a **re-provision** reaches the `409` branch. Found by Trivy
+KSV-0113 and then confirmed, not argued, with `kubectl auth can-i` against the
+live ServiceAccount: `patch secrets` → **no**, `get secrets` → **yes**,
+including `<cluster>-kubeadm-pki`. Now three rules — `create` unrestricted
+(authorization cannot see an object's name on a create), `get`/`patch`
+restricted by `resourceNames` to the one Secret the chart owns — verified by
+applying the rendered Role to a scratch namespace and asserting both
+directions, including that the worker CRs and the PKI Secret come back `no`.
+
+The transferable part is where the lie lived: a comment at the **top** of the
+file said the Role "grants ONLY the patch verb on a single BaremetalNode CR".
+That was true when written. A second rule was appended at the **bottom** months
+later, and nothing connects the two — **a file-level comment describing
+rules that are edited far away from it will drift, and review reads the comment
+as the specification.**
+
 **Whole-map replay.** `rest-dynamic-controller` sends a `spec` field holding a
 map **entire** on every update. Where the CR models only part of what the
 vendor holds, the rest is deleted, with no warning and no condition. A sidecar
