@@ -343,51 +343,59 @@ Worth its own section, because the conclusion generalises beyond this repo.
 | rdc: a CR ignored for a selector mismatch reports nothing | Open. May be structural — a selector-scoped informer never sees the object, so there is nothing to attach a condition to. |
 | core-provider **#304** ("cdc never prunes") | **Withdrawn — it was wrong.** Removal from spec does fire `deleted:1`. The earlier `deleted:0` readings were reconciles in which nothing had been removed. |
 
-### The transitions are probably broken right now, latently
+### The transitions are refused on 0.50.0 — and that is the guard working
 
 This is the most important open item and it is operational, not academic.
 
-oasgen-provider traced the path-parameter resolution at HEAD. There are exactly
-four writers, in precedence order:
+A path parameter has exactly four writers, precedence highest first:
 
 ```
 fieldMapping > requestFieldMapping > Configuration CR > spec > status
 ```
 
-Ours is a `requestFieldMapping` reading `spec.node_id` — a field the CRD does
-not have, so it is pruned on write, so the mapping finds nothing and **silently
-skips** (`builder.go:215-217`: `if err != nil || !found { continue }` — no
-parameter, no error, no log line). An unresolved path parameter is then
-**refused** by a guard added in `efbf36b` (#363, 2026-11-01), first released in
-**0.48.0**.
+Ours is a `requestFieldMapping` reading `spec.node_id`, and **all four sources
+are empty**: the CRD has no `node_id` property (upstream generation bug,
+**#419**); status is never populated for it, because `populateStatusFields`
+reads only a response body while our findby items carry no `node_id` and the
+PUT returns 202 with no body — the generator already warns `status field
+'node_id' not found in response`; and `NodeProvisionConfiguration` has no
+`path` property at all, because the RestDefinition declares no
+`configurationFields`. The mapping then finds nothing and **silently skips**
+(`builder.go:215-217`: `if err != nil || !found { continue }`).
 
-So why does a working cluster exist? **Version skew.**
+**The history, stated carefully, because the obvious reading is backwards.**
 
 | | |
 |---|---|
-| Cluster provisioned | 2026-11-03, under rdc **0.47.0** — two releases before the guard |
-| `KRATEO_RDC_VERSION` → 0.50.0 | 2026-11-04, commit `b331b80` |
-| Provision controller since | started 05:49, build 0.50.0, **zero reconciles** |
+| rdc **0.47.0** | No guard. The **unsubstituted template went on the wire**: `PUT /v1/nodes/%7Bnode_id%7D/states/provision`. A real API answers that plausibly, which is worse than a failure — it is exactly what upstream **#363** was filed for. |
+| rdc **0.48.0** | Added detection and the guard. The request is now **refused**: `unresolved path parameter(s) [node_id]`. |
+| rdc **0.50.0** | **#388** fixed the population half for path-item-declared parameters. |
 
-The six successful transitions and the code that says they must fail are three
-releases apart. Nothing has needed a transition since the upgrade, so nothing
-has surfaced.
+The cluster was provisioned on 2026-11-03 under 0.47.0;
+`KRATEO_RDC_VERSION` moved to 0.50.0 on 2026-11-04. **So the upgrade did not
+break a working system — it made a pre-existing silent failure visible.**
+Expect a refusal on the next deploy, undeploy, power-cycle or clean, and read
+it as the guard doing its job.
 
-**Expect the next deploy, undeploy, power-cycle or clean to be refused** with
-`unresolved path parameter(s) [node_id]` in the rdc log. That is a better
-failure than the silent one it replaced — #363 is why it will be visible — but
-it means this morning's upgrade put a latent regression into a working system.
+**#388 does not apply here.** `oas/ironic-provision.yaml` and
+`oas/ironic-power.yaml` declare `node_id` at **operation** level, not path-item
+level, so it always reached `ReqParams`. (The two kinds that *do* use path-item
+parameters, `node` and `port`, are also the two whose identifiers survive in
+the spec — but that is coincidence: `uuid` and `node_uuid` survive because they
+are request-**body** fields.) **#419 is the sole remaining blocker**: fix it and
+these transitions work on 0.50.0 with no chart change.
 
-**Do not "fix" it by guessing another source.** `status.node_id` is a dead end
-by design: `populateStatusFields` reads only a response body, the findby items
-carry no `node_id`, and the PUT returns 202 with no body — the generator
-already emits `status field 'node_id' not found in response`. The open question
-is what resolved `{node_id}` under 0.47.0 and what removed it, and the answer
-decides the fix. The comment at the top of
-`charts/baremetal-host/templates/_helpers.tpl` carries the same warning next to
-the code.
+**Two things not to do.** Do not remove `spec.node_id` from the
+`transition-*.yaml` templates — it is the field the mapping reads, so they are
+forward-compatible, and removing it is the one edit that would stop the
+upstream fix from reaching this repo. And do not pin rdc back to 0.47.0: that
+only restores the silently malformed URL.
 
----
+**What remains genuinely unknown.** Something walked six blades to `active` on
+2026-11-03, and given the URL that was actually on the wire it was **not** a
+successful PUT through these kinds. How those machines were provisioned is an
+open question in this repo, and §10's description of the procedure should be
+read with that in mind rather than taken as established.
 
 ## 10. Reproducing the conformance result
 

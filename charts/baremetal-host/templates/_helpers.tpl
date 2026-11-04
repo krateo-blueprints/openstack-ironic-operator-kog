@@ -26,35 +26,40 @@
      here. There is none — `altFieldMapping` does not exist; it was a grep artifact of
      mine. The manifests in manifests/ are safe to apply.
 
-     UPDATE 2026-11-04, and this is the operational half: THESE TRANSITIONS ARE
-     LIKELY BROKEN AS OF THE rdc 0.47.0 -> 0.50.0 UPGRADE, LATENTLY.
+     UPDATE 2026-11-04. KEEP `spec.node_id` IN THESE TEMPLATES. It is the field the
+     mapping reads, so these templates are forward-compatible and will start working
+     when the upstream generation bug is fixed. REMOVING IT IS THE ONE EDIT THAT WOULD
+     STOP THAT FIX FROM REACHING THIS REPO.
 
-     oasgen-provider traced the parameter path at HEAD. There are exactly four
-     writers of a path parameter, in precedence order: fieldMapping >
+     The full mechanism, traced by the oasgen-provider maintainers. A path parameter
+     has exactly four writers, precedence highest first: fieldMapping >
      requestFieldMapping > Configuration CR > spec > status. Ours is a
-     `requestFieldMapping` reading `spec.node_id`, which is pruned on write, so it
-     finds nothing and SILENTLY SKIPS (builder.go:215-217, `if err != nil || !found
-     { continue }` — no parameter, no error, no log line). An unresolved path
-     parameter is then REFUSED by a guard added in efbf36b (#363, 2026-11-01), first
-     released in 0.48.0.
+     requestFieldMapping reading `spec.node_id`. All four are empty here: the CRD has
+     no `node_id` property (the generation bug, upstream #419), status is never
+     populated for it (populateStatusFields reads only a response body; our findby
+     items carry no node_id and the PUT returns 202 with no body -- the generator
+     already warns `status field 'node_id' not found in response`), and
+     NodeProvisionConfiguration has no `path` property at all because the
+     RestDefinition declares no configurationFields. The mapping then finds nothing
+     and SILENTLY SKIPS: builder.go:215-217, `if err != nil || !found { continue }`.
 
-     Why the cluster nonetheless exists: it was provisioned on 2026-11-03 under rdc
-     0.47.0, which predates that guard by two releases. KRATEO_RDC_VERSION moved to
-     0.50.0 on 2026-11-04 (commit b331b80) and the provision controller has
-     reconciled nothing since. So the six successful transitions and the code that
-     says they should fail are three releases apart.
+     WHAT THIS MEANS HISTORICALLY, and the earlier version of this comment had it
+     backwards. Under rdc 0.47.0 there was no guard, so the UNSUBSTITUTED template
+     went on the wire -- `PUT /v1/nodes/%7Bnode_id%7D/states/provision` -- which a
+     real API answers plausibly. That is worse than a failure, and it is precisely
+     what upstream #363 was filed for. 0.48.0 added detection plus the guard, so the
+     request is now REFUSED with `unresolved path parameter(s) [node_id]`; 0.50.0
+     (#388) fixed the population half for path-item-declared parameters. So the
+     0.47.0 -> 0.50.0 upgrade did NOT break a working system: it made a pre-existing
+     silent failure visible. Expect a refusal on the next deploy, undeploy,
+     power-cycle or clean, and read it as the guard doing its job.
 
-     WHAT THIS MEANS: the next time any node needs to deploy, undeploy, power-cycle
-     or clean, expect the request to be refused with `unresolved path parameter(s)
-     [node_id]` in the rest-dynamic-controller log. If you are reading this because
-     a transition stopped working, that is why — it is not your CR and not Ironic.
+     #388 does not apply to these two kinds: oas/ironic-provision.yaml and
+     oas/ironic-power.yaml declare node_id at OPERATION level, not path-item level,
+     so it always reached ReqParams. #419 is the sole remaining blocker.
 
-     DO NOT "fix" it by guessing a different source. `status.node_id` is a dead end
-     by design: populateStatusFields reads only a response body, our findby items
-     carry no node_id, and the PUT returns 202 with no body — the generator already
-     warns `status field 'node_id' not found in response`. The open question, with
-     oasgen, is what resolved {node_id} under 0.47.0 and what removed it; the answer
-     decides the fix. */}}
+     DO NOT guess a different source, and DO NOT pin rdc back to 0.47.0 -- that only
+     restores the silently malformed URL. */}}
 {{- define "baremetal-host.nodeApiVersion" -}}baremetal.ogen.krateo.io/v1-0-0{{- end -}}
 {{- define "baremetal-host.nodeNamespace" -}}
 {{- if .Values.nodeNamespace -}}{{- .Values.nodeNamespace -}}{{- else -}}{{- .Release.Namespace -}}{{- end -}}
