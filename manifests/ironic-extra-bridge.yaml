@@ -71,10 +71,35 @@ spec:
       labels: {app: ironic-extra-bridge}
     spec:
       serviceAccountName: ironic-extra-bridge
+      # Hardened 2026-11-04 (Trivy KSV-0014/0118 high, plus the notice-level
+      # capability and resource rules). Already python:3.13-slim with no runtime
+      # package install, so unlike the keystone-token-refresher this needed no
+      # image change -- the script only READS /scripts and /ironic-token and
+      # writes to stdout.
+      #
+      # fsGroup is here so the projected ServiceAccount token stays readable
+      # after dropping to a non-root uid; the bridge needs it to PATCH the
+      # BaremetalNode CRs.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: bridge
           image: python:3.13-slim
-          command: ["python3", "/scripts/ironic-node-extra-bridge.py"]
+          command: ["python3", "-I", "/scripts/ironic-node-extra-bridge.py"]
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            privileged: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests: { cpu: 10m, memory: 48Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
           env:
             - name: IRONIC_URL
               value: http://ironic.openstack.svc.cluster.local:6385
@@ -85,9 +110,14 @@ spec:
             - name: BRIDGE_INTERVAL
               value: "10"
           volumeMounts:
+            # Python wants a writable TMPDIR; with readOnlyRootFilesystem there
+            # is otherwise nowhere to put one.
+            - {name: tmp, mountPath: /tmp}
             - {name: scripts, mountPath: /scripts, readOnly: true}
             - {name: ironic-token, mountPath: /ironic-token, readOnly: true}
       volumes:
+        - name: tmp
+          emptyDir: {}
         - name: scripts
           configMap: {name: ironic-extra-bridge-script, defaultMode: 0755}
         - name: ironic-token
