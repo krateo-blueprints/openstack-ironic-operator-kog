@@ -211,3 +211,27 @@ workers:
 # the request dump is the first thing anyone enables when debugging a 401.
 debug:
   connectorVerbose: false
+
+# CNCF conformance runner on the bootstrap control plane.
+#
+# The 443/443 v1.36.6 result in conformance/v1.36/ was produced with hydrophone
+# installed BY HAND on blade01, and a re-image takes it away silently. Nobody
+# notices until they want to re-certify, which is the worst moment to be
+# rediscovering install steps. So the chart can bake it in.
+#
+# `install` only puts the binary on the bootstrap node (and writes a
+# HOW-TO-RUN.txt next to the output directory). It does NOT run the suite:
+# that takes roughly two hours and pulls a large image, so starting it stays a
+# deliberate act. Set `runOnBoot: true` only if you genuinely want every
+# bring-up to spend two hours certifying itself.
+#
+# Run it by hand, on the node, so the cluster-admin kubeconfig never leaves the
+# machine that owns it:
+#
+#   sudo env KUBECONFIG=/etc/kubernetes/admin.conf \
+#     hydrophone --conformance --output-dir /var/lib/conformance
+conformance:
+  install: false
+  version: v0.8.0
+  runOnBoot: false
+  outputDir: /var/lib/conformance

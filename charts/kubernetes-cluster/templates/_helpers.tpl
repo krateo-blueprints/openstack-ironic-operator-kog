@@ -756,6 +756,88 @@ services:
 {{/* v0.12.3 (Task #91): publish-deployed-hash.sh + /etc/kubernetes/
      .deployed-hash file. Universal across cpUserData, cpReplicaUserData,
      workerUserData. */}}
+{{/* CNCF conformance runner, baked into the bootstrap control plane.
+
+     Why this is in the chart at all: the 443/443 v1.36.6 result in
+     conformance/v1.36/ was produced by hydrophone installed BY HAND on blade01,
+     and a re-image silently takes it away. The runner being absent is not
+     discovered until someone wants to re-certify, which is exactly when they
+     least want to rediscover the install steps. So the chart installs it.
+
+     The SUITE is not run here by default. It takes about two hours and pulls a
+     large image, so `runOnBoot` is off and an operator starts it deliberately:
+
+       sudo env KUBECONFIG=/etc/kubernetes/admin.conf \
+         hydrophone --conformance --output-dir /var/lib/conformance
+
+     Two deliberate choices in the script below:
+       * `curl --fail`. A plain `curl -sS` exits 0 on an HTTP 404 and would
+         hand tar an HTML error page. This repo has already shipped one bug of
+         exactly that shape (the teardown hook's POST, removed in
+         baremetal-host 0.6.2), so every download here fails loudly.
+       * the release checksums file is fetched and verified. An unverified
+         tarball extracted into /usr/local/bin is a straight code-execution
+         path, and `sha256sum -c` costs one line. */}}
+{{- define "kubernetes-cluster.conformanceWriteFiles" -}}
+{{- $c := default (dict) .Values.conformance -}}
+{{- $ver := $c.version | default "v0.8.0" -}}
+{{- $out := $c.outputDir | default "/var/lib/conformance" -}}
+- path: /etc/kubernetes/install-conformance.sh
+  permissions: "0755"
+  content: |
+    #!/bin/bash
+    # Installs the CNCF conformance runner. Runs LAST in runcmd and never
+    # gates cluster bring-up: if this fails the cluster is still correct,
+    # only un-certifiable until someone looks at the log.
+    set -euo pipefail
+    exec >> /var/log/install-conformance.log 2>&1
+    set -x
+    date
+    VER={{ $ver | quote }}
+    OUT={{ $out | quote }}
+    BASE="https://github.com/kubernetes-sigs/hydrophone/releases/download/${VER}"
+    TAR="hydrophone_Linux_x86_64.tar.gz"
+
+    if command -v hydrophone >/dev/null 2>&1; then
+      echo "hydrophone already present: $(hydrophone --version 2>&1 | head -1)"
+    else
+      WORK=$(mktemp -d)
+      trap 'rm -rf "$WORK"' EXIT
+      # --fail so an HTTP error is an error, not an HTML file fed to tar.
+      curl --fail -sSL -o "$WORK/$TAR"        "$BASE/$TAR"
+      curl --fail -sSL -o "$WORK/sums"        "$BASE/checksums.txt" || {
+        echo "FATAL: no checksums.txt for $VER; refusing to install unverified binary" >&2
+        exit 1
+      }
+      ( cd "$WORK" && grep " ${TAR}\$" sums > sums.one && sha256sum -c sums.one )
+      tar -xzf "$WORK/$TAR" -C /usr/local/bin hydrophone
+      chmod 0755 /usr/local/bin/hydrophone
+      # Assert rather than assume: a tarball whose layout changed would
+      # otherwise leave nothing on PATH and report success.
+      command -v hydrophone >/dev/null || { echo "FATAL: hydrophone not on PATH after extract" >&2; exit 1; }
+      echo "installed: $(hydrophone --version 2>&1 | head -1)"
+    fi
+
+    mkdir -p "$OUT"
+    {{- if $c.runOnBoot }}
+    # runOnBoot is ON. ~2h. Results land in $OUT.
+    env KUBECONFIG=/etc/kubernetes/admin.conf \
+      hydrophone --conformance --output-dir "$OUT"
+    {{- else }}
+    cat > "$OUT/HOW-TO-RUN.txt" <<'EOT'
+    Run the CNCF conformance suite from this node (the kubeconfig never
+    leaves the machine that owns it):
+
+      sudo env KUBECONFIG=/etc/kubernetes/admin.conf \
+        hydrophone --conformance --output-dir {{ $out }}
+
+    Takes roughly two hours. Produces e2e.log and junit_01.xml here.
+    Both are what CNCF wants attached to a submission.
+    EOT
+    echo "runner installed; suite NOT run (conformance.runOnBoot is false)"
+    {{- end }}
+{{- end -}}
+
 {{- define "kubernetes-cluster.publishDeployedHashWriteFiles" -}}
 - path: /etc/kubernetes/.deployed-hash
   permissions: "0644"
@@ -1481,6 +1563,9 @@ write_files:
 {{- include "kubernetes-cluster.kubeadmInitWriteFiles" . | nindent 2 }}
 {{- include "kubernetes-cluster.publishDeployedHashWriteFiles" . | nindent 2 }}
 {{- include "kubernetes-cluster.resolveNodeExtraWriteFiles" . | nindent 2 }}
+{{- if (default (dict) .Values.conformance).install }}
+{{- include "kubernetes-cluster.conformanceWriteFiles" . | nindent 2 }}
+{{- end }}
 runcmd:
   # v0.12.7: publish FIRST so the bridge-mirrored observed hash matches
   # current within ~15s of boot — well before bh-chart's 60s reconcile
@@ -1492,6 +1577,12 @@ runcmd:
   - /etc/kubernetes/publish-join.sh
   - systemctl daemon-reload
   - systemctl enable --now kubeadm-token-refresh.timer
+{{- if (default (dict) .Values.conformance).install }}
+  # LAST on purpose. The conformance runner is a convenience for re-certifying;
+  # a cluster that came up correctly must not be reported as failed because a
+  # GitHub release download did not work.
+  - /etc/kubernetes/install-conformance.sh
+{{- end }}
 {{- end -}}
 
 {{/* Cloud-init userData for a WORKER node. Installs kubeadm and runs the
