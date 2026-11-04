@@ -515,6 +515,28 @@ Serialisation follows the body schema, not the spec, so Ironic keeps seeing
 because its OAS declares the path parameter in the body schema deliberately —
 the two cases come apart on that one line.
 
+**What the 0.51.1 run should show — written down before running it**, so the
+result is read against a prediction rather than rationalised after:
+
+1. `spec.node_id` returns to the `nodeprovisions` and `nodepowers` CRDs, and
+   returns **required**, not optional. The parameter is `in: path,
+   required: true` in both OAS documents, and under the fix a non-suppressed
+   parameter carries its `Required` through to the property. **An optional
+   property would be a difference between this repo's documents and the
+   upstream model, and is worth chasing before reading anything into runtime
+   behaviour.**
+2. A throwaway CR naming a node that does not exist produces **Ironic's own
+   404**, not the guard. The guard message would mean the fix is wrong rather
+   than late; a 400 about an unexpected body field would mean serialisation
+   does not follow the body schema after all.
+3. Nothing breaks at admission. Checked ahead of the tag: **all 13 templates
+   across the three charts that render a `NodeProvision` or `NodePower`
+   already set `node_id`**, so a property that becomes required finds a value
+   waiting. This is the concrete reason the instruction below matters — had
+   those fields been tidied away as dead weight, every transition in all
+   three charts would have started failing admission on the day the fix
+   shipped.
+
 **Two things not to do.** Do not remove `spec.node_id` from the
 `transition-*.yaml` templates — it is the field the mapping reads, so they are
 forward-compatible, and removing it is the one edit that would stop the
