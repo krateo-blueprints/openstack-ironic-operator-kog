@@ -9,98 +9,99 @@ timestamp: 2026-08-11T00:00:00Z
 
 # Quickstart — Ironic (bare metal) operator
 
-Manage OpenStack **Ironic** bare-metal resources as Kubernetes CRs. End to end:
-install the operator, `kubectl apply` a `Node`, and the operator enrolls it in Ironic.
+Manage OpenStack **Ironic** bare-metal resources as Kubernetes CRs. This walks a
+node to `enroll` against a throwaway local Ironic, with no hardware and nothing
+to pay for.
 
-> **Horizon note:** Ironic has no panel in a stock Horizon (it needs the separate
-> `ironic-ui` dashboard plugin), and enrolling a node requires a running
-> `ironic-conductor` on a provisioning network — i.e. **real bare-metal infra**.
-> This quickstart therefore verifies with the `openstack baremetal` CLI. For the
-> full lifecycle (enroll → active) driven by a Krateo Composition, see
-> [`docs/E2E.md`](E2E.md) and [`docs/REAL-IRONIC.md`](REAL-IRONIC.md).
+> **Rewritten 2026-11-04.** The previous version of §1–§4 could not work: it
+> applied `kind: Node` and `kind: NodeConfiguration`, neither of which the
+> current `RestDefinition`s generate, at `apiVersion: .../v1alpha1`, which the
+> node CRD does not serve. It also set the Ironic microversion through
+> `spec.configuration.header`, which RDC does not send, at `1.81`, which is
+> below the `1.83` these definitions need. A reader was rejected on the first
+> `kubectl apply`.
+>
+> It rotted because it hand-copied commands the `Makefile` already owns. This
+> version calls the targets instead, so it cannot drift from them, and the YAML
+> below is screened by `make check-examples` like every other manifest a reader
+> is told to apply.
 
-## 1. Prerequisites
+## 1. Bring up a local environment
 
-Krateo's KOG provider in the cluster:
-
-```bash
-helm repo add krateo https://charts.krateo.io && helm repo update
-helm upgrade --install oasgen-provider krateo/oasgen-provider -n krateo-system --create-namespace
-```
-
-Ironic reachable in-cluster (`ironic-api` on `:6385`). Because Ironic is
-Keystone-protected and needs a microversion header, point the operator at an
-auth proxy (see `docs/REAL-IRONIC.md`) at a **distinct** Service (the openstack-helm
-chart already owns the `ironic` Service name).
-
-## 2. Install the operator
+No hardware, no OpenStack account, no credentials. A kind cluster and a
+standalone Ironic with fake drivers:
 
 ```bash
-kubectl create configmap ironic-node-oas -n openstack \
-  --from-file=ironic_node.yaml=oas/ironic-node.yaml
-kubectl apply -f manifests/restdefinition-node.yaml
-kubectl wait restdefinition/ironic-node -n openstack --for=condition=Ready --timeout=300s
-kubectl get crd | grep nodes.baremetal.ogen.krateo.io
+make kind-up        # isolated kubeconfig at local/kubeconfig.ironic-kog
+make ironic-up      # standalone Ironic, noauth, fake hardware
+make krateo-up      # oasgen-provider (KOG) + core-provider (compositions)
+make restdef-up     # OAS ConfigMaps + the four RestDefinitions + endpoint singletons
 ```
+
+`make restdef-up` is the step that creates the generated CRDs. It also creates
+the `BaremetalNodeConfiguration` the CRs below reference, so there is nothing to
+hand-write.
+
+For real, Keystone-protected Ironic instead, see
+[`REAL-IRONIC.md`](REAL-IRONIC.md); for real PXE against Bifrost, see
+[`BIFROST.md`](BIFROST.md).
+
+## 2. Confirm the operator is up
+
+```bash
+export KUBECONFIG=local/kubeconfig.ironic-kog
+
+kubectl get restdefinitions -n openstack
+kubectl api-resources --api-group=baremetal.ogen.krateo.io
+```
+
+Four `RestDefinition`s should report `READY=True`, and the group should list
+`baremetalnodes`, `ports`, `nodepowers` and `nodeprovisions` at
+**`baremetal.ogen.krateo.io/v1-0-0`**, alongside their `*configurations` at
+`v1alpha1`. The resources and their configurations are on **different API
+versions**; that is expected, and copying one onto the other is the mistake the
+old quickstart made.
 
 ## 3. Enroll a node
 
 ```bash
-cat <<'EOF' | kubectl apply -f -
-apiVersion: baremetal.ogen.krateo.io/v1alpha1
-kind: NodeConfiguration
-metadata:
-  name: ironic-config
-  namespace: openstack
-spec:
-  configuration:
-    header:
-      create:
-        X-Ironic-Endpoint: "http://ironic-kog-proxy.openstack.svc.cluster.local:6385"
-        X-OpenStack-Ironic-API-Version: "1.81"
-      get:
-        X-Ironic-Endpoint: "http://ironic-kog-proxy.openstack.svc.cluster.local:6385"
-        X-OpenStack-Ironic-API-Version: "1.81"
-      delete:
-        X-Ironic-Endpoint: "http://ironic-kog-proxy.openstack.svc.cluster.local:6385"
-        X-OpenStack-Ironic-API-Version: "1.81"
-      findby:
-        X-Ironic-Endpoint: "http://ironic-kog-proxy.openstack.svc.cluster.local:6385"
-        X-OpenStack-Ironic-API-Version: "1.81"
----
-apiVersion: baremetal.ogen.krateo.io/v1alpha1
-kind: Node
-metadata:
-  name: metal-a
-  namespace: openstack
-spec:
-  configurationRef:
-    name: ironic-config
-    namespace: openstack
-  name: metal-a
-  driver: ipmi
-  driver_info:
-    ipmi_address: "172.24.6.10"
-    ipmi_username: admin
-    ipmi_password: secret
-  resource_class: baremetal
-EOF
+kubectl apply -f manifests/baremetalnode-quickstart.yaml
 ```
+
+That manifest is the minimum a node needs, and is screened by
+`make check-examples`:
+
+- `kind: BaremetalNode` at `baremetal.ogen.krateo.io/v1-0-0` — there is no
+  `Node` kind.
+- `configurationRef` pointing at the `ironic-endpoint`
+  `BaremetalNodeConfiguration` that `make restdef-up` created. It is
+  **required**; a CR without it is rejected at admission.
+- `X-OpenStack-Ironic-API-Version` is **not set by hand**. It is declared in the
+  OAS with a default, and the API server stamps `1.109` onto every CR. An unset
+  microversion makes Ironic negotiate its minimum (1.1), which silently breaks
+  anything needing a modern field.
 
 ## 4. Verify
 
 ```bash
-openstack baremetal node list
-# +--------------------------------------+---------+---------------+-------------+--------------------+-------------+
-# | UUID                                 | Name    | Instance UUID | Power State | Provisioning State | Maintenance |
-# +--------------------------------------+---------+---------------+-------------+--------------------+-------------+
-# | ...                                  | metal-a | None          | None        | enroll             | False       |
-# +--------------------------------------+---------+---------------+-------------+--------------------+-------------+
+kubectl get baremetalnodes.v1-0-0.baremetal.ogen.krateo.io -n openstack \
+  -o custom-columns='NAME:.metadata.name,STATE:.status.provision_state'
 ```
 
-Drive `enroll → manageable → available → active` with `NodeProvision` CRs (or a
-`BaremetalLifecycle` Composition). `Port`, `PortGroup`, `Allocation` and
-`DeployTemplate` are managed the same way.
+```
+NAME              STATE
+quickstart-node   enroll
+```
+
+Pin the full `resource.version.group` as above. A bare `kubectl get
+baremetalnodes` negotiates a version for you, and when several are served that
+is not always the one you wrote.
+
+Then drive `enroll → manageable → available → active` with `NodeProvision` CRs,
+or let a composition do it: `make composition-demo` creates a
+`BaremetalLifecycle` and the composition-dynamic-controller walks the whole
+state machine. `make smoke-test` does the same end to end and cleans up after
+itself with `CLEANUP=1`.
 
 ## 5. (Optional) Install the kagent SME
 

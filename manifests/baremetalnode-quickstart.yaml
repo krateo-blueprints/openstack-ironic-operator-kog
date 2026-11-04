@@ -1,0 +1,24 @@
+# The minimum a BaremetalNode needs, referenced by docs/quickstart.md §3 and
+# screened by `make check-examples` so it cannot drift from the generated CRDs.
+#
+# Assumes `make restdef-up`, which creates the generated CRDs and the
+# `ironic-endpoint` BaremetalNodeConfiguration this references.
+apiVersion: baremetal.ogen.krateo.io/v1-0-0
+kind: BaremetalNode
+metadata:
+  name: quickstart-node
+  namespace: openstack
+spec:
+  # Required. A CR without it is rejected at admission, not at reconcile.
+  configurationRef:
+    name: ironic-endpoint
+    namespace: openstack
+  name: quickstart-node
+  # `fake-hardware` is what `make ironic-up` runs; a real deployment uses
+  # `redfish` or `ipmi` with the matching driver_info keys.
+  driver: fake-hardware
+  resource_class: baremetal
+  # X-OpenStack-Ironic-API-Version is deliberately absent. It is declared in
+  # oas/ironic-node.yaml with a default, so the API server stamps 1.109 onto
+  # this CR. Setting it by hand is how it drifts below a feature's floor --
+  # 1.81 in the old quickstart, under the 1.83 that include_children needs.
