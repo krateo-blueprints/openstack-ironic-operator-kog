@@ -454,6 +454,20 @@ reconciles with oasgen's `TestPathItemParameters_BecomeSpecFields`, where a
 path-only parameter with *no* mapping becomes a spec field: three cells of one
 table rather than two competing rules.
 
+**But "absent" and "defective" are different questions, and they come apart on
+that same row.** The table above answers *what determines absence*. Whether an
+absence is a **bug** turns on something else — whether the author was supposed
+to supply the value:
+
+| row | absent | is the absence a defect? |
+|---|---|---|
+| `ports`: `uuid <- status.uuid` | yes | **No — correct.** The vendor assigns the uuid; an author cannot supply it, and requiring it would make the kind uncreatable. |
+| `nodepowers` / `nodeprovisions`: `node_id <- spec.node_id` | yes | **Yes.** The mapping reads a property the author *is* meant to supply, and the suppression deletes its own source. |
+
+So self-reference is the right key for the upstream **exemption** even though
+it is not the discriminator of the observed outcome, and `ports` must stay
+suppressed. Do not "fix" it by analogy with the other two.
+
 This document previously asserted the same-name rule, citing `BaremetalNode`
 escaping "because its mapping is `uuid <- spec.name`, two different names".
 The different names are incidental; it escapes because `NodeCreate` declares
@@ -490,6 +504,16 @@ parameters, `node` and `port`, are also the two whose identifiers survive in
 the spec — but that is coincidence: `uuid` and `node_uuid` survive because they
 are request-**body** fields.) **#419 is the sole remaining blocker**: fix it and
 these transitions work on 0.50.0 with no chart change.
+
+**0.51.1 unparks this, and the body is not a second problem.** The obvious
+worry — that restoring `node_id` to the spec would serialise it into a PUT
+body Ironic does not expect — does not apply. `processFields` gates every body
+write on the document's declared body schema (`ReqParams.Body.Contains`), and
+the provision body declares only `target`, `configdrive` and `clean_steps`.
+Serialisation follows the body schema, not the spec, so Ironic keeps seeing
+`{target: ...}`. A sibling KOG provider *is* parked on exactly that problem,
+because its OAS declares the path parameter in the body schema deliberately —
+the two cases come apart on that one line.
 
 **Two things not to do.** Do not remove `spec.node_id` from the
 `transition-*.yaml` templates — it is the field the mapping reads, so they are
