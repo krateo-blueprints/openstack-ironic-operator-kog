@@ -1,0 +1,69 @@
+# FOUR OBJECTS, ONE TEMPLATE, ONE HOOK.
+#
+# This is the exact shape that demonstrated core-provider's hook-RBAC gap: a
+# ServiceAccount, Role and RoleBinding as plain resources, and a Job annotated
+# helm.sh/hook. Before #316 the generated Role granted the first three and
+# nothing for batch/jobs, because chart-inspector derives permissions from a
+# dry-run INSTALL and helm keeps hooks out of release.Manifest.
+#
+# The Job deliberately drives NOTHING. No KOG CR, no API call, no Ironic. It
+# logs and exits 0, so the only thing this chart can measure is whether the
+# generated RBAC covers a hook object -- which is the one arm core-provider
+# cannot test from their side, since their own test asserts the GVK appears in
+# the generated Role and that measures the generator, not helm's delete
+# succeeding against it.
+{{- $n := .Values.probeName | default "hook-rbac-probe" }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ printf "%s-sa" $n | quote }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ printf "%s-role" $n | quote }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ printf "%s-rb" $n | quote }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ printf "%s-role" $n | quote }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ printf "%s-sa" $n | quote }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-hook" $n | quote }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "0"
+    # before-hook-creation is the reason the grant must include DELETE: helm
+    # removes the previous hook object before creating the next one, and that
+    # delete is what failed permanently before #316.
+    # before-hook-creation ONLY, deliberately. With hook-succeeded the Job is
+    # removed on success, so the DELETE verb is never exercised -- the second
+    # cycle has nothing to delete and the test silently measures only creation.
+    # Keeping the Job means cycle 2 must delete cycle 1's, which is the arm
+    # core-provider cannot reach from their side.
+    "helm.sh/hook-delete-policy": before-hook-creation
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: probe
+          image: busybox:1.37
+          command: ["/bin/sh", "-c"]
+          args:
+            - echo "hook ran; this chart measures RBAC and does nothing else"; exit 0

@@ -1,0 +1,4 @@
+# Nothing configurable on purpose. The chart's whole job is its OBJECT SHAPE:
+# four objects from one template, exactly one annotated helm.sh/hook, so the
+# generated Role can be read against a known expectation.
+probeName: hook-rbac-probe

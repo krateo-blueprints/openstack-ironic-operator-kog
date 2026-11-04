@@ -1,0 +1,11 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "probeName": {
+      "type": "string",
+      "description": "Name stem for the four objects this chart renders."
+    }
+  },
+  "description": "additionalProperties is deliberately NOT false: helm injects a `global` key, and chart-inspector performs a real dry-run install, so a strict schema fails generation with a 500 rather than a validation message. Every other chart in this repo leaves it unset for the same reason."
+}
