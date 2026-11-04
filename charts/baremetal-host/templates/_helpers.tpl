@@ -24,7 +24,37 @@
 
      I also briefly reported a `requestFieldMapping` / `altFieldMapping` rename hazard
      here. There is none — `altFieldMapping` does not exist; it was a grep artifact of
-     mine. The manifests in manifests/ are safe to apply. */}}
+     mine. The manifests in manifests/ are safe to apply.
+
+     UPDATE 2026-11-04, and this is the operational half: THESE TRANSITIONS ARE
+     LIKELY BROKEN AS OF THE rdc 0.47.0 -> 0.50.0 UPGRADE, LATENTLY.
+
+     oasgen-provider traced the parameter path at HEAD. There are exactly four
+     writers of a path parameter, in precedence order: fieldMapping >
+     requestFieldMapping > Configuration CR > spec > status. Ours is a
+     `requestFieldMapping` reading `spec.node_id`, which is pruned on write, so it
+     finds nothing and SILENTLY SKIPS (builder.go:215-217, `if err != nil || !found
+     { continue }` — no parameter, no error, no log line). An unresolved path
+     parameter is then REFUSED by a guard added in efbf36b (#363, 2026-11-01), first
+     released in 0.48.0.
+
+     Why the cluster nonetheless exists: it was provisioned on 2026-11-03 under rdc
+     0.47.0, which predates that guard by two releases. KRATEO_RDC_VERSION moved to
+     0.50.0 on 2026-11-04 (commit b331b80) and the provision controller has
+     reconciled nothing since. So the six successful transitions and the code that
+     says they should fail are three releases apart.
+
+     WHAT THIS MEANS: the next time any node needs to deploy, undeploy, power-cycle
+     or clean, expect the request to be refused with `unresolved path parameter(s)
+     [node_id]` in the rest-dynamic-controller log. If you are reading this because
+     a transition stopped working, that is why — it is not your CR and not Ironic.
+
+     DO NOT "fix" it by guessing a different source. `status.node_id` is a dead end
+     by design: populateStatusFields reads only a response body, our findby items
+     carry no node_id, and the PUT returns 202 with no body — the generator already
+     warns `status field 'node_id' not found in response`. The open question, with
+     oasgen, is what resolved {node_id} under 0.47.0 and what removed it; the answer
+     decides the fix. */}}
 {{- define "baremetal-host.nodeApiVersion" -}}baremetal.ogen.krateo.io/v1-0-0{{- end -}}
 {{- define "baremetal-host.nodeNamespace" -}}
 {{- if .Values.nodeNamespace -}}{{- .Values.nodeNamespace -}}{{- else -}}{{- .Release.Namespace -}}{{- end -}}

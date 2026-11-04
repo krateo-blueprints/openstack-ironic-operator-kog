@@ -343,14 +343,49 @@ Worth its own section, because the conclusion generalises beyond this repo.
 | rdc: a CR ignored for a selector mismatch reports nothing | Open. May be structural — a selector-scoped informer never sees the object, so there is nothing to attach a condition to. |
 | core-provider **#304** ("cdc never prunes") | **Withdrawn — it was wrong.** Removal from spec does fire `deleted:1`. The earlier `deleted:0` readings were reconciles in which nothing had been removed. |
 
-**One thing is still unexplained and is deliberately not being designed
-against.** With `node_id` absent from the generated CRD, the mapping reads
-nothing — yet six blades walked `available → active` through those kinds. All
-seven `transition-*.yaml` templates set a field the apiserver cannot store, and
-the correct behaviour is arriving from somewhere nobody has identified. A
-comment at the top of `charts/baremetal-host/templates/_helpers.tpl` says not
-to "fix" this until the upstream trace lands: removing the field changes
-nothing, and repointing it would be guessing at an unidentified mechanism.
+### The transitions are probably broken right now, latently
+
+This is the most important open item and it is operational, not academic.
+
+oasgen-provider traced the path-parameter resolution at HEAD. There are exactly
+four writers, in precedence order:
+
+```
+fieldMapping > requestFieldMapping > Configuration CR > spec > status
+```
+
+Ours is a `requestFieldMapping` reading `spec.node_id` — a field the CRD does
+not have, so it is pruned on write, so the mapping finds nothing and **silently
+skips** (`builder.go:215-217`: `if err != nil || !found { continue }` — no
+parameter, no error, no log line). An unresolved path parameter is then
+**refused** by a guard added in `efbf36b` (#363, 2026-11-01), first released in
+**0.48.0**.
+
+So why does a working cluster exist? **Version skew.**
+
+| | |
+|---|---|
+| Cluster provisioned | 2026-11-03, under rdc **0.47.0** — two releases before the guard |
+| `KRATEO_RDC_VERSION` → 0.50.0 | 2026-11-04, commit `b331b80` |
+| Provision controller since | started 05:49, build 0.50.0, **zero reconciles** |
+
+The six successful transitions and the code that says they must fail are three
+releases apart. Nothing has needed a transition since the upgrade, so nothing
+has surfaced.
+
+**Expect the next deploy, undeploy, power-cycle or clean to be refused** with
+`unresolved path parameter(s) [node_id]` in the rdc log. That is a better
+failure than the silent one it replaced — #363 is why it will be visible — but
+it means this morning's upgrade put a latent regression into a working system.
+
+**Do not "fix" it by guessing another source.** `status.node_id` is a dead end
+by design: `populateStatusFields` reads only a response body, the findby items
+carry no `node_id`, and the PUT returns 202 with no body — the generator
+already emits `status field 'node_id' not found in response`. The open question
+is what resolved `{node_id}` under 0.47.0 and what removed it, and the answer
+decides the fix. The comment at the top of
+`charts/baremetal-host/templates/_helpers.tpl` carries the same warning next to
+the code.
 
 ---
 
