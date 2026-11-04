@@ -113,23 +113,6 @@
           "description": "Stamps krateo.io/connector-verbose on the BaremetalNode CR so rest-dynamic-controller logs the full HTTP exchange with Ironic, body included. RDC otherwise reports a bare status code and discards Ironic's faultstring. Requires RDC >= 0.26.1, which redacts credential headers."
         }
       }
-    },
-    "teardown": {
-      "type": "object",
-      "description": "Teardown behaviour when the BaremetalHost is deleted. undeployOnDelete drives Ironic active->available in a pre-delete hook so removal-from-spec is a complete teardown signal; without it the BaremetalNode CR wedges in Terminating because Ironic refuses DELETE on an active node.",
-      "properties": {
-        "undeployOnDelete": {
-          "type": "boolean"
-        },
-        "timeoutSeconds": {
-          "type": "integer",
-          "minimum": 60
-        },
-        "image": {
-          "type": "string"
-        }
-      },
-      "additionalProperties": false
     }
   }
 }

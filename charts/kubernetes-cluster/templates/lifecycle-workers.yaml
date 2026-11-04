@@ -140,11 +140,27 @@ spec:
        same reason that one is: the drain gate on workers.removed[] asks
        `kubectl drain <node>` to succeed, which it cannot for a machine that is
        not a cluster member, so removed[] can never open for a worker whose
-       join failed. There is no third option either, because cdc patches what
-       the chart renders and NEVER deletes what disappears from it
-       (`created:0 deleted:0 patched:10` in its own log), so dropping the entry
-       from workers.nodes[] leaves the BaremetalHost in place and the
-       baremetal-host pre-delete teardown hook is never reached.
+       join failed.
+
+       v0.13.21 CORRECTION. This comment used to claim there was no third
+       option because cdc "NEVER deletes what disappears from the render",
+       citing `created:0 deleted:0 patched:10` from its own log. That was
+       wrong, and it was reported upstream before being measured properly.
+       Removing blade06 from workers.nodes[] on 2026-11-04 produced
+       `created:0 deleted:1 patched:5` and a deletionTimestamp on the
+       BaremetalHost. The earlier zeros were reconciles in which nothing had
+       been removed -- evidence about the inputs, read as evidence about the
+       mechanism. Dropping an entry from workers.nodes[] DOES delete its
+       BaremetalHost.
+
+       It still is not the right lever for a failed worker, for a different
+       reason: deletion fires `helm uninstall`, which does not re-render the
+       chart, so it cannot walk Ironic from `active` down to `available`
+       first -- KOG fires DELETE /v1/nodes/{id} against an active node and
+       Ironic refuses. Undeploy has to happen BEFORE the record goes away,
+       which is what this path does and what deletion cannot do. (0.6.1's
+       pre-delete hook was an attempt to close that gap inside the delete
+       path; it could not work, see baremetal-host values.yaml.)
        Same BH NAME as the normal worker path on purpose: cdc then PATCHES the
        live BaremetalHost to undeploy rather than creating a second one that
        fights it for the same machine. */}}

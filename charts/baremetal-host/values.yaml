@@ -158,21 +158,29 @@ debug:
   # Requires RDC >= 0.26.1, which redacts credential headers before logging.
   connectorVerbose: false
 
-# Teardown behaviour when the BaremetalHost is DELETED (e.g. its node was
-# removed from a composition's spec).
+# Teardown behaviour when the BaremetalHost is DELETED.
 #
-# undeployOnDelete makes removal-from-spec a complete teardown signal: a
-# pre-delete hook drives Ironic active -> available before the delete proceeds.
-# Without it, deleting a BaremetalHost whose node is `active` fires
-# DELETE /v1/nodes/{id}, Ironic refuses, and the BaremetalNode CR wedges in
-# Terminating forever while rdc retries. See templates/teardown-undeploy.yaml.
+# REMOVED in 0.6.2. Up to 0.6.1 this chart shipped a `pre-delete` hook Job
+# (templates/teardown-undeploy.yaml) that tried to drive Ironic
+# active -> available before the delete proceeded. It could never work, and
+# measurement on 2026-11-04 showed it had never once run:
 #
-# It fails CLOSED: if the undeploy does not complete within timeoutSeconds the
-# hook exits non-zero, failing the uninstall and keeping the BaremetalHost for
-# a retry, rather than deleting the record of a machine it could not drain.
-teardown:
-  undeployOnDelete: true
-  # Generous because a full clean (undeployMode: full) wipes the disk, and that
-  # takes as long as the disk takes.
-  timeoutSeconds: 1200
-  image: alpine:3.21
+#   1. core-provider derives a composition's RBAC from a helm dry-run INSTALL,
+#      and helm keeps hooks out of `release.Manifest`, so the generated
+#      ServiceAccount got no grant on batch/jobs. helm's
+#      `before-hook-creation` policy then could not delete the hook either,
+#      which turned every uninstall into a permanent failure.
+#   2. The hook created its NodeProvision with `curl -sS` and no `--fail`,
+#      output to /dev/null, so an HTTP 422 was indistinguishable from success.
+#      It was missing the CRD's required `configurationRef`.
+#   3. Fatally: rest-dynamic-controller 0.50.0 scopes its informer to
+#      `krateo.io/oas-version=<version>`, a label that cdc injects on the
+#      resources it renders. Nothing in a chart can set it. So a CR created by
+#      a hook is invisible to rdc forever -- a helm hook cannot drive a KOG
+#      transition at all.
+#
+# Drain-before-delete is not lost; it moved to where it can work. The parent
+# kubernetes-cluster chart's `workers.removed[]` sets `undeploy: true` on the
+# BaremetalHost, which renders templates/transition-undeploy.yaml THROUGH cdc
+# -- so it carries the label rdc requires -- waits for `available`, and only
+# then drops the node from the render.
