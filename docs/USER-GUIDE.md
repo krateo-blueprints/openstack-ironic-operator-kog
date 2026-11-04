@@ -40,9 +40,10 @@ those and generates one CRD + one `rest-dynamic-controller` per resource:
 These are **primitives**, not a state machine. Each CR represents one
 Ironic API call. There is no orchestration here — write a NodeProvision
 with `target: active` and KOG fires the PUT exactly once. Write a Node CR
-and KOG syncs it to Ironic via CRUD on `/v1/nodes`. The
-`keystone-ironic-proxy` sits in front of every API call to handle
-authentication + RFC-6902 JSON-Patch translation.
+and KOG syncs it to Ironic via CRUD on `/v1/nodes`. **Nothing sits in the
+request path**: authentication comes from the Configuration CR's token Secret,
+and rest-dynamic-controller builds the JSON-Patch itself. (A
+`keystone-ironic-proxy` used to do both; it was deleted on 2026-11-04.)
 
 This layer is `ironic-operator-kog` (the name of this repo). It's a thin,
 declarative wrapper over the Ironic REST API. You could use it on its
@@ -76,7 +77,7 @@ Rendered Layer-1 CRs (in openstack ns)
    Node + Port + NodeProvision (one per current transition) + NodePower
                 |
                 | KOG-RDC fires the API calls (one PUT per NodeProvision/NodePower,
-                | CRUD on Node + Port). keystone-ironic-proxy translates + auths.
+                | CRUD on Node + Port). Auth: Configuration CR token Secret.
                 v
 Ironic REST API
                 |
@@ -215,9 +216,9 @@ spec:
     redfish_system_id: /redfish/v1/Systems/blade01
 ```
 
-The chart proxies these to `node.driver_info` on the Ironic node. The
-keystone-ironic-proxy uses your `clouds.yaml` to authenticate — credentials
-*here* are the BMC's, not Ironic's.
+The chart maps these to `node.driver_info` on the Ironic node. Ironic's own
+credentials come from the Configuration CR's token Secret — credentials *here*
+are the BMC's, not Ironic's.
 
 ### Ports
 

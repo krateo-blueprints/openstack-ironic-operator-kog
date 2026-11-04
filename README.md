@@ -72,7 +72,7 @@ operator changes — only the endpoint behind the in-cluster `ironic` Service:
 
 - **Standalone Ironic (Bifrost)** — `make bifrost-up BIFROST_URL=http://<host>:6385`
   ([docs/BIFROST.md](docs/BIFROST.md)).
-- **Keystone-protected Ironic** — `make keystone-up CLOUDS_FILE=clouds.yaml OS_CLOUD=<name>`
+- **Keystone-protected Ironic** — declare `spec.authentication.apiKey.tokenRef` on the Configuration CR (no proxy; the `keystone-token-refresher` CronJob keeps the token current)
   ([docs/REAL-IRONIC.md](docs/REAL-IRONIC.md)).
 
 > The standalone Ironic pod includes an nginx sidecar that injects a default

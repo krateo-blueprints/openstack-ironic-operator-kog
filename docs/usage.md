@@ -125,7 +125,7 @@ Service changes.
   Full walkthrough: [BIFROST.md](./BIFROST.md).
 - **Keystone-protected Ironic** — an auth proxy authenticates with your `clouds.yaml`,
   injects a fresh `X-Auth-Token` + microversion, and forwards.
-  `make keystone-up CLOUDS_FILE=clouds.yaml OS_CLOUD=<name>`. Full walkthrough:
+  declare `spec.authentication.apiKey.tokenRef` on the Configuration CR. Full walkthrough:
   [REAL-IRONIC.md](./REAL-IRONIC.md).
 
 ## Kubernetes cluster on bare metal

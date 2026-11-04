@@ -90,7 +90,7 @@ make bifrost-up BIFROST_URL=http://<remote-or-tunnel>:6385
 
 This deploys an nginx proxy in the `openstack` namespace, generates its config with your
 `BIFROST_URL`, and patches the `ironic` Service selector at it. The operator's OAS endpoint
-(`http://ironic.openstack.svc.cluster.local:6385`) is unchanged. `make bifrost-down` reverts to
+(`http://ironic.openstack.svc.cluster.local:6385`) is unchanged. `make ironic-backend-direct` reverts to
 the local fake Ironic.
 
 Sanity-check from kind:
@@ -160,7 +160,8 @@ enroll
 ## Tear down
 
 ```bash
-make bifrost-down              # repoint ironic Service back at the local fake
+make ironic-backend-direct     # repoint ironic Service at IRONIC_BACKEND_MANIFEST's endpoint
+make ironic-backend-local      # or at the in-cluster fake, for local testing
 # On the remote, to wipe Bifrost completely:
 cd bifrost && ./bifrost-cli uninstall && sudo virsh destroy bm1; sudo virsh undefine bm1; ...
 ```

@@ -12,7 +12,9 @@ into the Node CR's spec.extra, so this sidecar does it.
 
 Loop:
   - List Node CRs (KOG primitives) in our namespace
-  - For each, GET /v1/nodes/<uuid> from the local keystone-ironic-proxy
+  - For each, GET /v1/nodes/<uuid> from the in-cluster `ironic` Service (whatever
+    backs it: local Ironic, a remote one across a VPN, or a proxy -- this script
+    does not know and must not care)
     (the existing container in the same pod, no extra auth needed)
   - If Ironic's `extra.kubeadm_join` differs from the CR's
     spec.extra.kubeadm_join: PATCH the CR with the new extra

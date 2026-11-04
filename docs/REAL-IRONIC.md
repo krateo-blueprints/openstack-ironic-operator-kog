@@ -35,19 +35,31 @@ This installs Krateo (KOG `oasgen-provider` + composition `core-provider`) and a
 RestDefinitions (`Node` CRUD + `NodeProvision` action). It also starts the local fake Ironic —
 that's fine; the next step repoints the `ironic` Service away from it.
 
-### 2. Point the operator at your real Ironic (Keystone auth proxy)
+### 2. Point the operator at your real Ironic
 
-Put your file at `./clouds.yaml` (gitignored), then:
+> **Changed 2026-11-04: there is no auth proxy any more.** `make keystone-up`,
+> `make keystone-down` and `manifests/keystone-ironic-proxy.yaml` were deleted.
+> Authentication is now declared on the **Configuration CR** —
+> `spec.authentication.apiKey.tokenRef` pointing at a Secret — and the
+> `keystone-token-refresher` CronJob keeps that token current. Nothing sits in
+> the request path.
+
+Two independent things, and keeping them separate is the point:
+
+**Auth** is a Configuration CR plus a token Secret. See
+`manifests/portconfiguration-ironic.yaml` for the shape; every Configuration
+kind needs its own `authentication` block.
+
+**Reachability** is whatever backs the in-cluster `ironic` Service. The
+operator always addresses `ironic.openstack.svc.cluster.local:6385` and cannot
+tell the difference between an in-cluster Ironic, a remote one across a VPN, or
+a proxy — verified by rendering the charts, which contain no mention of any
+transport. Switch it explicitly:
 
 ```bash
-make keystone-up CLOUDS_FILE=clouds.yaml OS_CLOUD=<your-cloud-name>
+make ironic-backend-direct   # the endpoint IRONIC_BACKEND_MANIFEST declares
+make ironic-backend-local    # the in-cluster fake Ironic, for local testing
 ```
-
-This creates a Secret from `clouds.yaml`, deploys the proxy (`scripts/keystone-ironic-proxy.py`
-in the openstack-client image, which uses `openstacksdk` to auto-refresh the Keystone token and
-discover the `baremetal` endpoint), and repoints the `ironic` Service at it. The proxy listens on
-the same port the operator already targets, so nothing else changes. `make keystone-down` switches
-back to the local fake Ironic.
 
 ### 3. Verify connectivity through the proxy
 

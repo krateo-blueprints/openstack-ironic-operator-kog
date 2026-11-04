@@ -1,6 +1,7 @@
 # openstack-ironic-operator - Ironic + Krateo integration
 .PHONY: help apply-oas apply-restdef deploy-chart package-chart template-chart deploy-ironic validate-chart \
-        kind-up kind-down local-up local-down ironic-up ironic-image ironic-down ironic-forward smoke-test kubeconfig
+        kind-up kind-down local-up local-down ironic-up ironic-image ironic-down ironic-forward smoke-test kubeconfig \
+        ironic-backend-direct ironic-backend-local
 
 HELM_NAMESPACE ?= default
 IRONIC_NS ?= openstack
@@ -30,9 +31,8 @@ help:
 	@echo "  composition-up - Host the chart + install the CompositionDefinition (real cdc path)"
 	@echo "  composition-demo - Create a BaremetalLifecycle instance; cdc walks it to active"
 	@echo "  bifrost-up     - Point the operator at a remote standalone Ironic (BIFROST_URL=http://host:6385)"
-	@echo "  bifrost-down   - Repoint the ironic Service back at the local fake Ironic"
-	@echo "  keystone-up    - Point the operator at a Keystone-protected Ironic (CLOUDS_FILE + OS_CLOUD)"
-	@echo "  keystone-down  - Repoint the ironic Service back at the local fake Ironic"
+	@echo "  ironic-backend-direct - Point Service/ironic at IRONIC_BACKEND_MANIFEST's endpoint"
+	@echo "  ironic-backend-local  - Point Service/ironic at the in-cluster fake Ironic"
 	@echo "Dedicated lab cluster (WireGuard tunnel runs in-cluster, host networking untouched):"
 	@echo "  lab-up         - Spin up a separate kind cluster with WG + Keystone proxy + operator"
 	@echo "  lab-down       - Delete the lab kind cluster"
@@ -267,26 +267,46 @@ composition-demo: # create a BaremetalLifecycle instance; composition-dynamic-co
 # operator: a proxy authenticates with your clouds.yaml and the `ironic` Service is repointed
 # at it. The OAS server URL never changes.
 CLOUDS_FILE ?= clouds.yaml
-# Default cloud entry name used by keystone-ironic-proxy when
+# Default cloud entry name used by the openstack client in lab tooling when
 # authenticating to the lab Keystone. Must match an entry in clouds.yaml.
 # `ironic-system` is the system-scoped admin entry used in the Ettore lab
 # (see reference_ironic-system-scope-clouds memory: project-scoped admin
 # returns 403 on baremetal:port:create at the deploy walk).
 OS_CLOUD ?= ironic-system
 
-keystone-up: # deploy the Keystone-auth proxy and point the `ironic` Service at your real Ironic
-	@test -f "$(CLOUDS_FILE)" || { echo "ERROR: set CLOUDS_FILE=<path to clouds.yaml> (got '$(CLOUDS_FILE)')"; exit 1; }
-	$(KUBECTL) -n $(IRONIC_NS) create secret generic ironic-clouds \
-		--from-file=clouds.yaml="$(CLOUDS_FILE)" --dry-run=client -o yaml | $(KUBECTL) apply -f -
-	$(KUBECTL) -n $(IRONIC_NS) create configmap keystone-ironic-proxy-script \
-		--from-file=keystone-ironic-proxy.py=scripts/keystone-ironic-proxy.py --dry-run=client -o yaml | $(KUBECTL) apply -f -
-	$(KUBECTL) apply -f manifests/keystone-ironic-proxy.yaml
-	$(KUBECTL) -n $(IRONIC_NS) set env deploy/keystone-ironic-proxy OS_CLOUD=$(OS_CLOUD)
-	$(KUBECTL) -n $(IRONIC_NS) rollout status deploy/keystone-ironic-proxy --timeout=150s
-	$(KUBECTL) -n $(IRONIC_NS) patch service ironic -p '{"spec":{"selector":{"app":"keystone-ironic-proxy"}}}'
-	@echo "ironic Service -> Keystone-auth proxy. Operator endpoint (OAS) unchanged."
+# --- What backs Service/ironic ---------------------------------------------------
+#
+# AGNOSTIC BY CONSTRUCTION, and verified rather than asserted on 2026-11-04:
+# every OAS document addresses `ironic.openstack.svc.cluster.local:6385`, and a
+# server-side render of kubernetes-cluster contains ZERO occurrences of
+# `wireguard`, `wg0`, `bifrost` or `wg-lab-route`. The operator and the charts
+# cannot tell whether Ironic is in-cluster, on another host, or across a VPN.
+# The only addresses in the render come from values (environment input) or are
+# derived at runtime -- the VIP the bootstrap node picks with `arping -D`.
+#
+# So "which Ironic" is a property of THIS layer only, and switching it is
+# ALWAYS EXPLICIT. There is deliberately no `*-down` target any more: the two
+# that existed patched `selector: {app: ironic}`, which selects the in-cluster
+# FAKE Ironic holding zero nodes. They read as "undo" and silently repointed
+# Krateo at an empty Ironic -- every node would appear to vanish, with nothing
+# erroring. Measured 2026-11-04.
+#
+# Point this at your own environment's manifest; nothing below assumes a VPN.
+IRONIC_BACKEND_MANIFEST ?= manifests/wg-lab-route.yaml
 
-keystone-down: # repoint the `ironic` Service back at the local fake Ironic
+ironic-backend-direct: # Service/ironic -> the endpoint IRONIC_BACKEND_MANIFEST declares (no proxy)
+	@test -f "$(IRONIC_BACKEND_MANIFEST)" || { echo "ERROR: IRONIC_BACKEND_MANIFEST not found: '$(IRONIC_BACKEND_MANIFEST)'"; exit 1; }
+	# selector:null FIRST. A Service with any selector makes Kubernetes manage
+	# its EndpointSlices, which silently overrides the hand-written one -- so
+	# applying the manifest while a selector is still set does nothing useful.
+	-$(KUBECTL) -n $(IRONIC_NS) patch service ironic --type=merge -p '{"spec":{"selector":null}}'
+	$(KUBECTL) apply -f $(IRONIC_BACKEND_MANIFEST)
+	@echo "ironic Service -> endpoint from $(IRONIC_BACKEND_MANIFEST). Operator endpoint (OAS) unchanged."
+	$(KUBECTL) -n $(IRONIC_NS) get endpointslice -l kubernetes.io/service-name=ironic \
+		-o custom-columns=NAME:.metadata.name,ENDPOINTS:.endpoints[*].addresses
+
+ironic-backend-local: # Service/ironic -> the in-cluster fake Ironic (local testing ONLY)
+	@echo "NOTE: this selects the in-cluster fake Ironic. It holds no real nodes."
 	$(KUBECTL) -n $(IRONIC_NS) patch service ironic -p '{"spec":{"selector":{"app":"ironic"}}}'
 
 # --- Remote standalone Ironic (Bifrost) -----------------------------------------
@@ -299,11 +319,18 @@ bifrost-up:   # deploy the in-cluster proxy and point `ironic` Service at a remo
 	$(KUBECTL) apply -f manifests/bifrost-proxy.yaml
 	$(KUBECTL) -n $(IRONIC_NS) rollout restart deploy/bifrost-proxy
 	$(KUBECTL) -n $(IRONIC_NS) rollout status deploy/bifrost-proxy --timeout=120s
+	# Setting ANY selector makes Kubernetes manage this Service's EndpointSlices,
+	# which overrides the hand-written one. That is intended here and it is also
+	# destructive: it replaces whatever backend was in place.
+	@echo "WARNING: this replaces the current Service/ironic backend. Restore afterwards with"
+	@echo "         make ironic-backend-direct   (or ironic-backend-local for the fake)"
 	$(KUBECTL) -n $(IRONIC_NS) patch service ironic -p '{"spec":{"selector":{"app":"bifrost-proxy"}}}'
 	@echo "ironic Service -> Bifrost at $(BIFROST_URL). Operator endpoint (OAS) unchanged."
 
-bifrost-down: # repoint the `ironic` Service back at the local fake Ironic
-	$(KUBECTL) -n $(IRONIC_NS) patch service ironic -p '{"spec":{"selector":{"app":"ironic"}}}'
+# bifrost-down REMOVED 2026-11-04: it patched `selector: {app: ironic}`, i.e. the
+# in-cluster fake Ironic. To leave bifrost mode, say which backend you want:
+#   make ironic-backend-direct   (the endpoint IRONIC_BACKEND_MANIFEST declares)
+#   make ironic-backend-local    (the in-cluster fake, for local testing)
 
 # --- Lab cluster: dedicated kind cluster with in-cluster WireGuard + Keystone proxy ----
 # A separate kind cluster (default name: ironic-lab) where the WireGuard tunnel runs inside the
@@ -330,7 +357,7 @@ WG_CONF     ?= local/wireguard/ironic-lab.conf
 # Project-scoped admin works at microversion 1.109+ for both node:create and port:create
 # (Ironic's RBAC matches the caller's project against node.owner). At 1.99 it returned 403
 # and needed a system_scope:all workaround; that's no longer the default.
-# OS_CLOUD default lives near the keystone-up target (currently `ironic-system`).
+# OS_CLOUD default is set above (currently `ironic-system`); lab tooling only.
 
 # v2026-11-04: applies wg-lab-route, NOT the removed wg-ironic-proxy.
 #
@@ -349,8 +376,6 @@ lab-tunnel-up: # apply the WG route DaemonSet + the extra-bridge + their Secrets
 		--from-file=wg0.conf="$(WG_CONF)" --dry-run=client -o yaml | $(KUBECTL) apply -f -
 	$(KUBECTL) -n $(IRONIC_NS) create secret generic ironic-clouds \
 		--from-file=clouds.yaml="$(CLOUDS_FILE)" --dry-run=client -o yaml | $(KUBECTL) apply -f -
-	$(KUBECTL) -n $(IRONIC_NS) create configmap keystone-ironic-proxy-script \
-		--from-file=keystone-ironic-proxy.py=scripts/keystone-ironic-proxy.py --dry-run=client -o yaml | $(KUBECTL) apply -f -
 	$(KUBECTL) -n $(IRONIC_NS) create configmap ironic-extra-bridge-script \
 		--from-file=ironic-node-extra-bridge.py=scripts/ironic-node-extra-bridge.py --dry-run=client -o yaml | $(KUBECTL) apply -f -
 	$(KUBECTL) apply -f manifests/ironic-extra-bridge.yaml
