@@ -267,7 +267,7 @@ composition-demo: # create a BaremetalLifecycle instance; composition-dynamic-co
 # operator: a proxy authenticates with your clouds.yaml and the `ironic` Service is repointed
 # at it. The OAS server URL never changes.
 CLOUDS_FILE ?= clouds.yaml
-# Default cloud entry name used by wg-ironic-proxy / keystone-ironic-proxy when
+# Default cloud entry name used by keystone-ironic-proxy when
 # authenticating to the lab Keystone. Must match an entry in clouds.yaml.
 # `ironic-system` is the system-scoped admin entry used in the Ettore lab
 # (see reference_ironic-system-scope-clouds memory: project-scoped admin
@@ -311,15 +311,40 @@ bifrost-down: # repoint the `ironic` Service back at the local fake Ironic
 # `ironic.openstack.svc.cluster.local:6385` and traffic exits via WG to the real Ironic.
 LAB_CLUSTER ?= ironic-lab
 WG_CONF     ?= local/wireguard/ironic-lab.conf
+# NOTE: `managementCluster.apiUrl` (http://198.51.100.5:8443) has no listener.
+#
+# Measured 2026-11-04, and the ADDRESS is fine -- the LISTENER is gone:
+#   * the live wg-lab-route pod still holds 198.51.100.5/32 on wg0, and the
+#     lab routes 198.51.100.0/28 through the tunnel, so the address resolves
+#     and routes. (198.51.100.0/24 is RFC 5737 TEST-NET-2, chosen deliberately
+#     as an overlay range precisely because it is not routed on the internet.)
+#   * but :8443 was served by a `mgmt-api-proxy` kubectl-proxy SIDECAR inside
+#     the wg-ironic-proxy pod. wg-lab-route has ONE container and no such
+#     sidecar, and nothing listens on 8443 on that address.
+#
+# So the CP cloud-init's publish-workload-kubeconfig.sh POSTs into a refused
+# connection, retries 5 times, logs to the blade and exits 1 without gating
+# bring-up -- which is why the <cluster>-workload-kubeconfig Secret has never
+# existed. Tracked separately; do NOT "fix" it by reinstating the proxy, which
+# would overwrite Service/ironic and break the route to Ironic.
 # Project-scoped admin works at microversion 1.109+ for both node:create and port:create
 # (Ironic's RBAC matches the caller's project against node.owner). At 1.99 it returned 403
 # and needed a system_scope:all workaround; that's no longer the default.
 # OS_CLOUD default lives near the keystone-up target (currently `ironic-system`).
 
-lab-tunnel-up: # apply the wg+proxy Deployment+Service + Secrets/ConfigMap (kubeconfig from caller)
+# v2026-11-04: applies wg-lab-route, NOT the removed wg-ironic-proxy.
+#
+# The proxy was superseded by the "zero proxies" work: wg-lab-route is a
+# DaemonSet that terminates the tunnel and publishes `ironic` and `keystone`
+# Services backed by EndpointSlices pointing straight at the lab gateway. Both
+# manifests declared `Service/ironic`, so this target used to OVERWRITE the
+# working Service with a selector aimed at proxy pods that no longer exist --
+# i.e. running it would have broken Krateo's only route to Ironic. Measured
+# 2026-11-04; the proxy manifest is deleted.
+lab-tunnel-up: # apply the WG route DaemonSet + the extra-bridge + their Secrets/ConfigMaps
 	@test -f "$(WG_CONF)" || { echo "ERROR: set WG_CONF (got '$(WG_CONF)')"; exit 1; }
 	@test -f "$(CLOUDS_FILE)" || { echo "ERROR: set CLOUDS_FILE (got '$(CLOUDS_FILE)')"; exit 1; }
-	$(KUBECTL) apply -f manifests/wg-ironic-proxy.yaml
+	$(KUBECTL) apply -f manifests/wg-lab-route.yaml
 	$(KUBECTL) -n $(IRONIC_NS) create secret generic ironic-wg-config \
 		--from-file=wg0.conf="$(WG_CONF)" --dry-run=client -o yaml | $(KUBECTL) apply -f -
 	$(KUBECTL) -n $(IRONIC_NS) create secret generic ironic-clouds \
@@ -328,9 +353,9 @@ lab-tunnel-up: # apply the wg+proxy Deployment+Service + Secrets/ConfigMap (kube
 		--from-file=keystone-ironic-proxy.py=scripts/keystone-ironic-proxy.py --dry-run=client -o yaml | $(KUBECTL) apply -f -
 	$(KUBECTL) -n $(IRONIC_NS) create configmap ironic-extra-bridge-script \
 		--from-file=ironic-node-extra-bridge.py=scripts/ironic-node-extra-bridge.py --dry-run=client -o yaml | $(KUBECTL) apply -f -
-	$(KUBECTL) -n $(IRONIC_NS) set env deploy/wg-ironic-proxy OS_CLOUD=$(OS_CLOUD)
-	$(KUBECTL) -n $(IRONIC_NS) rollout restart deploy/wg-ironic-proxy
-	$(KUBECTL) -n $(IRONIC_NS) rollout status deploy/wg-ironic-proxy --timeout=300s
+	$(KUBECTL) apply -f manifests/ironic-extra-bridge.yaml
+	$(KUBECTL) -n $(IRONIC_NS) rollout status ds/wg-lab-route --timeout=300s
+	$(KUBECTL) -n $(IRONIC_NS) rollout status deploy/ironic-extra-bridge --timeout=300s
 
 lab-up: # bring up the lab cluster end-to-end (kind + Krateo + WG/proxy + RestDefinitions)
 	$(MAKE) KIND_CLUSTER=$(LAB_CLUSTER) KUBECONFIG_FILE=local/kubeconfig.$(LAB_CLUSTER) \

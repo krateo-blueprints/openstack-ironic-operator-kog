@@ -25,7 +25,7 @@ hardware misbehaviour, concurrency, chart-version skew, and time.
 
 Every test observes three surfaces — the chart render, the control plane (cdc + RDC
 + KOG logs, NodeProvision/NodePower CR lifecycle), and Ironic itself
-(`provision_state` / `power_state` / `instance_info` via the wg-ironic-proxy). A
+(`provision_state` / `power_state` / `instance_info` via the wg-lab-route tunnel). A
 test only passes when all three agree.
 
 ## Blade allocation
@@ -334,7 +334,7 @@ hostname).
   release; no name collisions because the chart embeds `.Release.Name`. Verify by
   grep'ing rendered CR names — they should differ at every transition.
 - Control plane: two reconcile loops interleave in cdc logs; both progress
-  monotonically; no goroutine livelock; the wg-ironic-proxy's connection pool
+  monotonically; no goroutine livelock; the wg-lab-route tunnel's connection pool
   handles both PUTs (look for proxy log `max conns reached` or 503s — must not
   happen).
 - Ironic: both nodes walk enroll → active independently. The Ironic conductor
@@ -592,7 +592,7 @@ Every test logs the same five streams to a per-test directory:
 1. cdc operator logs (filtered by release name)
 2. RDC logs (filtered by Node UUID)
 3. KOG logs (filtered by the four CR kinds the chart emits)
-4. wg-ironic-proxy access log
+4. wg-lab-route tunnel log
 5. Ironic node JSON at each state transition (poll `/v1/nodes/{id}` via the proxy)
 
 This is the artifact that lets a future tester reproduce a failure offline and run

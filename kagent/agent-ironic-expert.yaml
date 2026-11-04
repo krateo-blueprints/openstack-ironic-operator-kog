@@ -159,7 +159,7 @@ spec:
 
       1. CP's `publish-join.sh` PATCHes `Ironic.node.extra.{kubeadm_join,
          cert_key}`.
-      2. `ironic-extra-bridge` sidecar in `wg-ironic-proxy` pod polls Ironic
+      2. `ironic-extra-bridge` Deployment (was a sidecar in the deleted `wg-ironic-proxy` pod) polls Ironic
          every 10s.
       3. When Ironic's `provision_state` is in `{active, deploying, wait
          call-back}`, the bridge mirrors `Ironic.extra` → `Node.spec.extra`

@@ -239,9 +239,14 @@ roundabout:
 - Join commands, the certificate key, the etcd IP and the control-plane
   endpoint are published into **Ironic's `node.extra`** and read back from
   there by joining nodes. Ironic is the only rendezvous both sides can see.
-- A `wg-ironic-proxy` Deployment terminates a WireGuard tunnel to the lab and
-  `socat`-forwards TCP to the real Ironic. It parses nothing and rewrites
-  nothing, deliberately.
+- A **`wg-lab-route` DaemonSet** terminates a WireGuard tunnel to the lab. It
+  parses nothing and rewrites nothing, deliberately. It replaced an earlier
+  `wg-ironic-proxy` Deployment in the "zero proxies" work; that manifest was
+  **deleted on 2026-11-04** because it also declared `Service/ironic`, so
+  `make lab-tunnel-up` would have overwritten the working Service with a
+  selector aimed at pods that no longer exist — breaking the only route to
+  Ironic. The bridge script that used to be a sidecar in that pod now runs as
+  its own `ironic-extra-bridge` Deployment.
 - In the reference environment the in-cluster `ironic` Service has **no
   selector**; an EndpointSlice points it at the lab endpoint. The `ironic`
   Deployment that also exists there is a leftover from local testing and holds

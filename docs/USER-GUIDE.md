@@ -952,15 +952,28 @@ baremetalhost-blade10-inspect-fail.yaml fixtures.
 
 ### Pre-deploy
 
-1. **The management apiserver is reached via the wg-ironic-proxy pod.**
-   That pod's wireguard interface holds `198.51.100.5` (from
-   `local/wireguard/ironic-lab.conf`), and the lab's `AllowedIPs` route
-   `198.51.100.0/28` through the tunnel. A `kubectl proxy` sidecar
-   (`mgmt-api-proxy` container in `wg-ironic-proxy`, added by the
-   wg-ironic-proxy manifest) binds on `198.51.100.5:8443` and forwards
-   to the in-cluster apiserver using its own scoped ServiceAccount
-   (RBAC: patch `nodes.baremetal.ogen.krateo.io`, create+get Secrets
-   in `openstack`).
+1. **The management apiserver has NO listener today — this step does not work.**
+
+   > **Measured 2026-11-04.** `wg-ironic-proxy` was deleted in the "zero
+   > proxies" work and `wg-lab-route` replaced it. The *address* still works:
+   > the live `wg-lab-route` pod holds `198.51.100.5/32` on `wg0` and the lab
+   > routes `198.51.100.0/28` through the tunnel. But `:8443` was served by a
+   > `mgmt-api-proxy` kubectl-proxy **sidecar inside the deleted pod**, and
+   > `wg-lab-route` has a single `tunnel` container with no such sidecar.
+   > Nothing listens on 8443.
+   >
+   > Consequence: the CP cloud-init's `publish-workload-kubeconfig.sh` POSTs
+   > into a refused connection, retries 5 times, logs to the blade and exits 1
+   > without gating bring-up — so the `<cluster>-workload-kubeconfig` Secret
+   > has **never existed**, and the worker-drain path that reads it has never
+   > run. Do not repair this by reinstating the proxy: its manifest also
+   > declared `Service/ironic` and would break Krateo's route to Ironic.
+
+   Historically: that pod's wireguard interface held `198.51.100.5` (from
+   `local/wireguard/ironic-lab.conf`), and a `kubectl proxy` sidecar bound on
+   `198.51.100.5:8443` and forwarded to the in-cluster apiserver using its own
+   scoped ServiceAccount (RBAC: patch `nodes.baremetal.ogen.krateo.io`,
+   create+get Secrets in `openstack`).
 
    The Ettore manifest's `spec.managementCluster.apiUrl` is
    `http://198.51.100.5:8443` — plain HTTP, because the kubectl-proxy

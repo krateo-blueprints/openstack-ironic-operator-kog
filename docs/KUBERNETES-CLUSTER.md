@@ -187,7 +187,7 @@ For HA the same pattern carries `cert_key` — the encryption key for kubeadm's 
 
 ## Bridge sidecar — state machine
 
-`scripts/ironic-node-extra-bridge.py` runs in the `wg-ironic-proxy` pod alongside the keystone proxy. Two responsibilities, run in every 10s tick:
+`scripts/ironic-node-extra-bridge.py` runs in its own **`ironic-extra-bridge` Deployment** (it was a sidecar in the `wg-ironic-proxy` pod until that manifest was deleted on 2026-11-04). Two responsibilities, run in every 10s tick:
 
 ```mermaid
 flowchart TB
@@ -370,7 +370,7 @@ spec:
     serviceAccountNamespace: openstack
 ```
 
-`apiUrl` is the kubectl-proxy sidecar inside `wg-ironic-proxy`, reachable from the lab through the WG tunnel. The SA and its token-Secret are created by the chart's `rbac.yaml` with `secrets: create,get` and `nodes: get,patch`.
+`apiUrl` **has no listener today.** It was a kubectl-proxy sidecar inside `wg-ironic-proxy`; that pod is deleted and `wg-lab-route` did not replace the sidecar, so `198.51.100.5:8443` refuses connections even though the address still routes through the tunnel. See docs/USER-GUIDE.md "Pre-deploy". The SA and its token-Secret are created by the chart's `rbac.yaml` with `secrets: create,get` and `nodes: get,patch`.
 
 ### Control plane
 
@@ -483,7 +483,7 @@ Order matters: top of the table = check first.
 | Worker has `kubelet.conf` but says `connect: connection refused` | check the CP's apiserver | same etcd-flap cluster of symptoms. v0.10.12 fix should hold. |
 | `<cluster>-workload-kubeconfig` Secret missing | `sudo tail /var/log/publish-workload-kubeconfig.log` on CP | SA token wasn't rendered (rbac.yaml race) — re-render BH by annotating the KubernetesCluster CR. |
 | `<cluster>-workload-kubeconfig` exists but points at the wrong IP | decode it: `… \| base64 -d \| grep server:` | `--apiserver-advertise-address` resolved to an unexpected NIC. Check `ip route get 8.8.8.8` on the CP — should print the data network IP. |
-| Bridge log spams `HTTP Error 403` | the SA's Role is missing a verb | patch `manifests/wg-ironic-proxy.yaml` Role; re-`make lab-tunnel-up`. The bridge needs `get,list,patch,delete` on `nodes,ports,nodeprovisions,nodepowers`. |
+| Bridge log spams `HTTP Error 403` | the SA's Role is missing a verb | patch `manifests/ironic-extra-bridge.yaml` Role; re-`make lab-tunnel-up`. The bridge needs `get,list,patch,delete` on `nodes,ports,nodeprovisions,nodepowers`. |
 | `kubectl get bh -o yaml` shows the OLD `kubeadm_join` after a redeploy | check Ironic `node.provision_state` | bridge clears extra only when state is NOT `{active, deploying, wait call-back}` (v0.10.8). If clearing isn't happening, restart the wg pod. |
 | New worker BH never renders even though blade06 is Ready | check Node CR | `Node.spec.extra.kubeadm_join` is the gate. Verify bridge mirrored it; if not, `kubectl -n openstack logs <wg-pod> -c ironic-extra-bridge --tail=30`. |
 
