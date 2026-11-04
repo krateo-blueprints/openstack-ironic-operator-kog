@@ -17,6 +17,25 @@ import "testing"
 // much, and these are four real documents whose behaviour must NOT change. An
 // arm over a case that already looks correct is the one most likely to be
 // skipped.
+//
+// ONE ASYMMETRY, verified against the manifests on request and it is load-bearing:
+// `ports` is the only one of the four whose by-uuid GET has NO mapping.
+//
+//   ports            GET /v1/ports/{uuid}            (no mapping)
+//   portgroups       GET /v1/portgroups/{uuid}       uuid <- spec.name
+//   allocations      GET /v1/allocations/{uuid}      uuid <- spec.name
+//   deploytemplates  GET /v1/deploy_templates/{uuid} uuid <- spec.name
+//
+// So `ports`' by-uuid GET is EXACTLY the #455 shape: a required path parameter
+// satisfied only by status (`additionalStatusFields` carries `uuid`), with no
+// mapping. It escapes the #410 guard today only because mappingSuppliedParams
+// is computed across ALL verbs, and the DELETE verb's mapping marks `uuid` as
+// supplied globally.
+//
+// That is an accident, not a design. Remove the DELETE verb or its mapping and
+// `uuid` stops being mapping-supplied, enters requiredParameters, the guard
+// refuses the exclusion, and `Port` becomes uncreatable -- with 12 live CRs.
+// #456 is what makes that safe by design rather than by side effect.
 func ironicDefinitions() []struct {
 	name     string
 	resource *ResourceConfig
@@ -37,8 +56,9 @@ func ironicDefinitions() []struct {
 					FieldMapping: []FieldMapping{{InPath: "uuid", InCustomResource: "status.uuid"}}},
 			}}},
 		{"portgroups", &ResourceConfig{
-			ExcludedSpecFields: []string{"uuid"},
-			Identifiers:        []string{"name"},
+			ExcludedSpecFields:     []string{"uuid"},
+			AdditionalStatusFields: []string{"uuid", "node_uuid", "address"},
+			Identifiers:            []string{"name"},
 			Verbs: []Verb{
 				{Action: "get", Method: "GET", Path: "/v1/portgroups/{uuid}",
 					FieldMapping: []FieldMapping{{InPath: "uuid", InCustomResource: "spec.name"}}},
@@ -46,8 +66,9 @@ func ironicDefinitions() []struct {
 					FieldMapping: []FieldMapping{{InPath: "uuid", InCustomResource: "spec.name"}}},
 			}}},
 		{"allocations", &ResourceConfig{
-			ExcludedSpecFields: []string{"uuid"},
-			Identifiers:        []string{"name"},
+			ExcludedSpecFields:     []string{"uuid"},
+			AdditionalStatusFields: []string{"uuid", "state", "node_uuid"},
+			Identifiers:            []string{"name"},
 			Verbs: []Verb{
 				{Action: "get", Method: "GET", Path: "/v1/allocations/{uuid}",
 					FieldMapping: []FieldMapping{{InPath: "uuid", InCustomResource: "spec.name"}}},
@@ -55,8 +76,9 @@ func ironicDefinitions() []struct {
 					FieldMapping: []FieldMapping{{InPath: "uuid", InCustomResource: "spec.name"}}},
 			}}},
 		{"deploytemplates", &ResourceConfig{
-			ExcludedSpecFields: []string{"uuid"},
-			Identifiers:        []string{"name"},
+			ExcludedSpecFields:     []string{"uuid"},
+			AdditionalStatusFields: []string{"uuid"},
+			Identifiers:            []string{"name"},
 			Verbs: []Verb{
 				{Action: "get", Method: "GET", Path: "/v1/deploy_templates/{uuid}",
 					FieldMapping: []FieldMapping{{InPath: "uuid", InCustomResource: "spec.name"}}},

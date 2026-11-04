@@ -592,6 +592,39 @@ discriminated nothing:
 | `nodepowers` | `node_id` | yes | no | **absent** |
 | `nodeprovisions` | `node_id` | yes | no | **absent** |
 
+**`ports`' exemption is an accident of a mapping on a different verb.** Asked
+to verify the four transcriptions, 2026-11-05, and it found an asymmetry in this
+very table:
+
+```
+ports            GET /v1/ports/{uuid}             (no mapping)
+portgroups       GET /v1/portgroups/{uuid}        uuid <- spec.name
+allocations      GET /v1/allocations/{uuid}       uuid <- spec.name
+deploytemplates  GET /v1/deploy_templates/{uuid}  uuid <- spec.name
+```
+
+`ports` is the only one whose **by-uuid GET has no mapping**, so that verb's
+required `uuid` is satisfied **only by status** — `additionalStatusFields`
+carries it. That is exactly the oasgen #455 shape. It escapes #410's guard today
+only because `mappingSuppliedParams` is computed across **all** verbs, and the
+DELETE verb's `uuid <- status.uuid` marks `uuid` as supplied globally.
+
+**Remove the DELETE verb or its mapping and `Port` becomes uncreatable** —
+`uuid` stops being mapping-supplied, enters `requiredParameters`, the guard
+refuses the exclusion, and all 12 live `Port` CRs with an empty `spec.uuid` are
+rejected. oasgen #456 is what makes this safe by design rather than by side
+effect.
+
+**And the check caught an error of mine.** The arm I contributed upstream
+transcribed `additionalStatusFields` as empty for portgroups, allocations and
+deploytemplates. They are not: `[uuid, node_uuid, address]`,
+`[uuid, state, node_uuid]` and `[uuid]`. #456's new exemption is *precisely*
+about status-carried parameters, so omitting them under-specified the exact
+thing under test — three of four fixtures would have exercised only the mapping
+exemption and not the status one. The maintainer declined to take the file into
+their repo partly because they could not verify these transcriptions; they were
+right, and the thing they could not check was wrong.
+
 `ports` is the row that separates the two candidate explanations: its mapping
 is **not** self-referential and the property is absent anyway. So the
 discriminator is not "the mapping names its own parameter" — it is **whether
