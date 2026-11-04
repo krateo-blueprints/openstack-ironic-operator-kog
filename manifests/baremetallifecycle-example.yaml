@@ -5,7 +5,7 @@
 #
 #   kubectl apply -f manifests/baremetallifecycle-example.yaml
 ---
-apiVersion: composition.krateo.io/v0-3-1
+apiVersion: composition.krateo.io/v0-3-2
 kind: BaremetalLifecycle
 metadata:
   name: metal-a

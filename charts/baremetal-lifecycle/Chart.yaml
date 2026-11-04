@@ -2,7 +2,7 @@ apiVersion: v2
 name: baremetal-lifecycle
 description: Helm chart for Ironic bare metal server provisioning via composition-dynamic-controller. Creates a Node CR + Port CRs (synced by KOG) and per-state NodeProvision CRs that drive Ironic from `enroll` to `active`. Inspection is OUT OF SCOPE - use the sibling `baremetal-discovery` chart first if you need inventory before provisioning.
 type: application
-version: 0.3.1
+version: 0.3.2
 appVersion: "1.0"
 icon: https://raw.githubusercontent.com/krateoplatformops/krateo/main/docs/media/logo.svg
 keywords:
