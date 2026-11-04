@@ -101,6 +101,16 @@ spec:
       - action: findby
         method: GET
         path: /v1/nodes
+        # v2026-11-04: Ironic's node COLLECTION omits child nodes unless asked.
+        # Measured: GET /v1/nodes -> 3 nodes; ?include_children=true -> 17.
+        # blade01/04/05/06 are children of an enclosure and are ABSENT without
+        # this, so findby is structurally blind to them — not a pagination edge,
+        # the items are simply not in the only response the matcher sees.
+        # RDC reads `queries` (builder.go:87 -> :148); the GENERATOR does not,
+        # so this changes the RestDefinition only and regenerates no CRD.
+        queries:
+          - name: include_children
+            value: "true"
         identifiersMatchPolicy: OR
         headers:
           - name: X-OpenStack-Ironic-API-Version

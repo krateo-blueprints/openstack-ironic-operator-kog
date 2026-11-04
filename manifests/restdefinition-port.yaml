@@ -37,6 +37,25 @@ spec:
           actions:
             - "*"
     verbsDescription:
+      # v2026-11-04: declare the `get` the document ALREADY had.
+      #
+      # Port was findby-only purely because this verb was never wired up — the
+      # document declares get and delete on /v1/ports/{uuid}. Being findby-only
+      # is what exposed it to oasgen #378: a findby-addressed kind whose create
+      # was interrupted errors indefinitely instead of recreating, because
+      # findby can never match a resource that does not exist. With a get, the
+      # existence question has a direct answer.
+      #
+      # Only usable from oasgen/rdc 0.50.0: `uuid` is declared at the PATH-ITEM
+      # level in this document, and before #389 path-item parameters were
+      # validated but never populated, so the request was refused for an
+      # unresolved path parameter.
+      - action: get
+        method: GET
+        path: /v1/ports/{uuid}
+        headers:
+          - name: X-OpenStack-Ironic-API-Version
+            value: "1.109"
       - action: findby
         method: GET
         path: /v1/ports

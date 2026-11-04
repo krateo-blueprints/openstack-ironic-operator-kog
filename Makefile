@@ -112,15 +112,28 @@ smoke-test:   # drive a fake node enroll->active against the local Ironic (CLEAN
 	kill $$pf 2>/dev/null; exit $$rc
 
 KRATEO_CORE_VERSION ?= 1.0.0
-KRATEO_OASGEN_VERSION ?= 0.11.1
+# The https://charts.krateo.io index stops at oasgen 0.11.1; the real releases
+# live in the OCI registry, which is where the 0.47.0 install actually came
+# from. Pinning the stale index version here meant `make krateo-up` would have
+# silently reinstalled a years-old provider over a working one.
+KRATEO_OASGEN_VERSION ?= 0.50.0
+KRATEO_RDC_VERSION    ?= 0.50.0
+KRATEO_OCI            ?= oci://ghcr.io/krateo-platformops/charts
 
 krateo-up:    # install Krateo KOG (oasgen-provider) + composition engine (core-provider)
 	helm repo add krateo https://charts.krateo.io 2>/dev/null || true
 	helm repo update krateo
 	$(HELMK) upgrade --install krateo-core-provider krateo/core-provider \
 		-n krateo-system --create-namespace --version $(KRATEO_CORE_VERSION) --wait --timeout 6m
-	$(HELMK) upgrade --install krateo-oasgen-provider krateo/oasgen-provider \
-		-n krateo-system --version $(KRATEO_OASGEN_VERSION) --wait --timeout 6m
+	$(HELMK) upgrade --install krateo-oasgen-provider-crds $(KRATEO_OCI)/oasgen-provider-crds \
+		-n krateo-system --create-namespace --version $(KRATEO_OASGEN_VERSION) --wait --timeout 5m
+	$(HELMK) upgrade --install krateo-oasgen-provider $(KRATEO_OCI)/oasgen-provider \
+		-n krateo-system --version $(KRATEO_OASGEN_VERSION) \
+		--set rdc.image.registry=ghcr.io/krateo-platformops \
+		--set rdc.image.repository=rest-dynamic-controller \
+		--set rdc.image.tag=$(KRATEO_RDC_VERSION) \
+		--set rdc.image.pullPolicy=IfNotPresent \
+		--wait --timeout 8m
 	$(KUBECTL) -n krateo-system get pods
 
 restdef-up:   # apply OAS ConfigMaps + RestDefinitions (Node + Port + NodeProvision + NodePower) + endpoint singletons
