@@ -244,6 +244,24 @@ Stating these saves the next person from assuming they were overlooked.
   expose. **No predicate is better than one that fires on every healthy
   deploy.**
 - **No pre-delete hook.** See §8.
+- **No operator-settable Ironic microversion.** `ironicApiVersion` exists in
+  two charts' values, in four manifests and on the live cluster CR, and is
+  read by **nothing** — verified by checking every top-level values key
+  against the whole template tree; it and `ironicApiUrl` were the only two
+  with zero mentions, while the control (`ironicAuth`) resolves to
+  `_helpers.tpl:714`. The microversion is declared in the OAS documents
+  instead, `required` with a default the apiserver stamps onto every generated
+  CR.
+
+  The inert key is worth more attention than a dead value usually deserves,
+  because **it is dangerous precisely because it is inert**. It reads exactly
+  like the knob that controls the microversion, and it is set to `1.81` —
+  below the 1.83 floor for the findby's `include_children=true`. Anyone who
+  closes the apparent disconnect by wiring it through reintroduces the 406
+  described in §9. Both keys are annotated in place and are to be deleted at
+  the next parent chart bump; they are not deleted yet because removing them
+  from `values.schema.json` regenerates the CRD and would prune the field from
+  a live conformant cluster's CR.
 
 ## 6. Operating it
 
