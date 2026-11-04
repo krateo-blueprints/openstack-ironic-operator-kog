@@ -190,6 +190,14 @@ chart-host:   # package all four charts (baremetal-lifecycle + baremetal-discove
 	$(KUBECTL) -n $(IRONIC_NS) cp dist/kubernetes-cluster-$(CLUSTER_CHART_VERSION).tgz \
 		$$($(KUBECTL) -n $(IRONIC_NS) get pod -l app=chartrepo -o jsonpath='{.items[0].metadata.name}'):/usr/share/nginx/html/kubernetes-cluster-$(CLUSTER_CHART_VERSION).tgz
 
+chart-host-pinned:   # restore the chart versions the LIVE CompositionDefinitions pin
+	# `chart-host` publishes whatever is in Chart.yaml today. The chartrepo pod has
+	# no volumes, so a cluster restart wipes everything it serves and leaves the
+	# pinned older versions missing -- which surfaces as a chart-inspector 500 and
+	# every composition going Synced=False. This rebuilds the pinned versions from
+	# git and uploads them. Run it after `chart-host` on every resume.
+	./scripts/chart-host-pinned.sh
+
 composition-up: chart-host   # install all four CompositionDefinitions
 	$(KUBECTL) apply -f manifests/compositiondefinition-baremetal-lifecycle.yaml
 	$(KUBECTL) apply -f manifests/compositiondefinition-baremetal-discovery.yaml

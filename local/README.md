@@ -87,15 +87,34 @@ Other kind clusters on this machine belong to other sessions. Only ever name
 
 ```bash
 docker start ironic-kog-control-plane
-# wait for the API, then RE-PUBLISH THE CHARTS:
-make chart-host
+# wait for the API, then RE-PUBLISH THE CHARTS — BOTH of these:
+make chart-host          # the versions currently in Chart.yaml
+make chart-host-pinned   # the versions the live CompositionDefinitions PIN
 ```
 
-`make chart-host` is **not optional** on resume. The `chartrepo` nginx
-Deployment has **no volumes**, so the `.tgz` files are in its container
-filesystem and are gone once the pod is recreated. Without them every
-CompositionDefinition fails to fetch its chart and cdc reports errors that look
-like a chart-version problem.
+Both are **mandatory**, and the second is the one that is easy to miss. The
+`chartrepo` nginx Deployment has **no volumes**, so everything it serves lives
+in its container filesystem and is gone the moment the pod is recreated.
+
+`make chart-host` only republishes the versions each chart has on disk *right
+now*. The live CompositionDefinitions pin **older** versions — before a restart
+the chartrepo has accumulated every version ever published; afterwards it has
+only today's. Measured on 2026-11-04: after a restart, all four CDs pinned
+versions the chartrepo no longer had, and running `chart-host` alone left every
+BaremetalHost `Synced=False` with
+
+```
+observe failed: generating RBAC using chart-inspector: ... status code: 500
+```
+
+which reads as a chart-inspector fault rather than a missing file, and costs
+real time to diagnose. `make chart-host-pinned` reads each CD's pinned version,
+finds the commit where that chart last carried it, packages it from git and
+uploads it. It skips charts served from OCI, is idempotent, and exits non-zero
+if a pinned version cannot be found in history — which is itself worth knowing:
+the `baremetal-discovery` CD pins 0.2.0, a version that has never existed in
+this repo, so it was applied from some other source and cannot be satisfied
+here. Nothing currently uses it.
 
 ### Why a paused control plane is not dangerous
 
