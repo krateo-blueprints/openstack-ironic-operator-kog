@@ -342,6 +342,21 @@ nothing for its entire existence while logging `cleared ...` every ten seconds.
 separate document, still runs — so the machine boots and looks alive with none
 of its configuration applied.
 
+**`curl` without `--fail` turns an HTTP error into a success.** `curl -sS`
+exits **0** on a 4xx or 5xx — `-s` silences the progress meter, not the
+outcome. Send the output to `/dev/null` as well and a rejected request is
+indistinguishable from an accepted one. This repo's `pre-delete` hook POSTed a
+CR that was missing a required field, got a 422 every time, and logged
+`creating NodeProvision` on a twenty-minute loop while **zero** such CRs
+existed anywhere in the cluster.
+
+Generalised, because it will recur for anyone doing the same thing: **a hook,
+sidecar or cloud-init script that POSTs a generated CR directly must use
+`curl --fail` and must supply `configurationRef`**, which every generated kind
+requires and which nothing in the request reminds you of. The failure is not
+that the write is rejected — that is recoverable. It is that the script then
+reports having done it. See §8 for the full post-mortem.
+
 **An instrument reporting zero is a claim about the instrument.** Every
 negative in this repo is now paired with a known positive. This caught, among
 others: a `grep -c` matching a comment rather than the flag; `pgrep -f`
