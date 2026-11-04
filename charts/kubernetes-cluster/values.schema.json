@@ -154,19 +154,7 @@
       "type": "object",
       "description": "Endpoint + auth used by the CP cloud-init to kubectl-patch its own Node CR's spec.extra.kubeadm_join.",
       "properties": {
-        "apiUrl": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
         "caBundle": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "serviceAccountName": {
           "type": [
             "string",
             "null"

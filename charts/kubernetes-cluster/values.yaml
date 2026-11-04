@@ -106,7 +106,6 @@ ironicAuth:
 # `network.managementApiReachability` below for the option matrix
 # (kube-vip / MetalLB / external LB / NodePort+DNS).
 managementCluster:
-  apiUrl: ""
   # CA bundle for the management API. **Deprecated / optional override.**
   # The chart now `lookup`s the auto-projected `kube-root-ca.crt`
   # ConfigMap in the SA namespace (root-ca-cert-publisher controller,
@@ -116,7 +115,6 @@ managementCluster:
   # Service account name + namespace used by the CP to patch its own
   # BaremetalNode CR. The chart creates the SA + Role + RoleBinding + token
   # Secret (see templates/rbac.yaml) and reads the token at render time.
-  serviceAccountName: ""
   serviceAccountNamespace: ""
 
 # Network reachability hint — how the management cluster's API server

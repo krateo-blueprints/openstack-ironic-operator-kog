@@ -6,11 +6,11 @@
 #   - the Ironic Node KOG primitive is installed (the chart's lookup reads
 #     nodes.baremetal.ogen.krateo.io to gate workers on the CP's join token)
 #   - the bare-metal blades can reach the management cluster's API server
-#     (managementCluster.apiUrl) — this is a network design constraint
+#     (removed in 0.13.25; the CP publishes through Ironic instead)
 #
 #   kubectl apply -f manifests/kubernetescluster-example.yaml
 ---
-apiVersion: composition.krateo.io/v0-13-24
+apiVersion: composition.krateo.io/v0-13-25
 kind: KubernetesCluster
 metadata:
   name: lab
@@ -40,7 +40,6 @@ spec:
     # Reachable from the bare-metal provisioning network. Pin a stable
     # advertised address (kube-vip, MetalLB, external LB, or
     # NodePort+DNS — see USER-GUIDE.md).
-    apiUrl: https://10.0.0.1:6443
     # PEM CA bundle is OPTIONAL since chart v0.2.0 — the chart `lookup`s
     # the auto-projected `kube-root-ca.crt` ConfigMap in the SA namespace
     # by default. Uncomment only if the management cluster has the
@@ -49,7 +48,9 @@ spec:
     #   -----BEGIN CERTIFICATE-----
     #   ...PEM...
     #   -----END CERTIFICATE-----
-    serviceAccountName: lab-cp-publisher
+    # apiUrl / serviceAccountName REMOVED in chart 0.13.25: the CP no longer
+    # talks to the management apiserver at all. The drain credential travels
+    # through Ironic's node.extra like every other published value.
     serviceAccountNamespace: openstack
   controlPlane:
     # Stable apiserver endpoint advertised by `kubeadm init`. Empty

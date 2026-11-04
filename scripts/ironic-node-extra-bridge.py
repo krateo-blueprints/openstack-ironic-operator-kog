@@ -85,7 +85,13 @@ INTERVAL = int(os.environ.get("BRIDGE_INTERVAL", "10"))
 # rather than a content hash. Mirroring it would arm a re-image of every
 # blade on every chart bump. Make it a real content hash first; until then
 # leaving it unmirrored is what keeps the gate shut.
-EXTRA_KEYS = ("kubeadm_join", "cert_key", "etcd_ip", "cp_endpoint", "cp_stage")
+# v2026-11-04: drain_kubeconfig added. The bridge mirrors an EXPLICIT
+# allow-list because a whole-map replay once deleted the control-plane VIP --
+# so a new node.extra key that is not listed here is published by the blade and
+# then never reaches the CR, which is exactly how cp_endpoint and etcd_ip were
+# silently lost for hours.
+EXTRA_KEYS = ("kubeadm_join", "cert_key", "etcd_ip", "cp_endpoint", "cp_stage",
+              "drain_kubeconfig")
 
 HELM_RELEASE_SECRET_PREFIX = "sh.helm.release.v1."
 # Don't reap a KOG primitive whose helm-release-name doesn't match a

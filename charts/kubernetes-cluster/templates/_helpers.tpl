@@ -82,6 +82,26 @@
       sensitive data, keep it secret! As a safeguard, uploaded-certs will
       be deleted in two hours; If necessary, you can use kubeadm init
       phase upload-certs to reload certs afterward." */}}
+{{/* The drain-scoped kubeconfig the bootstrap CP published into Ironic's
+     node.extra, mirrored onto the CR by the extra-bridge. Base64 as published;
+     a Secret's `data` wants base64, so it is carried through unchanged rather
+     than decoded and re-encoded.
+
+     Empty until the CP has booted and the bridge has mirrored the key -- the
+     same two-phase shape as cert_key and cp_endpoint. The Secret template
+     renders nothing while it is empty, and drain-jobs.yaml already skips when
+     the Secret is absent, so the gate is the existing one. */}}
+{{- define "kubernetes-cluster.drainKubeconfig" -}}
+{{- $ns  := include "kubernetes-cluster.lifecycleNamespace" . -}}
+{{- $cp  := include "kubernetes-cluster.cpNodeName"          . -}}
+{{- $node := lookup (include "kubernetes-cluster.nodeApiVersion" .) "BaremetalNode" $ns $cp -}}
+{{- if $node -}}
+{{- $extra := dig "spec" "extra" (dict) $node -}}
+{{- $kc    := index $extra "drain_kubeconfig" -}}
+{{- if $kc -}}{{- $kc -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "kubernetes-cluster.certKey" -}}
 {{- $ns  := include "kubernetes-cluster.lifecycleNamespace" . -}}
 {{- $cp  := include "kubernetes-cluster.cpNodeName"          . -}}
@@ -1571,75 +1591,184 @@ write_files:
         sleep 10
       done
       {{- end }}
-  - path: /etc/kubernetes/publish-workload-kubeconfig.sh
+  - path: /etc/kubernetes/publish-drain-kubeconfig.sh
     permissions: "0755"
     content: |
       #!/bin/bash
-      # Push the freshly-minted /etc/kubernetes/admin.conf as a Secret in
-      # the management cluster's openstack namespace, so external users
-      # (the chart's drain Jobs, an operator like Ettore, …) can kubectl
-      # into the new workload cluster without SSH-scping the file off
-      # blade06.
+      # Publish a DRAIN-SCOPED kubeconfig for this workload cluster into
+      # Ironic's node.extra, so the chart's drain Jobs can reach the workload
+      # apiserver without anyone SSH-copying admin.conf off a blade.
       #
-      # Authenticates as the chart's `<clusterName>-cp-publisher` SA — the
-      # same SA used by publish-join.sh for the BaremetalNode CR patch. Its Role
-      # grants `secrets: create, get` in {{ default .Release.Namespace .Values.managementCluster.serviceAccountNamespace }}
-      # (see templates/rbac.yaml).
+      # v0.13.25. REPLACES publish-workload-kubeconfig.sh, which POSTed
+      # /etc/kubernetes/admin.conf to the management apiserver at
+      # managementCluster.apiUrl. Two things were wrong with that:
+      #
+      #  1. THE CHANNEL WAS DEAD. apiUrl was http://198.51.100.5:8443, served
+      #     by a kubectl-proxy sidecar inside the wg-ironic-proxy pod. That pod
+      #     was deleted for "zero proxies" and nothing replaced the sidecar.
+      #     The ADDRESS still routes -- the tunnel pod holds 198.51.100.5/32
+      #     and the lab routes 198.51.100.0/28 -- but nothing listens on 8443.
+      #     So this script POSTed into a refused connection, retried 5 times,
+      #     logged, and exited 1 without gating bring-up. The Secret it was
+      #     supposed to create has NEVER existed. Measured 2026-11-04.
+      #
+      #     Every other publisher here goes through Ironic -- kubeadm_join,
+      #     cert_key, etcd_ip, cp_endpoint, the deployed hash. "Ironic is the
+      #     only rendezvous both sides can see" is the design, and this script
+      #     was the single place that broke it. It is also the only one that
+      #     never worked.
+      #
+      #  2. IT PUBLISHED admin.conf -- cluster-admin, no expiry. node.extra
+      #     already carries credentials (cert_key, a join token) but both are
+      #     bounded: 2h and 24h. A never-expiring cluster-admin credential in a
+      #     field readable by any Ironic reader is a different proposition.
+      #
+      # So: a ServiceAccount scoped to exactly what `kubectl drain` needs.
+      # NOT a short-lived token -- a drain is triggered by moving a worker into
+      # spec.workers.removed, which may be days after bring-up, so a 1h token
+      # would be expired precisely when it is needed. Long-lived but scoped.
       set -uo pipefail
-      exec >> /var/log/publish-workload-kubeconfig.log 2>&1
+      exec >> /var/log/publish-drain-kubeconfig.log 2>&1
       set -x
       date
       log() { echo "[$(date -Iseconds)] $*"; }
 
-      MGMT_API="{{ .Values.managementCluster.apiUrl }}"
-      MGMT_NS="{{ default .Release.Namespace .Values.managementCluster.serviceAccountNamespace }}"
-      SECRET_NAME="{{ include "kubernetes-cluster.workloadKubeconfigSecretName" . }}"
-      BEARER="{{ include "kubernetes-cluster.cpToken" . }}"
+      export KUBECONFIG=/etc/kubernetes/admin.conf
+      SA_NS=kube-system
+      SA_NAME={{ printf "%s-drainer" .Values.clusterName | quote }}
 
-      if [ -z "$BEARER" ]; then
-        log "no SA token rendered — chart's rbac.yaml has not produced the secret yet"
+      # Exactly the verbs `kubectl drain` issues: cordon is a node patch,
+      # eviction is a create on the pods/eviction subresource, and it lists
+      # pods to decide what to evict. Nothing else. In particular NO secrets,
+      # no configmaps, no exec.
+      log "creating the drain-scoped SA, ClusterRole and binding"
+      kubectl apply -f - <<EOT
+      apiVersion: v1
+      kind: ServiceAccount
+      metadata:
+        name: ${SA_NAME}
+        namespace: ${SA_NS}
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRole
+      metadata:
+        name: ${SA_NAME}
+      rules:
+        - apiGroups: [""]
+          resources: ["nodes"]
+          verbs: ["get", "list", "patch"]
+        - apiGroups: [""]
+          resources: ["pods"]
+          verbs: ["get", "list"]
+        - apiGroups: [""]
+          resources: ["pods/eviction"]
+          verbs: ["create"]
+      ---
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata:
+        name: ${SA_NAME}
+      roleRef:
+        apiGroup: rbac.authorization.k8s.io
+        kind: ClusterRole
+        name: ${SA_NAME}
+      subjects:
+        - kind: ServiceAccount
+          name: ${SA_NAME}
+          namespace: ${SA_NS}
+      ---
+      # k8s 1.24+ does not auto-create SA token Secrets; a manually declared
+      # one of this type still gets populated and does not expire. Same pattern
+      # the chart used for the cp-publisher SA until v0.13.25 removed it.
+      apiVersion: v1
+      kind: Secret
+      type: kubernetes.io/service-account-token
+      metadata:
+        name: ${SA_NAME}-token
+        namespace: ${SA_NS}
+        annotations:
+          kubernetes.io/service-account.name: ${SA_NAME}
+      EOT
+
+      # The token is populated asynchronously by the token controller.
+      TOKEN=""
+      for i in $(seq 1 30); do
+        TOKEN=$(kubectl -n "$SA_NS" get secret "${SA_NAME}-token" -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null || true)
+        [ -n "$TOKEN" ] && break
+        sleep 2
+      done
+      if [ -z "$TOKEN" ]; then
+        log "FATAL: the SA token Secret never populated after 60s"
         exit 1
       fi
+      CA=$(kubectl -n "$SA_NS" get secret "${SA_NAME}-token" -o jsonpath='{.data.ca\.crt}')
+      log "drain SA token minted (len=${#TOKEN})"
 
-      KCFG_B64=$(base64 -w0 < /etc/kubernetes/admin.conf)
-      PAYLOAD=$(cat <<EOF
-      {"apiVersion":"v1","kind":"Secret","metadata":{"name":"${SECRET_NAME}","namespace":"${MGMT_NS}","labels":{"kubernetescluster.ogen.krateo.io/cluster":"{{ .Values.clusterName }}"}},"type":"Opaque","data":{"kubeconfig":"${KCFG_B64}"}}
-      EOF
+      # Server address: prefer the derived VIP this node published, so the
+      # kubeconfig survives the bootstrap node being replaced. Falls back to
+      # this node's own advertise address for single-CP clusters.
+      if [ -f /etc/kubernetes/cp-endpoint ]; then
+        SERVER="https://$(cat /etc/kubernetes/cp-endpoint)"
+      elif [ -f /etc/kubernetes/etcd-ip ]; then
+        SERVER="https://$(cat /etc/kubernetes/etcd-ip):6443"
+      else
+        log "FATAL: neither cp-endpoint nor etcd-ip written; cannot address the apiserver"
+        exit 1
+      fi
+      log "kubeconfig server=$SERVER"
+
+      KCFG=$(cat <<EOT
+      apiVersion: v1
+      kind: Config
+      clusters:
+        - name: workload
+          cluster:
+            server: ${SERVER}
+            certificate-authority-data: ${CA}
+      users:
+        - name: drainer
+          user:
+            token: ${TOKEN}
+      contexts:
+        - name: drainer@workload
+          context:
+            cluster: workload
+            user: drainer
+      current-context: drainer@workload
+      EOT
       )
-      # merge-patch body for the update path (no resourceVersion required).
-      PATCH_PAYLOAD="{\"data\":{\"kubeconfig\":\"${KCFG_B64}\"}}"
+      # base64 contains no JSON metacharacters, so interpolating it into the
+      # patch below is safe without escaping.
+      KCFG_B64=$(printf '%s' "$KCFG" | base64 -w0)
+      log "kubeconfig built (b64 len=${#KCFG_B64})"
+
+      PATCH='[{"op":"add","path":"/extra/drain_kubeconfig","value":"'"$KCFG_B64"'"}]'
+
+      KEYSTONE_URL="{{ .Values.ironicAuth.authUrl }}"
+      IRONIC_URL="{{ .Values.ironicAuth.ironicUrl }}"
+      NODE_UUID="{{ include "kubernetes-cluster.bootstrapNodeUuid" . }}"
+      AUTH_BODY='{"auth":{"identity":{"methods":["password"],"password":{"user":{"name":"{{ .Values.ironicAuth.username }}","password":"{{ .Values.ironicAuth.password }}","domain":{"name":"{{ .Values.ironicAuth.userDomain }}"}}}},"scope":{"system":{"all":true}}}}'
 
       for attempt in 1 2 3 4 5; do
-        log "attempt $attempt: POST ${MGMT_API}/api/v1/namespaces/${MGMT_NS}/secrets"
-        HTTP=$(curl -sS -o /tmp/pwk.out -w "%{http_code}" --max-time 15 \
-          -H "Authorization: Bearer $BEARER" \
-          -H "Content-Type: application/json" \
-          --data "$PAYLOAD" \
-          "${MGMT_API}/api/v1/namespaces/${MGMT_NS}/secrets")
-        log "POST returned HTTP=$HTTP"
-        if [ "$HTTP" = "201" ]; then
-          log "workload-kubeconfig Secret created"
+        TOKEN_K=$(curl -sS -i --max-time 15 -H "Content-Type: application/json" -d "$AUTH_BODY" "${KEYSTONE_URL}/v3/auth/tokens" 2>/dev/null \
+          | grep -i '^X-Subject-Token:' | awk '{print $2}' | tr -d '\r')
+        if [ -z "$TOKEN_K" ]; then
+          log "keystone auth failed (attempt ${attempt}); retrying in $((attempt * 10))s"
+          sleep $((attempt * 10)); continue
+        fi
+        if curl -fsSL --max-time 20 \
+          -H "X-Auth-Token: ${TOKEN_K}" \
+          -H "X-OpenStack-Ironic-API-Version: 1.109" \
+          -H "Content-Type: application/json-patch+json" \
+          --request PATCH --data "$PATCH" \
+          "${IRONIC_URL}/v1/nodes/${NODE_UUID}" > /tmp/pdk.out 2>&1; then
+          log "drain kubeconfig published to Ironic node.extra.drain_kubeconfig"
           exit 0
         fi
-        if [ "$HTTP" = "409" ]; then
-          log "Secret already exists; PATCH to update"
-          HTTP=$(curl -sS -o /tmp/pwk.out -w "%{http_code}" --max-time 15 \
-            -X PATCH \
-            -H "Authorization: Bearer $BEARER" \
-            -H "Content-Type: application/merge-patch+json" \
-            --data "$PATCH_PAYLOAD" \
-            "${MGMT_API}/api/v1/namespaces/${MGMT_NS}/secrets/${SECRET_NAME}")
-          log "PATCH returned HTTP=$HTTP"
-          if [ "$HTTP" = "200" ]; then
-            log "workload-kubeconfig Secret updated"
-            exit 0
-          fi
-        fi
-        cat /tmp/pwk.out 2>/dev/null | head -3
-        log "attempt $attempt failed; sleeping $((attempt * 10))s"
+        log "publish attempt ${attempt} failed; sleeping $((attempt * 10))s"
         sleep $((attempt * 10))
       done
-      log "publish-workload-kubeconfig failed after 5 attempts"
+      log "publish-drain-kubeconfig failed after 5 attempts -- see /tmp/pdk.out"
       exit 1
 {{- include "kubernetes-cluster.kubeadmPkiWriteFiles" . | nindent 2 }}
 {{- include "kubernetes-cluster.kubeadmInitWriteFiles" . | nindent 2 }}
@@ -1655,7 +1784,7 @@ runcmd:
   - bash /etc/kubernetes/publish-deployed-hash.sh
   - /etc/kubernetes/install-k8s.sh
   - /etc/kubernetes/cp-init.sh
-  - /etc/kubernetes/publish-workload-kubeconfig.sh
+  - /etc/kubernetes/publish-drain-kubeconfig.sh
   - /etc/kubernetes/publish-join.sh
   - systemctl daemon-reload
   - systemctl enable --now kubeadm-token-refresh.timer
@@ -2273,21 +2402,19 @@ runcmd:
   - /etc/kubernetes/join.sh
 {{- end -}}
 
-{{/* The Bearer token used by the CP to PATCH its own BaremetalNode CR. Read live
-     via lookup from the SA-bound Secret that templates/rbac.yaml
-     created. Empty on the very first reconcile (Secret doesn't exist
-     yet) — the chart's cp lifecycle template guards against rendering
-     a userData with an empty token. */}}
-{{- define "kubernetes-cluster.cpToken" -}}
-{{- $sa  := .Values.managementCluster.serviceAccountName -}}
-{{- $ns  := .Values.managementCluster.serviceAccountNamespace | default .Release.Namespace -}}
-{{- if $sa -}}
-{{- $secretName := printf "%s-token" $sa -}}
-{{- $sec := lookup "v1" "Secret" $ns $secretName -}}
-{{- if $sec -}}
-{{- $t := index $sec.data "token" -}}
-{{- if $t -}}{{- $t | b64dec -}}{{- end -}}
-{{- end -}}
-{{- end -}}
-{{- end -}}
+{{/* kubernetes-cluster.cpToken REMOVED in v0.13.25.
+
+     It pulled the cp-publisher ServiceAccount's token so the CP cloud-init
+     could authenticate to the MANAGEMENT apiserver. Its only consumer was
+     publish-workload-kubeconfig.sh, which is gone -- the drain credential now
+     travels through Ironic like every other published value, so no blade
+     needs a management-cluster credential at all.
+
+     templates/rbac.yaml went with it: the SA, its Role, its RoleBinding and
+     its non-expiring token Secret existed solely to serve that one script.
+     Verified before deleting -- the rendered userData contains zero
+     occurrences of BEARER, "Authorization: Bearer" and
+     "serviceaccount/token", and the drain Jobs authenticate with the mounted
+     kubeconfig rather than an SA. Leaving them would have been standing
+     privilege that this change itself made dead. */}}
 
