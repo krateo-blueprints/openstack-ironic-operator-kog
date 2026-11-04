@@ -235,6 +235,29 @@ Stating these saves the next person from assuming they were overlooked.
   repo does not own, which is why §9 is as long as it is.
 - **No `update` verb on `NodeProvision`.** Ironic's provision endpoint is a
   command, not a resource. Transitions fire by CR creation.
+- **No userData drift detection, and nothing says so.** `shouldAutoRedeploy`
+  is the most heavily reasoned predicate in the chart — roughly 25 lines on
+  race-safety, suppression windows and two revisions of history. It fires when
+  the observed configdrive hash is non-empty and differs from the current one.
+  The observed hash comes from the CR's `spec.extra.deployed_configdrive_hash`,
+  mirrored by the bridge — and the bridge's allow-list **deliberately excludes
+  that key** (`DELIBERATELY ABSENT` in `scripts/ironic-node-extra-bridge.py`),
+  because mirroring it would arm the predicate. Measured: the precondition
+  holds on **0 of 6** nodes, so the predicate cannot fire anywhere.
+
+  The exclusion is intentional. The silence is not. Change the image or the
+  cloud-init and **nothing redeploys and nothing reports that nothing
+  redeployed** — the blade publishes its hash to Ironic, the bridge drops it,
+  and no part of the chart observes the resulting gap.
+
+  This was found by deliberately looking for a shape the oasgen-provider
+  maintainers named from a defect of their own: *the instrumentation ends up
+  on the path that cannot break*. The mechanism you reason about hardest is
+  the one you instrument, and it is usually also the one you then make unable
+  to fail; the repair path gets written second, quickly, because the hard
+  thinking is done. Worth re-running that search against anything here that
+  looks carefully argued.
+
 - **No stuck-deploy auto-recovery.** A predicate existed and was removed: it
   anchored on the `BaremetalNode` CR's `creationTimestamp` — the age of the
   *record*, not of the current attempt — so fifteen minutes after enrolment it
