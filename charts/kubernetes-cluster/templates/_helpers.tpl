@@ -1071,22 +1071,52 @@ write_files:
       #
       # Best effort by design: never let reporting failure break the thing being
       # reported on. Exits 0 always.
+      #
+      # v0.13.23: "best effort" is NOT "silent", and it used to be. Every exit
+      # below was a bare `exit 0` with no output, and the PATCH sent its own
+      # errors to /dev/null. So a reporter failure looked EXACTLY like the
+      # thing it reports on failing -- an empty cp_stage -- and
+      # docs/KUBERNETES-CLUSTER.md's troubleshooting row for "publishes
+      # NOTHING, no cp_stage" names a different cause entirely (a NIC missing
+      # from the node's ports). A healthy blade whose reporter had lost its
+      # Keystone credential would have sent an operator hunting a network
+      # fault that was not there.
+      #
+      # It now logs every failure path to /var/log/publish-stage.log and still
+      # exits 0. `tail /var/log/publish-stage.log` on the blade distinguishes
+      # "the reporter broke" from "cp-init died", which is the whole question.
       set +e
+      LOG=/var/log/publish-stage.log
+      log() { echo "[$(date -Iseconds)] $*" >> "$LOG" 2>/dev/null; }
       STAGE="${1:-unknown}"
       KEYSTONE_URL="{{ .Values.ironicAuth.authUrl }}"
       IRONIC_URL="{{ .Values.ironicAuth.ironicUrl }}"
       NODE_UUID="$(cat /etc/kubernetes/node-uuid 2>/dev/null)"
-      [ -n "$NODE_UUID" ] || exit 0
+      if [ -z "$NODE_UUID" ]; then
+        log "stage=$STAGE NOT PUBLISHED: /etc/kubernetes/node-uuid is absent or empty"
+        exit 0
+      fi
       AUTH_BODY='{"auth":{"identity":{"methods":["password"],"password":{"user":{"name":"{{ .Values.ironicAuth.username }}","password":"{{ .Values.ironicAuth.password }}","domain":{"name":"{{ .Values.ironicAuth.userDomain }}"}}}},"scope":{"system":{"all":true}}}}'
       OUT=$(curl -sS -i --max-time 10 -H "Content-Type: application/json" -d "$AUTH_BODY" "${KEYSTONE_URL}/v3/auth/tokens" 2>/dev/null)
       TOKEN=$(echo "$OUT" | grep -i '^X-Subject-Token:' | awk '{print $2}' | tr -d '\r')
-      [ -n "$TOKEN" ] || exit 0
-      curl -fsSL --max-time 10 \
+      if [ -z "$TOKEN" ]; then
+        # Name the status line rather than just "no token": a 401 is a wrong
+        # credential, a timeout is an unreachable Keystone, and the operator
+        # fix differs.
+        log "stage=$STAGE NOT PUBLISHED: no Keystone token from $KEYSTONE_URL -- $(echo "$OUT" | head -1 | tr -d '\r')"
+        exit 0
+      fi
+      ERR=$(curl -fsSL --max-time 10 \
         -H "X-Auth-Token: ${TOKEN}" \
         -H "X-OpenStack-Ironic-API-Version: 1.109" \
         -H "Content-Type: application/json-patch+json" \
         -X PATCH "${IRONIC_URL}/v1/nodes/${NODE_UUID}" \
-        -d "[{\"op\":\"add\",\"path\":\"/extra/cp_stage\",\"value\":\"${STAGE}\"}]" >/dev/null 2>&1
+        -d "[{\"op\":\"add\",\"path\":\"/extra/cp_stage\",\"value\":\"${STAGE}\"}]" 2>&1 >/dev/null)
+      if [ $? -ne 0 ]; then
+        log "stage=$STAGE NOT PUBLISHED: PATCH to $IRONIC_URL failed -- ${ERR:-no output}"
+      else
+        log "stage=$STAGE published"
+      fi
       exit 0
   - path: /etc/kubernetes/publish-join.sh
     permissions: "0755"
