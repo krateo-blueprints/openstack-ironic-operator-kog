@@ -57,7 +57,18 @@ spec:
     spec:
       containers:
         - name: ironic
-          image: quay.io/airshipit/ironic:2026.1-ubuntu_noble
+          # 2026-11-04: was 2026.1-ubuntu_noble, which this cluster has never
+          # run. The long-lived lab cluster runs 2026.2-ubuntu_resolute, so the
+          # pinned tag was drift against the only working deployment.
+          #
+          # Both tags are amd64-ONLY. On an arm64 host containerd refuses the
+          # pull outright -- "no match for platform in manifest: not found" --
+          # so `make ironic-up` could never work on a fresh Apple Silicon
+          # cluster. It worked on the existing one only because the image had
+          # been side-loaded by hand, and nothing in this repo recorded that.
+          # `make ironic-image` now does the pull-and-load explicitly; this
+          # IfNotPresent is what lets the side-loaded copy be used.
+          image: quay.io/airshipit/ironic:2026.2-ubuntu_resolute
           imagePullPolicy: IfNotPresent
           command:
             - bash

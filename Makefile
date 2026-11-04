@@ -1,6 +1,6 @@
 # openstack-ironic-operator - Ironic + Krateo integration
 .PHONY: help apply-oas apply-restdef deploy-chart package-chart template-chart deploy-ironic validate-chart \
-        kind-up kind-down local-up local-down ironic-up ironic-down ironic-forward smoke-test kubeconfig
+        kind-up kind-down local-up local-down ironic-up ironic-image ironic-down ironic-forward smoke-test kubeconfig
 
 HELM_NAMESPACE ?= default
 IRONIC_NS ?= openstack
@@ -101,7 +101,34 @@ kind-up:      # create the local kind cluster (idempotent; isolated kubeconfig)
 	@kind export kubeconfig --name $(KIND_CLUSTER) --kubeconfig $(KUBECONFIG_FILE) >/dev/null
 	@echo "kubeconfig=$(KUBECONFIG_FILE) context=$(KCTX)"
 
-ironic-up:    # deploy standalone Ironic (fake drivers, noauth) into the kind cluster
+IRONIC_IMAGE ?= quay.io/airshipit/ironic:2026.2-ubuntu_resolute
+
+ironic-image: # pull the Ironic image for the node's platform and side-load it
+	# The airshipit Ironic images are published for linux/amd64 ONLY. On an
+	# arm64 host, containerd inside the kind node refuses the pull with
+	# "no match for platform in manifest: not found", so `ironic-up` could
+	# never work on a fresh Apple Silicon cluster -- measured 2026-11-04.
+	#
+	# The long-lived lab cluster worked only because the image had been
+	# side-loaded by hand at some point, and NOTHING in this repo recorded
+	# that step. So the documented path was broken while a working cluster
+	# sat beside it as evidence that it was fine.
+	#
+	# --platform is explicit rather than inherited: on an arm64 host the
+	# daemon would otherwise pick the host platform and fail the same way.
+	docker pull --platform linux/amd64 $(IRONIC_IMAGE)
+	kind load docker-image $(IRONIC_IMAGE) --name $(KIND_CLUSTER)
+	# Assert it actually landed: `kind load` exits 0 on some no-ops, and a
+	# missing image here reappears later as an ImagePullBackOff that looks
+	# like a registry problem.
+	# Match repo AND tag. Grepping the repo alone would pass on any stale
+	# ironic tag already in the node -- an assertion that is true for free,
+	# which is the failure mode this assertion exists to prevent.
+	@docker exec $(KIND_CLUSTER)-control-plane crictl images \
+		| grep -q "$(word 1,$(subst :, ,$(IRONIC_IMAGE))).*$(word 2,$(subst :, ,$(IRONIC_IMAGE)))" \
+		|| { echo "FATAL: $(IRONIC_IMAGE) not present in $(KIND_CLUSTER) after kind load" >&2; exit 1; }
+
+ironic-up: ironic-image  # deploy standalone Ironic (fake drivers, noauth) into the kind cluster
 	$(KUBECTL) apply -f local/ironic-standalone.yaml
 	$(KUBECTL) -n $(IRONIC_NS) create configmap ironic-config \
 		--from-file=ironic.conf=local/ironic.conf --dry-run=client -o yaml | $(KUBECTL) apply -f -
