@@ -434,6 +434,31 @@ A path parameter has exactly four writers, precedence highest first:
 fieldMapping > requestFieldMapping > Configuration CR > spec > status
 ```
 
+**What decides whether a path parameter keeps a spec property** — corrected
+after a fourth measurement, because the obvious rule fit the data and
+discriminated nothing:
+
+| kind | mapped param | same name? | in a body schema? | property in CRD |
+|---|---|---|---|---|
+| `baremetalnodes` | `uuid` | no (`spec.name`) | **yes** (`NodeCreate`) | **present** |
+| `ports` | `uuid` | no (`status.uuid`) | no | **absent** |
+| `nodepowers` | `node_id` | yes | no | **absent** |
+| `nodeprovisions` | `node_id` | yes | no | **absent** |
+
+`ports` is the row that separates the two candidate explanations: its mapping
+is **not** self-referential and the property is absent anyway. So the
+discriminator is not "the mapping names its own parameter" — it is **whether
+the property is independently declared in a request body schema.** A
+`requestFieldMapping` suppresses; a body declaration rescues. That also
+reconciles with oasgen's `TestPathItemParameters_BecomeSpecFields`, where a
+path-only parameter with *no* mapping becomes a spec field: three cells of one
+table rather than two competing rules.
+
+This document previously asserted the same-name rule, citing `BaremetalNode`
+escaping "because its mapping is `uuid <- spec.name`, two different names".
+The different names are incidental; it escapes because `NodeCreate` declares
+`uuid` in its body.
+
 Ours is a `requestFieldMapping` reading `spec.node_id`, and **all four sources
 are empty**: the CRD has no `node_id` property (upstream generation bug,
 **#419**); status is never populated for it, because `populateStatusFields`
