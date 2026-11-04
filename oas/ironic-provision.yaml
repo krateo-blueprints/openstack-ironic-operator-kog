@@ -24,6 +24,8 @@ paths:
     get:
       summary: List nodes (findby)
       operationId: listNodes
+      parameters:
+        - $ref: '#/components/parameters/X-OpenStack-Ironic-API-Version'
       responses:
         '200':
           description: List of nodes
@@ -43,6 +45,7 @@ paths:
       operationId: setProvisionState
       parameters:
         - $ref: '#/components/parameters/node_id'
+        - $ref: '#/components/parameters/X-OpenStack-Ironic-API-Version'
       requestBody:
         required: true
         content:
@@ -63,6 +66,30 @@ components:
       in: header
       name: X-Auth-Token
   parameters:
+    X-OpenStack-Ironic-API-Version:
+      name: X-OpenStack-Ironic-API-Version
+      in: header
+      # Added 2026-11-04. Provision and power were the only kinds sending NO
+      # microversion, so Ironic negotiated its MINIMUM (1.1) for them while
+      # BaremetalNode and Port were pinned at 1.109. Measured consequence: the
+      # findby's `include_children=true` (needs >= 1.83) returned
+      #   406 "Request not acceptable. The minimal required API version should be 1.83"
+      # on EVERY Observe from 2026-10-30, silently, because no transition
+      # happened to be needed in that window.
+      #
+      # required + default, NOT optional-and-set-via-Configuration: RDC applies
+      # the Configuration's authentication but does not send
+      # spec.configuration.header, so a header declared there never reaches the
+      # wire. Same reasoning as ironic-node.yaml, which has carried this since
+      # 2026-10-29. The default is what the apiserver stamps onto every CR, so
+      # no chart change is needed to supply it.
+      required: true
+      description: >-
+        Ironic API microversion. Pinned here because an unset value silently
+        degrades to Ironic's minimum (1.1) instead of failing.
+      schema:
+        type: string
+        default: '1.109'
     node_id:
       name: node_id
       in: path
