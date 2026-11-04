@@ -86,9 +86,18 @@ deploy-ironic:
 kubeconfig:   # (re)write the isolated kubeconfig for the kind cluster
 	kind export kubeconfig --name $(KIND_CLUSTER) --kubeconfig $(KUBECONFIG_FILE)
 
+KIND_CONFIG   ?= local/kind-config.yaml
+# kind's own readiness bound, separate from the kubeadm timeouts in KIND_CONFIG and not
+# reachable from them. On an emulated amd64 node (KIND_PLATFORM, forced because the
+# airshipit images publish no linux/arm64) the control plane needs well over the 60s
+# default, and the failure reads as a cluster that would not come up rather than as a
+# deadline that was too short.
+KIND_WAIT     ?= 300s
+
 kind-up:      # create the local kind cluster (idempotent; isolated kubeconfig)
 	@kind get clusters 2>/dev/null | grep -qx $(KIND_CLUSTER) || \
-		kind create cluster --name $(KIND_CLUSTER) --kubeconfig $(KUBECONFIG_FILE) --wait 60s
+		kind create cluster --name $(KIND_CLUSTER) --kubeconfig $(KUBECONFIG_FILE) \
+			--config $(KIND_CONFIG) --wait $(KIND_WAIT)
 	@kind export kubeconfig --name $(KIND_CLUSTER) --kubeconfig $(KUBECONFIG_FILE) >/dev/null
 	@echo "kubeconfig=$(KUBECONFIG_FILE) context=$(KCTX)"
 
