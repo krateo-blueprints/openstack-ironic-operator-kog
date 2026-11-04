@@ -1,0 +1,40 @@
+# CNCF Certified Kubernetes submission metadata.
+#
+# Route chosen: COMMUNITY DISTRIBUTION. CNCF treats a project with no company
+# behind it as a non-profit, so certification is free — but an individual must
+# sign the participation form as the official contact:
+#   https://github.com/cncf/k8s-conformance/blob/master/participation-form/Certified_Kubernetes_Form.md
+#
+# `type: installer` is settled by CNCF's own definitions: an installer
+# "downloads and then installs vanilla upstream Kubernetes", whereas a
+# distribution "includes patches to the upstream codebase". This installs
+# unmodified upstream from pkgs.k8s.io and patches nothing.
+#
+# FOUR VALUES STILL NEEDED — they are identity, not engineering, and I am not
+# inventing them:
+#   vendor                 the name signing the participation form
+#   name                   the product name
+#   website_url            must be public and resolve
+#   documentation_url      must be public and resolve
+#   contact_email_address  the maintainer contact for the submission
+#
+# A diego.braga@krateo.io address is on file in this workspace; it is NOT used
+# here, because putting a personal address into a public submission is the
+# owner's call to make explicitly rather than mine to assume.
+#
+# product_logo_url is OPTIONAL. If supplied it must be SVG, AI or EPS — NOT a
+# PNG — and must include the product name. Omitted, CNCF uses the company logo.
+
+vendor: TODO                      # e.g. the community project or individual
+name: TODO                        # e.g. "Krateo Ironic Installer"
+version: v0.13.20                 # the PRODUCT version, not Kubernetes'
+website_url: TODO
+repo_url: TODO                    # optional but expected for open source
+documentation_url: TODO
+type: installer
+description: >-
+  TODO — one sentence. Something close to: installs unmodified upstream
+  Kubernetes onto bare-metal nodes provisioned through OpenStack Ironic,
+  driven declaratively by Krateo compositions, with a control-plane VIP
+  discovered at runtime rather than declared.
+contact_email_address: TODO
