@@ -32,12 +32,58 @@ import urllib.error
 K8S_CA = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
 K8S_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 K8S_NS_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
-IRONIC_URL = "http://127.0.0.1:8080"
+# Was hardcoded to the same-pod keystone proxy. Now env-driven so the bridge can
+# run as its own Deployment with NO proxy in the path — it talks to the `ironic`
+# Service, which routes straight to the lab over the node's WireGuard tunnel.
+IRONIC_URL = os.environ.get("IRONIC_URL", "http://ironic.openstack.svc.cluster.local:6385")
+# Keystone token. Previously unnecessary because the same-pod proxy injected one;
+# standing alone, the bridge must authenticate itself. Read per request rather
+# than cached so a token refresh is picked up without a restart.
+IRONIC_TOKEN_FILE = os.environ.get("IRONIC_TOKEN_FILE", "/ironic-token/token")
+
+
+def ironic_headers(extra=None):
+    h = {"X-OpenStack-Ironic-API-Version": IRONIC_VER}
+    try:
+        with open(IRONIC_TOKEN_FILE) as f:
+            tok = f.read().strip()
+        if tok:
+            h["X-Auth-Token"] = tok
+    except OSError:
+        # No token mounted: a noauth Ironic (the local standalone env) needs none.
+        pass
+    if extra:
+        h.update(extra)
+    return h
 IRONIC_VER = os.environ.get("IRONIC_API_VERSION", "1.109")
-KOG_API = "baremetal.ogen.krateo.io/v1alpha1"
+# Both of these predate the kind rename (Node -> BaremetalNode) and were wrong:
+# the CRD serves v1-0-0, not v1alpha1, and the plural is `baremetalnodes`, not
+# `nodes`. The failure was a 403 rather than a 404 because the ServiceAccount is
+# granted `baremetalnodes` — asking for a resource it has no rule for is denied
+# before anything checks whether that resource exists. So the symptom pointed at
+# RBAC when the bug was the URL.
+KOG_API = os.environ.get("KOG_API", "baremetal.ogen.krateo.io/v1-0-0")
+KOG_RESOURCE = os.environ.get("KOG_RESOURCE", "baremetalnodes")
 INTERVAL = int(os.environ.get("BRIDGE_INTERVAL", "10"))
 
-EXTRA_KEYS = ("kubeadm_join", "cert_key")
+# Every key publish-join.sh / publish-stage.sh writes into Ironic.node.extra
+# MUST be listed here, or it is published and then silently never reaches
+# Kubernetes. That gap cost an entire HA bootstrap: the bootstrap CP derived
+# its VIP via arping, wrote 192.168.0.250:6443 to /etc/kubernetes/cp-endpoint
+# and PATCHed all four keys into Ironic in one json-patch -- but this tuple
+# held only two, so `cp_endpoint` and `etcd_ip` never landed on the CR. The
+# chart's controlPlaneEndpoint helper falls back to spec.extra.cp_endpoint,
+# read an empty string, and baked `curl https:///healthz` into every replica's
+# join.sh. All three replicas polled a URL with no host 120 times and aborted;
+# blade01 stayed the only node in a cluster that reported `active` on all six.
+#
+# DELIBERATELY ABSENT: deployed_configdrive_hash. baremetal-host's
+# shouldAutoRedeploy fires when the observed hash is NON-EMPTY and differs
+# from the chart-rendered one, and that rendered value is .Chart.Version
+# rather than a content hash. Mirroring it would arm a re-image of every
+# blade on every chart bump. Make it a real content hash first; until then
+# leaving it unmirrored is what keeps the gate shut.
+EXTRA_KEYS = ("kubeadm_join", "cert_key", "etcd_ip", "cp_endpoint", "cp_stage")
 
 HELM_RELEASE_SECRET_PREFIX = "sh.helm.release.v1."
 # Don't reap a KOG primitive whose helm-release-name doesn't match a
@@ -45,7 +91,16 @@ HELM_RELEASE_SECRET_PREFIX = "sh.helm.release.v1."
 # install that just created child resources but hasn't yet recorded its
 # release secret.
 ORPHAN_MIN_AGE_SECONDS = 60
-ORPHAN_RESOURCE_PATHS = ("ports", "nodes", "nodeprovisions", "nodepowers")
+# "nodes" was stale here too — the plural is `baremetalnodes` since the kind
+# rename. Left wrong it produced a 403 (the SA has no rule for `nodes`), which
+# reads as a permissions problem rather than a typo.
+ORPHAN_RESOURCE_PATHS = ("ports", "baremetalnodes", "nodeprovisions", "nodepowers")
+
+# The reaper DELETES KOG primitives whose owning helm release has gone. That is
+# a reasonable cleanup and a bad default: on a cluster whose CRs map to physical
+# machines, a misjudged orphan is a wiped blade. It is also unrelated to this
+# process's actual job, which is mirroring node.extra. Off unless asked.
+ORPHAN_REAP_ENABLED = os.environ.get("ORPHAN_REAP_ENABLED", "false").lower() in ("1", "true", "yes")
 
 
 def log(msg):
@@ -82,7 +137,7 @@ def ironic_get_node(uuid):
         try:
             req = urllib.request.Request(
                 f"{IRONIC_URL}/v1/nodes/{uuid}",
-                headers={"X-OpenStack-Ironic-API-Version": IRONIC_VER},
+                headers=ironic_headers(),
             )
             with urllib.request.urlopen(req, timeout=10) as r:
                 return json.loads(r.read())
@@ -107,10 +162,7 @@ def ironic_patch_node(uuid, ops):
     req = urllib.request.Request(
         f"{IRONIC_URL}/v1/nodes/{uuid}",
         method="PATCH",
-        headers={
-            "X-OpenStack-Ironic-API-Version": IRONIC_VER,
-            "Content-Type": "application/json-patch+json",
-        },
+        headers=ironic_headers({"Content-Type": "application/json-patch+json"}),
         data=body,
     )
     with urllib.request.urlopen(req, timeout=10) as r:
@@ -118,7 +170,7 @@ def ironic_patch_node(uuid, ops):
 
 
 def reconcile_once(namespace):
-    body = k8s_request("GET", f"/apis/{KOG_API}/namespaces/{namespace}/nodes")
+    body = k8s_request("GET", f"/apis/{KOG_API}/namespaces/{namespace}/{KOG_RESOURCE}")
     nodes = json.loads(body).get("items", [])
     for idx, n in enumerate(nodes):
         if idx > 0:
@@ -158,12 +210,19 @@ def reconcile_once(namespace):
                     log(f"clear Ironic.extra {name}: {e}")
             cr_to_clear = [k for k in EXTRA_KEYS if k in cr_extra]
             if cr_to_clear:
-                merged = {k: v for k, v in cr_extra.items() if k not in cr_to_clear}
+                # RFC 7386 merge-patch: a key that is merely ABSENT from the
+                # patch is left UNCHANGED. Rebuilding the dict without the
+                # managed keys therefore deleted nothing at all, and this
+                # branch logged "cleared ..." on every single poll while the
+                # stale values sat in the CR untouched. Only an explicit null
+                # removes a key. The Ironic side never had this bug because it
+                # sends JSON-Patch `remove` operations.
+                merged = {k: None for k in cr_to_clear}
                 patch = json.dumps({"spec": {"extra": merged}}).encode()
                 try:
                     k8s_request(
                         "PATCH",
-                        f"/apis/{KOG_API}/namespaces/{namespace}/nodes/{name}",
+                        f"/apis/{KOG_API}/namespaces/{namespace}/{KOG_RESOURCE}/{name}",
                         body=patch,
                     )
                     log(f"cleared CR.spec.extra keys {cr_to_clear} on {name}")
@@ -187,7 +246,7 @@ def reconcile_once(namespace):
         try:
             k8s_request(
                 "PATCH",
-                f"/apis/{KOG_API}/namespaces/{namespace}/nodes/{name}",
+                f"/apis/{KOG_API}/namespaces/{namespace}/{KOG_RESOURCE}/{name}",
                 body=patch,
             )
             log(f"bridged extra keys {list(deltas)} from Ironic to CR {name}")
@@ -222,6 +281,8 @@ def list_tracked_helm_releases(namespace):
 
 
 def reap_orphan_helm_artifacts(namespace, active_releases):
+    if not ORPHAN_REAP_ENABLED:
+        return
     """Clean up KOG primitives left behind by a half-failed helm install.
 
     cdc-baremetal-host generates a fresh random helm-release-name on

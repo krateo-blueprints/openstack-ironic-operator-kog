@@ -49,6 +49,11 @@ The bundle ships **four charts**, versioned independently:
 
 The design and runbook docs alongside the core bundle:
 
+- [IMPLEMENTATION.md](./IMPLEMENTATION.md) — **Krateo Akmon: the complete
+  implementation reference.** The two-blueprint architecture, the Ironic state
+  machine, the Kubernetes layer and the two settings CNCF conformance depends
+  on, operations, the failure modes that report success, and the open upstream
+  issues. Start here if you want the whole picture in one place.
 - [KUBERNETES-CLUSTER.md](./KUBERNETES-CLUSTER.md) — the layered kubernetes-cluster composition.
 - [USER-GUIDE.md](./USER-GUIDE.md) — the BaremetalHost composition user guide.
 - [VS-METAL3.md](./VS-METAL3.md) — comparison against metal3's baremetal-operator.

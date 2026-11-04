@@ -10,13 +10,19 @@ info:
 servers:
   - url: http://ironic.openstack.svc.cluster.local:6385
     description: Ironic API (override via AllocationConfiguration)
+# Applies the apiKey scheme defined under components. The token itself comes from the
+# <Kind>Configuration's spec.authentication.apiKey.tokenRef; where no tokenRef is
+# configured (the local standalone Ironic runs noauth) no header is sent, so the same
+# document serves both the noauth local env and a Keystone-protected real Ironic.
+security:
+  - apiKey: []
+
 paths:
   /v1/allocations:
     get:
       summary: List allocations
       operationId: listAllocations
       parameters:
-        - $ref: '#/components/parameters/X-Ironic-Endpoint'
         - $ref: '#/components/parameters/X-OpenStack-Ironic-API-Version'
       responses:
         '200':
@@ -34,7 +40,6 @@ paths:
       summary: Create allocation
       operationId: createAllocation
       parameters:
-        - $ref: '#/components/parameters/X-Ironic-Endpoint'
         - $ref: '#/components/parameters/X-OpenStack-Ironic-API-Version'
       requestBody:
         required: true
@@ -60,7 +65,6 @@ paths:
       summary: Get allocation by ident
       operationId: getAllocation
       parameters:
-        - $ref: '#/components/parameters/X-Ironic-Endpoint'
         - $ref: '#/components/parameters/X-OpenStack-Ironic-API-Version'
       responses:
         '200':
@@ -75,7 +79,6 @@ paths:
       summary: Delete allocation
       operationId: deleteAllocation
       parameters:
-        - $ref: '#/components/parameters/X-Ironic-Endpoint'
         - $ref: '#/components/parameters/X-OpenStack-Ironic-API-Version'
       responses:
         '204':
@@ -83,14 +86,15 @@ paths:
         '404':
           description: Allocation not found
 components:
-  parameters:
-    X-Ironic-Endpoint:
-      name: X-Ironic-Endpoint
+  # Keystone token, sent verbatim as X-Auth-Token (NOT a Bearer token).
+  # Needs oasgen >= 0.19.0 for apiKey, and >= 0.26.1 so the verbose request dump redacts
+  # credential headers rather than printing X-Auth-Token in cleartext.
+  securitySchemes:
+    apiKey:
+      type: apiKey
       in: header
-      required: false
-      description: Override Ironic API base URL (used by AllocationConfiguration)
-      schema:
-        type: string
+      name: X-Auth-Token
+  parameters:
     X-OpenStack-Ironic-API-Version:
       name: X-OpenStack-Ironic-API-Version
       in: header

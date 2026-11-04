@@ -1,0 +1,9 @@
+apiVersion: v2
+name: hook-rbac-probe
+description: >-
+  Throwaway chart that exists only to measure core-provider's generated RBAC for
+  helm lifecycle hooks (core-provider #311/#316). Renders four objects from one
+  template; exactly one carries helm.sh/hook. Not part of the product.
+type: application
+version: 0.1.1
+appVersion: "1.0"

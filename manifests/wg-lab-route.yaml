@@ -1,0 +1,227 @@
+# ZERO PROXIES. Replaces manifests/wg-ironic-proxy.yaml.
+#
+# The data path used to be:
+#   rdc -> Service ironic:6385 -> wg pod (socat relay) -> WireGuard -> lab Ironic
+#
+# socat was the last process in that path, and it was still a proxy: a userspace
+# hop that terminated the client's TCP connection and opened a second one. It
+# parsed nothing, which made it a cheap proxy rather than not-a-proxy.
+#
+# Now:
+#   rdc -> Service ironic:6385 (kube-proxy DNAT) -> node's wg0 -> lab Ironic
+#
+# WireGuard terminates in the NODE's network namespace, so every pod routes to
+# the lab subnet natively. Nothing listens, nothing forwards, nothing re-opens a
+# connection. kube-proxy's DNAT stays because that is the cluster's own service
+# fabric — the same mechanism behind every ClusterIP — not a hop added here.
+#
+# Two consequences worth stating, because they are the point rather than side
+# effects:
+#
+#   1. Any pod can now reach the lab directly, which is what makes an in-cluster
+#      Keystone token refresher possible at all. Under the socat design only the
+#      relay pod had a route, so anything needing Keystone had to be a sidecar in
+#      that pod — which is how a "transport-only" relay kept accreting jobs.
+#
+#   2. The failure modes get simpler. A socat relay can be up while the tunnel is
+#      down, so readiness told you about the relay and not about reachability.
+#      Here there is nothing to be independently healthy.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: wg-lab-route
+  namespace: openstack
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: wg-lab-route
+  namespace: openstack
+  labels:
+    app: wg-lab-route
+spec:
+  selector:
+    matchLabels:
+      app: wg-lab-route
+  template:
+    metadata:
+      labels:
+        app: wg-lab-route
+    spec:
+      serviceAccountName: wg-lab-route
+      # hostNetwork is the whole mechanism: wg0 must exist in the NODE's netns,
+      # not a pod's, or only that pod can route to the lab.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: tunnel
+          image: alpine:3.21
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              apk add --no-cache wireguard-tools iproute2 iptables >/dev/null
+
+              install -m 600 /wg-config/wg0.conf /etc/wireguard/wg0.conf
+              # Idempotent: the DaemonSet may restart while wg0 still exists.
+              wg-quick down /etc/wireguard/wg0.conf 2>/dev/null \
+                || ip link delete wg0 2>/dev/null || true
+              wg-quick up /etc/wireguard/wg0.conf
+
+              # PIN THE MTU. wg-quick derives it from the route to the peer
+              # endpoint, and in this cluster that route resolves via a
+              # huge-MTU device, so wg0 came up at 65455. That is not harmless
+              # headroom: it means packets up to 65455 bytes are handed to the
+              # tunnel unfragmented, and anything over the real path MTU is
+              # silently dropped. The symptom is maddening because it is
+              # size-dependent — an unauthenticated GET (small) succeeds and
+              # returns 401, while the same GET carrying a 162-byte
+              # X-Auth-Token header dies with no HTTP response at all.
+              # 1420 = 1500 - 80 bytes of WireGuard/UDP/IP overhead.
+              ip link set dev wg0 mtu ${WG_MTU}
+              echo "[wg] mtu pinned to ${WG_MTU}"
+              echo "[wg] up:"; wg show wg0 || true
+              ip -o -4 addr show wg0 || true
+
+              # MASQUERADE pod traffic bound for the lab to the wg0 source
+              # address. Required because the far side's AllowedIPs lists only
+              # our /32 tunnel address — it has no route back to this cluster's
+              # pod CIDR, so an un-NATed pod packet would arrive and be dropped
+              # as not-permitted-by-AllowedIPs. That is a WireGuard
+              # cryptokey-routing property, not a firewall we could open.
+              WG_IP=$(ip -o -4 addr show wg0 | awk '{sub("/.*","",$4); print $4; exit}')
+              test -n "$WG_IP"
+
+              # SNAT EVERYTHING LEAVING THE TUNNEL, matched on the output
+              # interface and inserted FIRST.
+              #
+              # The obvious rule — match -s <podCIDR> -d <labSubnet> — never fires.
+              # kube-proxy's masquerade rule sits earlier in POSTROUTING, so by the
+              # time a pod packet bound for a lab ClusterIP gets there its source
+              # has already been rewritten to the NODE's address. That address is
+              # not in the peer's AllowedIPs (198.51.100.0/28), so WireGuard drops
+              # it as cryptokey-routing denies it — silently, which presents as an
+              # i/o timeout and looks like the lab being down.
+              #
+              # Measured: that rule sat at 0 packets while every request timed out.
+              #
+              # Matching -o wg0 and inserting at position 1 means anything routed
+              # into the tunnel leaves with a source the peer accepts, whoever
+              # mangled it upstream.
+              iptables -t nat -C POSTROUTING -o wg0 -j SNAT --to-source "$WG_IP" 2>/dev/null \
+                || iptables -t nat -I POSTROUTING 1 -o wg0 -j SNAT --to-source "$WG_IP"
+              echo "[nat] SNAT everything out wg0 -> $WG_IP (inserted first, ahead of kube-proxy)"
+
+              # Clamp TCP MSS for lab-bound traffic. Pinning the MTU fixes what the
+              # tunnel will accept; this fixes what the POD offers, because a pod
+              # negotiates MSS from its own 1500-byte interface and never learns
+              # the tunnel is narrower. Without the clamp the pod advertises an
+              # MSS the path cannot carry and relies on ICMP
+              # fragmentation-needed getting back to it, which across this
+              # tunnel it does not.
+              iptables -t mangle -C FORWARD -p tcp --tcp-flags SYN,RST SYN \
+                -d "${LAB_SUBNET}" -j TCPMSS --clamp-mss-to-pmtu 2>/dev/null \
+                || iptables -t mangle -A FORWARD -p tcp --tcp-flags SYN,RST SYN \
+                     -d "${LAB_SUBNET}" -j TCPMSS --clamp-mss-to-pmtu
+              echo "[nat] MSS clamped to PMTU for ${LAB_SUBNET}"
+
+              # Nothing to serve. Hold the process so the netns config persists
+              # and the kubelet can restart it if the tunnel dies.
+              echo "[ready] lab subnet ${LAB_SUBNET} routed via wg0 ($WG_IP); no proxy in path"
+              while true; do
+                # Re-assert if something flushed the tunnel out from under us.
+                ip link show wg0 >/dev/null 2>&1 || {
+                  echo "[wg] wg0 vanished — re-establishing"; wg-quick up /etc/wireguard/wg0.conf || true; }
+                sleep 30
+              done
+          env:
+            - name: LAB_SUBNET
+              value: "172.19.74.0/24"
+            - name: WG_MTU
+              value: "1420"
+            - name: POD_CIDRS
+              value: "10.244.0.0/16"
+          securityContext:
+            capabilities:
+              add:
+                - NET_ADMIN
+                - NET_RAW
+          volumeMounts:
+            - name: wg-config
+              mountPath: /wg-config
+              readOnly: true
+      volumes:
+        - name: wg-config
+          secret:
+            secretName: ironic-wg-config
+---
+# Selector-less Service + explicit EndpointSlice: the stable in-cluster name the
+# OAS documents (ironic.openstack.svc.cluster.local:6385) resolved straight to
+# the real Ironic. No pod backs it.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ironic
+  namespace: openstack
+spec:
+  type: ClusterIP
+  ports:
+    - name: api
+      port: 6385
+      targetPort: 6385
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: ironic-lab
+  namespace: openstack
+  labels:
+    kubernetes.io/service-name: ironic
+addressType: IPv4
+ports:
+  - name: api
+    port: 6385
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "172.19.74.1"
+    conditions:
+      ready: true
+---
+# Keystone, same treatment. Exists so the token refresher has a stable name;
+# under the old design nothing but the relay pod could reach Keystone at all.
+apiVersion: v1
+kind: Service
+metadata:
+  name: keystone
+  namespace: openstack
+spec:
+  type: ClusterIP
+  ports:
+    - name: identity
+      port: 5000
+      targetPort: 5000
+      protocol: TCP
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: keystone-lab
+  namespace: openstack
+  labels:
+    kubernetes.io/service-name: keystone
+addressType: IPv4
+ports:
+  - name: identity
+    port: 5000
+    protocol: TCP
+endpoints:
+  - addresses:
+      - "172.19.74.1"
+    conditions:
+      ready: true

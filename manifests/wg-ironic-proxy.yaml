@@ -15,7 +15,7 @@ metadata:
 ---
 # ServiceAccount + RBAC for the kubectl-proxy sidecar inside
 # wg-ironic-proxy. Scoped to JUST what the kubernetescluster blueprint's
-# bootstrap CP needs to do: patch any Node CR's spec.extra
+# bootstrap CP needs to do: patch any BaremetalNode CR's spec.extra
 # (publish kubeadm_join / cert_key) and create+get Secrets in openstack
 # (workload kubeconfig delivery). NOT cluster-admin.
 apiVersion: v1
@@ -30,7 +30,7 @@ metadata:
   name: wg-ironic-proxy
   namespace: openstack
 rules:
-  # Bridge mirrors Ironic.node.extra into Node CR.spec.extra (kubeadm_join,
+  # Bridge mirrors Ironic.node.extra into BaremetalNode CR.spec.extra (kubeadm_join,
   # cert_key). Reaper also touches ports / nodeprovisions / nodepowers when
   # a half-failed helm install leaves them stranded with a stale
   # meta.helm.sh/release-name annotation; patch is needed to strip the
@@ -38,7 +38,7 @@ rules:
   - apiGroups:
       - baremetal.ogen.krateo.io
     resources:
-      - nodes
+      - baremetalnodes
       - ports
       - nodeprovisions
       - nodepowers
@@ -93,7 +93,7 @@ spec:
       serviceAccountName: wg-ironic-proxy
       containers:
         - name: ironic-extra-bridge
-          # Ironic node.extra -> k8s Node CR spec.extra bridge.
+          # Ironic node.extra -> k8s BaremetalNode CR spec.extra bridge.
           # The blade (which can reach Ironic over its OOB network but
           # NOT our wg-tunnel-side mgmt API) publishes its kubeadm_join
           # into Ironic node.extra. This sidecar polls Ironic via the
@@ -129,7 +129,7 @@ spec:
           # the in-cluster kubernetes.default.svc:443 using its own SA
           # token. Auth model: the SA is RBAC-scoped to JUST what the
           # kubernetescluster chart needs the CPs to do (patch the CP's
-          # own Node CR's spec.extra, create+get Secrets in openstack
+          # own BaremetalNode CR's spec.extra, create+get Secrets in openstack
           # ns for the workload-kubeconfig delivery).
           #
           # kubectl proxy default port is 8001; --address binds on the
@@ -144,27 +144,35 @@ spec:
             - --reject-paths=^$
             - --disable-filter=true
           # No volumeMounts — uses the projected SA token automatically.
-        - name: proxy
-          image: quay.io/airshipit/openstack-client:2026.1-ubuntu_noble
+        # L3/L4 TUNNEL ENDPOINT -- no longer an API proxy.
+        #
+        # This used to run keystone-ironic-proxy.py, which authenticated to Keystone,
+        # injected a microversion header, translated merge-JSON PATCH bodies into
+        # RFC-6902, and de-chunked request bodies. All four jobs now have homes:
+        #
+        #   auth          -> apiKey/X-Auth-Token in the OAS; the token Secret is written
+        #                    by a secret-manager (ESO/Vault), never by this chart
+        #   microversion  -> BaremetalNodeConfiguration.spec.configuration.header, per-verb
+        #   PATCH shape   -> requestTransform (gojq) emitting the array; measured
+        #                    2026-10-29 that Ironic accepts it under application/json
+        #   de-chunking   -> an artifact of BaseHTTPRequestHandler; gone with the script
+        #
+        # What remains is genuinely transport: WireGuard reaches the lab network, and
+        # socat forwards TCP to Ironic. It parses nothing and rewrites nothing, so a
+        # request either arrives intact or does not arrive.
+        #
+        # Base image is alpine, NOT quay.io/airshipit/openstack-client: that image was
+        # only ever here for openstacksdk, it is amd64-only on every published tag, and
+        # it made the whole pod unschedulable on arm64.
+        - name: tunnel
+          image: alpine:3.21
           command:
-            - bash
+            - sh
             - "-c"
           args:
             - |
               set -e
-              echo "[startup] installing wireguard-tools + iproute2 ..."
-              export DEBIAN_FRONTEND=noninteractive
-              apt-get update -qq
-              apt-get install -y -qq --no-install-recommends wireguard-tools iproute2 iputils-ping curl ca-certificates
-              # wireguard-go fallback in case the kind node kernel lacks the WG module
-              if ! lsmod 2>/dev/null | grep -q wireguard && ! modinfo wireguard >/dev/null 2>&1; then
-                if ! command -v wireguard-go >/dev/null 2>&1; then
-                  echo "[startup] kernel WG unavailable; fetching wireguard-go..."
-                  arch=$(uname -m); case "$arch" in x86_64) wgarch=amd64;; aarch64|arm64) wgarch=arm64;; esac
-                  curl -fsSL "https://github.com/WireGuard/wireguard-go/releases/latest/download/wireguard-go-linux-$wgarch" \
-                    -o /usr/local/bin/wireguard-go && chmod +x /usr/local/bin/wireguard-go || true
-                fi
-              fi
+              apk add --no-cache wireguard-tools iproute2 socat >/dev/null
               install -m 600 /wg-config/wg0.conf /etc/wireguard/wg0.conf
               # On container restart wg0 lingers in the pod netns; tear it down before re-up
               wg-quick down /etc/wireguard/wg0.conf 2>/dev/null || ip link delete wg0 2>/dev/null || true
@@ -172,62 +180,44 @@ spec:
               wg-quick up /etc/wireguard/wg0.conf
               wg show
               ip -4 addr show wg0 || true
-              ip route | head -5
-              echo "[startup] launching keystone-ironic-proxy ..."
-              exec python3 /app/keystone-ironic-proxy.py
+              echo "[startup] forwarding :$LISTEN_PORT -> $IRONIC_ENDPOINT"
+              exec socat -d TCP-LISTEN:$LISTEN_PORT,fork,reuseaddr TCP:$IRONIC_ENDPOINT
           securityContext:
             capabilities:
               add:
                 - NET_ADMIN
           env:
-            - name: OS_CLOUD
-              # Reverted to system-scoped (`ironic-system` in clouds.yaml) — the project-
-              # scoped path returned 403 on POST /v1/ports for fresh Nodes whose owner field
-              # wasn't yet set, breaking the kubernetes-cluster blueprint's deploy walk.
-              # See reference_ironic-system-scope-clouds memory for the policy detail.
-              value: "ironic-system"
-            - name: OS_CLIENT_CONFIG_FILE
-              value: /etc/openstack/clouds.yaml
-            - name: OS_INTERFACE
-              value: "public"
             - name: LISTEN_PORT
               value: "8080"
-            - name: IRONIC_API_VERSION
-              # Default microversion when the client (KOG/RDC) doesn't send one. 1.109 is
-              # what the openstackclient CLI defaults to; project-scoped RBAC for write ops
-              # has owner-based checks that work cleanly at this version.
-              value: "1.109"
+            - name: IRONIC_ENDPOINT
+              # host:port of the real Ironic API, reachable only across the tunnel.
+              #
+              # When recreating a RestDefinition, aim this at a disposable Ironic first:
+              # deleting one cascades the generated CRD, and the finalizer drain fires a
+              # real DELETE /v1/nodes/{uuid} for every live CR, which would de-enrol the
+              # blades from the lab. Measured 2026-10-29.
+              value: "172.19.74.1:6385"
           ports:
             - name: api
               containerPort: 8080
           readinessProbe:
-            httpGet:
-              path: /v1/nodes
+            # TCP rather than httpGet: this container no longer speaks HTTP, and a
+            # Keystone-protected Ironic would answer an unauthenticated GET with 401
+            # and fail an httpGet probe even when the tunnel is perfectly healthy.
+            tcpSocket:
               port: 8080
-            initialDelaySeconds: 45
+            initialDelaySeconds: 15
             periodSeconds: 10
-            timeoutSeconds: 8
+            timeoutSeconds: 5
             failureThreshold: 12
           volumeMounts:
             - name: wg-config
               mountPath: /wg-config
               readOnly: true
-            - name: script
-              mountPath: /app
-            - name: clouds
-              mountPath: /etc/openstack
-              readOnly: true
       volumes:
         - name: wg-config
           secret:
             secretName: ironic-wg-config
-            defaultMode: 0400
-        - name: script
-          configMap:
-            name: keystone-ironic-proxy-script
-        - name: clouds
-          secret:
-            secretName: ironic-clouds
             defaultMode: 0400
         - name: bridge-script
           configMap:

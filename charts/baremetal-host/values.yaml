@@ -18,7 +18,7 @@ nodeNamespace: ""      # defaults to release namespace
 ports:
 
 # --- Optional inspection step ---
-# When true, runs `target: inspect` after manageable; inspection results land in the Node CR's
+# When true, runs `target: inspect` after manageable; inspection results land in the BaremetalNode CR's
 # status (properties + inspection_finished_at). transition-provide gates on the inspect CR's
 # existence so we don't loop.
 enableInspection: false
@@ -70,7 +70,7 @@ configDrive:
 # When true, Ironic suspends power-state monitoring and other automatic actions on the node
 # (kept-alive heartbeats, periodic agent checks, etc.). Use during hardware servicing so
 # Ironic's auto-recovery doesn't fight whatever you're doing at the BMC. Propagates as a
-# spec.maintenance edit on the Node CR -> RDC PATCHes Ironic via the JSON-Patch translator.
+# spec.maintenance edit on the BaremetalNode CR -> RDC PATCHes Ironic via the JSON-Patch translator.
 maintenance: false
 
 # --- Detached mode ---
@@ -135,7 +135,7 @@ networkData:
 undeploy: false
 
 # undeployMode controls Ironic's cleanup pass between `deleted` and `available`. Applied
-# proactively via spec.automated_clean on the Node CR (see templates/node.yaml) so it's
+# proactively via spec.automated_clean on the BaremetalNode CR (see templates/node.yaml) so it's
 # in place before the target=deleted PUT fires.
 # - full (default): automated_clean stays at ironic.conf [conductor]automated_clean
 #   default (usually true) — full IPA boot, standard clean_steps (disk erase, etc.).
@@ -144,7 +144,49 @@ undeploy: false
 undeployMode: full
 
 # --- Krateo plumbing ---
-# Singleton NodeConfiguration the chart points spec.configurationRef at (see
+# Singleton BaremetalNodeConfiguration the chart points spec.configurationRef at (see
 # manifests/nodeconfiguration-ironic.yaml).
 configurationRef:
   name: ironic-endpoint
+
+# --- Debugging ---
+debug:
+  # Stamps krateo.io/connector-verbose on the BaremetalNode CR, making
+  # rest-dynamic-controller log the full HTTP exchange with Ironic, body included.
+  # RDC otherwise surfaces a bare "unexpected status: 400" and drops Ironic's
+  # faultstring, so a rejected create is undiagnosable without this.
+  # Requires RDC >= 0.26.1, which redacts credential headers before logging.
+  connectorVerbose: false
+
+# Teardown behaviour when the BaremetalHost is DELETED.
+#
+# REMOVED in 0.6.2. Up to 0.6.1 this chart shipped a `pre-delete` hook Job
+# (templates/teardown-undeploy.yaml) that tried to drive Ironic
+# active -> available before the delete proceeded. It could never work, and
+# measurement on 2026-11-04 showed it had never once run:
+#
+#   1. core-provider derives a composition's RBAC from a helm dry-run INSTALL,
+#      and helm keeps hooks out of `release.Manifest`, so the generated
+#      ServiceAccount got no grant on batch/jobs. helm's
+#      `before-hook-creation` policy then could not delete the hook either,
+#      which turned every uninstall into a permanent failure.
+#   2. The hook created its NodeProvision with `curl -sS` and no `--fail`,
+#      output to /dev/null, so an HTTP 422 was indistinguishable from success.
+#      It was missing the CRD's required `configurationRef`.
+#   3. RETRACTED 2026-11-04. I claimed rdc's `krateo.io/oas-version` informer
+#      selector made hook-created CRs permanently invisible because cdc
+#      injected that label. The selector is real (shipped in 0.28.0, not
+#      0.50.0) but cdc does NOT inject the label -- a MutatingAdmissionPolicy
+#      that oasgen-provider creates per API group stamps it on CREATE/UPDATE
+#      for resources '*' with empty selectors and no client filtering.
+#      Measured: a kubectl apply with no labels comes back from a server
+#      dry-run carrying krateo.io/oas-version=v1-0-0; the same object under a
+#      client dry-run carries none. So a hook-created CR IS reconciled.
+#
+# The hook stays removed, but for a DESIGN reason rather than an impossibility:
+# cdc's delete calls `helm uninstall` without re-rendering, so the delete path
+# cannot walk a state machine at all, and a hook bolted onto it is
+# compensating for the wrong thing. Drain-before-delete lives in the parent
+# kubernetes-cluster chart's `workers.removed[]`, which sets `undeploy: true`
+# on the BaremetalHost, renders templates/transition-undeploy.yaml through
+# cdc, waits for `available`, and only then drops the node from the render.

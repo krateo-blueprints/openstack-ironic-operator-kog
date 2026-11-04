@@ -8,17 +8,27 @@ metadata:
   name: ironic-endpoint
   namespace: openstack
 spec:
+  # Keystone auth. EVERY Configuration kind needs its own authentication block -- the
+  # BaremetalNodeConfiguration's does not cover Ports. Measured 2026-10-29: with auth on
+  # the node config alone, node calls reached Ironic (400 on a body problem) while port
+  # calls returned a bare 401, which is easy to misread as a token fault rather than a
+  # missing config. See nodeconfiguration-ironic.yaml for the rotation contract.
+  authentication:
+    apiKey:
+      header: X-Auth-Token
+      tokenRef:
+        name: ironic-keystone-token
+        namespace: openstack
+        key: token
   # Only verbs declared by restdefinition-port.yaml are accepted here. Port has findby/
   # create/delete (no `get`: GET /v1/ports/{uuid} is addressed by uuid, which we don't have
   # at observe-time; the RestDef relies on findby on MAC to resolve the port).
   configuration:
+    # X-Ironic-Endpoint dropped with the proxy; the endpoint comes from the OAS servers[].url.
     header:
       create:
-        X-Ironic-Endpoint: "http://ironic.openstack.svc.cluster.local:6385"
-        X-OpenStack-Ironic-API-Version: "1.99"
+        X-OpenStack-Ironic-API-Version: "1.109"
       delete:
-        X-Ironic-Endpoint: "http://ironic.openstack.svc.cluster.local:6385"
-        X-OpenStack-Ironic-API-Version: "1.99"
+        X-OpenStack-Ironic-API-Version: "1.109"
       findby:
-        X-Ironic-Endpoint: "http://ironic.openstack.svc.cluster.local:6385"
-        X-OpenStack-Ironic-API-Version: "1.99"
+        X-OpenStack-Ironic-API-Version: "1.109"

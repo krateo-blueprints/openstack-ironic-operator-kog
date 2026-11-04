@@ -1,7 +1,7 @@
 # Render one BaremetalHost per worker. Two flavours:
 #
 # 1. Workers in spec.workers.nodes — normal deploy. FSM gate is the
-#    captured kubeadm-join command in the CP Node CR's
+#    captured kubeadm-join command in the CP BaremetalNode CR's
 #    spec.extra.kubeadm_join (live lookup). Empty -> nothing renders;
 #    cdc re-picks-up on next reconcile.
 #
@@ -50,6 +50,16 @@ spec:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   enableInspection: false
+  # v0.13.3: pass the verbose flag through to each BaremetalHost, which forwards
+  # it to the generated node CR as krateo.io/connector-verbose. Without this a
+  # failed Ironic transition inside a CLUSTER deploy surfaces as a bare
+  # "unexpected status: 400" with the faultstring discarded, because only the
+  # standalone baremetal-host path could turn verbosity on. That made the one
+  # place a six-blade deploy can fail the one place it could not be diagnosed.
+  {{- with ($.Values.debug).connectorVerbose }}
+  debug:
+    connectorVerbose: {{ . }}
+  {{- end }}
   online: true
   image:
     {{- include "kubernetes-cluster.image" $ | nindent 4 }}
@@ -105,6 +115,16 @@ spec:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   enableInspection: false
+  # v0.13.3: pass the verbose flag through to each BaremetalHost, which forwards
+  # it to the generated node CR as krateo.io/connector-verbose. Without this a
+  # failed Ironic transition inside a CLUSTER deploy surfaces as a bare
+  # "unexpected status: 400" with the faultstring discarded, because only the
+  # standalone baremetal-host path could turn verbosity on. That made the one
+  # place a six-blade deploy can fail the one place it could not be diagnosed.
+  {{- with ($.Values.debug).connectorVerbose }}
+  debug:
+    connectorVerbose: {{ . }}
+  {{- end }}
   image:
     {{- include "kubernetes-cluster.image" $ | nindent 4 }}
   undeploy: true
@@ -113,4 +133,73 @@ spec:
   configurationRef:
     {{- toYaml $.Values.configurationRef | nindent 4 }}
 {{- end }}
+{{- end }}
+
+{{- /* v0.13.12: workers.failedNodes[] -- undeploy a worker that never joined.
+       Symmetric with controlPlane.recovery.failedNodes[], and ungated for the
+       same reason that one is: the drain gate on workers.removed[] asks
+       `kubectl drain <node>` to succeed, which it cannot for a machine that is
+       not a cluster member, so removed[] can never open for a worker whose
+       join failed.
+
+       v0.13.21 CORRECTION. This comment used to claim there was no third
+       option because cdc "NEVER deletes what disappears from the render",
+       citing `created:0 deleted:0 patched:10` from its own log. That was
+       wrong, and it was reported upstream before being measured properly.
+       Removing blade06 from workers.nodes[] on 2026-11-04 produced
+       `created:0 deleted:1 patched:5` and a deletionTimestamp on the
+       BaremetalHost. The earlier zeros were reconciles in which nothing had
+       been removed -- evidence about the inputs, read as evidence about the
+       mechanism. Dropping an entry from workers.nodes[] DOES delete its
+       BaremetalHost.
+
+       It still is not the right lever for a failed worker, for a different
+       reason: deletion fires `helm uninstall`, which does not re-render the
+       chart, so it cannot walk Ironic from `active` down to `available`
+       first -- KOG fires DELETE /v1/nodes/{id} against an active node and
+       Ironic refuses. Undeploy has to happen BEFORE the record goes away,
+       which is what this path does and what deletion cannot do. (0.6.1's
+       pre-delete hook was an attempt to close that gap inside the delete
+       path; it could not work, see baremetal-host values.yaml.)
+       Same BH NAME as the normal worker path on purpose: cdc then PATCHES the
+       live BaremetalHost to undeploy rather than creating a second one that
+       fights it for the same machine. */}}
+{{- $wFailed := default (list) (default (dict) .Values.workers).failedNodes -}}
+{{- range $idx, $w := $wFailed }}
+---
+apiVersion: {{ include "kubernetes-cluster.lifecycleApiVersion" $ }}
+kind: {{ include "kubernetes-cluster.lifecycleKind" $ }}
+metadata:
+  name: {{ printf "%s-worker-%s" $cluster $w.nodeName | quote }}
+  namespace: {{ $lcNs | quote }}
+  labels:
+    kubernetescluster.ogen.krateo.io/cluster: {{ $cluster | quote }}
+    kubernetescluster.ogen.krateo.io/role: worker
+    kubernetescluster.ogen.krateo.io/worker-role: recovering
+spec:
+  nodeName: {{ $w.nodeName | quote }}
+  nodeNamespace: {{ $lcNs | quote }}
+  {{- with $w.nodeUuid }}
+  nodeUuid: {{ . | quote }}
+  {{- end }}
+  driver: {{ $w.driver | quote }}
+  {{- with $w.driver_info }}
+  driver_info:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with $w.ports }}
+  ports:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  enableInspection: false
+  {{- with ($.Values.debug).connectorVerbose }}
+  debug:
+    connectorVerbose: {{ . }}
+  {{- end }}
+  image:
+    {{- include "kubernetes-cluster.image" $ | nindent 4 }}
+  undeploy: true
+  undeployMode: {{ default "full" $w.undeployMode | quote }}
+  configurationRef:
+    {{- toYaml $.Values.configurationRef | nindent 4 }}
 {{- end }}

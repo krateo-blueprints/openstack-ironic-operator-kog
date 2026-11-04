@@ -16,9 +16,33 @@ spec:
   resourceGroup: baremetal.ogen.krateo.io
   resource:
     kind: NodeProvision
-    # node_id is the human-friendly id the caller sets (node name or uuid). It is NOT a real
-    # field on listed nodes, so findby never matches -> first Observe -> Create (the PUT). The
-    # 202 Pending condition then makes subsequent Observe report exists -> the PUT fires once.
+    # node_id is the human-friendly id the caller sets (node name or uuid). findby never
+    # matches -> first Observe -> Create (the PUT). The 202 Pending condition then makes
+    # subsequent Observe report exists -> the PUT fires once.
+    # MECHANISM CORRECTED 2026-11-04. findby never matches, which is what this
+    # design wants (one PUT, then the 202 Pending condition suppresses re-fire)
+    # -- but the reason written here for two weeks was not the reason operating.
+    #
+    # Stated reason:  node_id is not a field on Ironic's listed nodes, so the
+    #                 comparison finds no match.
+    # Actual reason:  node_id is absent from the CR entirely. Measured on all
+    #                 six live NodePower CRs: `node_id` is in NEITHER spec NOR
+    #                 status. oasgen's `isInResource` compares a response value
+    #                 against spec.<path> then status.<path>; with both missing
+    #                 it cannot compare at all, and returns the same
+    #                 (false, nil) it returns for "compared and differed".
+    #
+    # The spec property is suppressed by the `requestFieldMapping` below --
+    # oasgen-provider#419. So the match is impossible one layer earlier than
+    # the comment claimed, and the stated mechanism has never been reached.
+    #
+    # Why this matters rather than being pedantry: when #419/#421 restores the
+    # spec property, the stated mechanism TAKES OVER from the actual one and
+    # the outcome stays identical (node_id still is not a field on listed
+    # nodes, so the lookup skips it). The comment would become true by
+    # accident, via an unrelated fix, having been causally wrong throughout.
+    # A claim that is predictively right and causally wrong is the kind nothing
+    # ever falsifies.
     identifiers:
       - node_id
     additionalStatusFields:
@@ -33,6 +57,38 @@ spec:
       - action: findby
         method: GET
         path: /v1/nodes
+        # include_children REMOVED 2026-11-04. It is correct and it will come
+        # back, but it cannot work yet and was failing silently.
+        #
+        # What it was for: Ironic's node COLLECTION omits child nodes unless
+        # asked. Measured: GET /v1/nodes -> 3 nodes; ?include_children=true ->
+        # 17. blade01/04/05/06 are children of an enclosure and are ABSENT
+        # without it, so findby is structurally blind to them.
+        #
+        # Why it had to go: `include_children` needs Ironic microversion >= 1.83,
+        # and THIS KIND SENDS NO MICROVERSION AT ALL. BaremetalNode declares
+        # `X-OpenStack-Ironic-API-Version` in its OAS and carries 1.109 on every
+        # live CR; provision and power declare nothing, so Ironic negotiates its
+        # minimum. Measured on a throwaway CR 2026-11-04:
+        #
+        #   Observe -> 406 "Request not acceptable. The minimal required API
+        #                   version should be 1.83"
+        #
+        # Observe therefore failed on EVERY reconcile from 2026-10-30 onward --
+        # before this cluster was even built -- and nothing surfaced it, because
+        # no transition happened to be needed in that window.
+        #
+        # RESTORED 2026-11-04, together with the microversion header that makes
+        # it usable: oas/ironic-provision.yaml now declares
+        # `X-OpenStack-Ironic-API-Version` required with default 1.109, so every
+        # generated CR is stamped with it by the apiserver and the request
+        # carries a microversion that satisfies include_children's >= 1.83.
+        # Verified in between: with the query removed, Observe succeeded and the
+        # reconcile reached Create, where oasgen's own guard refused the
+        # unresolved {node_id} -- which is the separate, upstream bug (#419).
+        queries:
+          - name: include_children
+            value: "true"
         identifiersMatchPolicy: OR
       - action: create
         method: PUT

@@ -22,6 +22,30 @@ spec:
   resourceGroup: baremetal.ogen.krateo.io
   resource:
     kind: NodePower
+    # MECHANISM CORRECTED 2026-11-04. findby never matches, which is what this
+    # design wants (one PUT, then the 202 Pending condition suppresses re-fire)
+    # -- but the reason written here for two weeks was not the reason operating.
+    #
+    # Stated reason:  node_id is not a field on Ironic's listed nodes, so the
+    #                 comparison finds no match.
+    # Actual reason:  node_id is absent from the CR entirely. Measured on all
+    #                 six live NodePower CRs: `node_id` is in NEITHER spec NOR
+    #                 status. oasgen's `isInResource` compares a response value
+    #                 against spec.<path> then status.<path>; with both missing
+    #                 it cannot compare at all, and returns the same
+    #                 (false, nil) it returns for "compared and differed".
+    #
+    # The spec property is suppressed by the `requestFieldMapping` below --
+    # oasgen-provider#419. So the match is impossible one layer earlier than
+    # the comment claimed, and the stated mechanism has never been reached.
+    #
+    # Why this matters rather than being pedantry: when #419/#421 restores the
+    # spec property, the stated mechanism TAKES OVER from the actual one and
+    # the outcome stays identical (node_id still is not a field on listed
+    # nodes, so the lookup skips it). The comment would become true by
+    # accident, via an unrelated fix, having been causally wrong throughout.
+    # A claim that is predictively right and causally wrong is the kind nothing
+    # ever falsifies.
     identifiers:
       - node_id
     additionalStatusFields:
@@ -32,6 +56,16 @@ spec:
       - action: findby
         method: GET
         path: /v1/nodes
+        # v2026-11-04: Ironic's node COLLECTION omits child nodes unless asked.
+        # Measured: GET /v1/nodes -> 3 nodes; ?include_children=true -> 17.
+        # blade01/04/05/06 are children of an enclosure and are ABSENT without
+        # this, so findby is structurally blind to them — not a pagination edge,
+        # the items are simply not in the only response the matcher sees.
+        # RDC reads `queries` (builder.go:87 -> :148); the GENERATOR does not,
+        # so this changes the RestDefinition only and regenerates no CRD.
+        queries:
+          - name: include_children
+            value: "true"
         identifiersMatchPolicy: OR
       - action: create
         method: PUT

@@ -1,11 +1,22 @@
-{{- define "kubernetes-cluster.nodeApiVersion" -}}baremetal.ogen.krateo.io/v1alpha1{{- end -}}
+{{- define "kubernetes-cluster.nodeApiVersion" -}}baremetal.ogen.krateo.io/v1-0-0{{- end -}}
 
 {{/* Per-node CR kind/apiVersion. The chart renders BaremetalHost
      (unified composition) instead of BaremetalLifecycle so we can lean
      on the v0.3.4 widened `spec.undeploy` gate for drain & undeploy
      (Milestone 5b) and image swaps (Milestone 5a). Single CR per node
      throughout its lifecycle. */}}
-{{- define "kubernetes-cluster.lifecycleApiVersion" -}}composition.krateo.io/v0-4-5{{- end -}}
+{{/* v0.13.11: the child BaremetalHost apiVersion. This WAS the literal
+     `composition.krateo.io/v0-5-5`, which wedged the whole composition the
+     moment baremetal-host was bumped to 0.5.6: core-provider stops serving
+     the old CRD version, chart-inspector then fails every render with
+     "no matches for kind BaremetalHost in version composition.krateo.io/v0-5-5",
+     cdc reports `Cannot observe external resource` in a loop, and NOTHING
+     reconciles -- the parent and child charts are in lockstep through a
+     string neither declares. Overridable now, so the next bump is a value
+     change rather than a chart release. */}}
+{{- define "kubernetes-cluster.lifecycleApiVersion" -}}
+{{- default "composition.krateo.io/v0-5-6" .Values.lifecycleApiVersion -}}
+{{- end -}}
 {{- define "kubernetes-cluster.lifecycleKind" -}}BaremetalHost{{- end -}}
 
 {{- define "kubernetes-cluster.lifecycleNamespace" -}}
@@ -22,7 +33,7 @@
      single-node spec.controlPlane.node for back-compat with single-CP
      deployments. Index 0 is the BOOTSTRAP CP — the one that runs
      `kubeadm init --upload-certs` and publishes both kubeadm_join and
-     cert_key on its own Node CR. Replica CPs (index 1..N-1) join via
+     cert_key on its own BaremetalNode CR. Replica CPs (index 1..N-1) join via
      `kubeadm join --control-plane --certificate-key`. */}}
 {{- define "kubernetes-cluster.cpNodes" -}}
 {{- $cp := default (dict) .Values.controlPlane -}}
@@ -59,10 +70,10 @@
 {{- end -}}
 {{- end -}}
 
-{{/* The bootstrap CP's certificate-key, read live from the CP Node CR's
+{{/* The bootstrap CP's certificate-key, read live from the CP BaremetalNode CR's
      spec.extra.cert_key. Empty until the bootstrap CP's cloud-init has
      finished `kubeadm init --upload-certs --certificate-key=$KEY` AND
-     patched its own Node CR. This is the gate that controls whether
+     patched its own BaremetalNode CR. This is the gate that controls whether
      replica CPs render — without the key they can't decrypt the
      uploaded kubeadm-certs Secret. The TTL is 2h (kubeadm hard-coded).
 
@@ -74,7 +85,7 @@
 {{- define "kubernetes-cluster.certKey" -}}
 {{- $ns  := include "kubernetes-cluster.lifecycleNamespace" . -}}
 {{- $cp  := include "kubernetes-cluster.cpNodeName"          . -}}
-{{- $node := lookup (include "kubernetes-cluster.nodeApiVersion" .) "Node" $ns $cp -}}
+{{- $node := lookup (include "kubernetes-cluster.nodeApiVersion" .) "BaremetalNode" $ns $cp -}}
 {{- if $node -}}
 {{- $extra := dig "spec" "extra" (dict) $node -}}
 {{- $ck    := index $extra "cert_key" -}}
@@ -82,14 +93,39 @@
 {{- end -}}
 {{- end -}}
 
-{{/* The captured `kubeadm join` command, read live from the CP Node CR's
+{{/* The bootstrap CP's own etcd address, read live from its BaremetalNode CR's
+     spec.extra.etcd_ip. Published by publish-join.sh from the address the node
+     DERIVED for itself (see cp-init.sh ADVERTISE_IP).
+
+     v0.13.2: this replaces .controlPlane.nodes[].oobIp. An IP typed into the CR
+     is a fact about one lab frozen into desired state: it cannot be validated
+     at render time, it goes stale when a lease moves, and the same number had
+     to be kept consistent by hand with the advertise address the node derives
+     anyway. The node is the only thing that reliably knows its own address, so
+     it publishes it through the rendezvous that already carries kubeadm_join
+     and cert_key.
+
+     Empty until the bootstrap CP has run cp-init.sh and patched itself, which
+     makes it an FSM gate for replica CPs exactly like cert_key. */}}
+{{- define "kubernetes-cluster.bootstrapEtcdIp" -}}
+{{- $ns  := include "kubernetes-cluster.lifecycleNamespace" . -}}
+{{- $cp  := include "kubernetes-cluster.cpNodeName"          . -}}
+{{- $node := lookup (include "kubernetes-cluster.nodeApiVersion" .) "BaremetalNode" $ns $cp -}}
+{{- if $node -}}
+{{- $extra := dig "spec" "extra" (dict) $node -}}
+{{- $ip    := index $extra "etcd_ip" -}}
+{{- if $ip -}}{{- $ip -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The captured `kubeadm join` command, read live from the CP BaremetalNode CR's
      spec.extra.kubeadm_join. Empty until the CP cloud-init has finished
-     `kubeadm init` AND patched its own Node CR. This is the FSM gate
+     `kubeadm init` AND patched its own BaremetalNode CR. This is the FSM gate
      that controls whether worker BaremetalLifecycles get rendered. */}}
 {{- define "kubernetes-cluster.joinCommand" -}}
 {{- $ns  := include "kubernetes-cluster.lifecycleNamespace" . -}}
 {{- $cp  := include "kubernetes-cluster.cpNodeName"          . -}}
-{{- $node := lookup (include "kubernetes-cluster.nodeApiVersion" .) "Node" $ns $cp -}}
+{{- $node := lookup (include "kubernetes-cluster.nodeApiVersion" .) "BaremetalNode" $ns $cp -}}
 {{- if $node -}}
 {{- $extra := dig "spec" "extra" (dict) $node -}}
 {{- $jc    := index $extra "kubeadm_join" -}}
@@ -191,16 +227,48 @@ services:
      See docs/USER-GUIDE.md "Cluster ingress" section for option matrix. */}}
 {{- define "kubernetes-cluster.controlPlaneEndpoint" -}}
 {{- $cp := default (dict) .Values.controlPlane -}}
-{{- if $cp.endpoint -}}{{- $cp.endpoint -}}{{- end -}}
+{{- if $cp.endpoint -}}
+{{- $cp.endpoint -}}
+{{- else -}}
+{{- /* v0.13.2: DERIVED. No endpoint declared, so use the one the bootstrap CP
+       picked for itself and published to spec.extra.cp_endpoint. Empty on the
+       first render — which is correct and is the same two-phase shape the etcd
+       PKI and cert_key gates already rely on: the bootstrap boots with no
+       endpoint (kubeadm then advertises its own primary IP, the single-CP
+       path), derives a free VIP, claims it with kube-vip, publishes it, and
+       the NEXT reconcile renders replicas and workers against it. */ -}}
+{{- $ep := include "kubernetes-cluster.publishedCpEndpoint" . -}}
+{{- if $ep -}}{{- $ep -}}{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The control-plane endpoint the bootstrap CP DERIVED and published to its
+     own BaremetalNode CR's spec.extra.cp_endpoint.
+
+     v0.13.2: this is why controlPlane.endpoint is no longer required. A VIP
+     typed into the CR is an address the chart cannot validate: nothing checks
+     it is inside the blades' subnet (the kube-vip interface lookup silently
+     finds no NIC if it is not), and nothing checks it is unused. The bootstrap
+     node can check both, because it is ON that subnet — so it probes and
+     chooses, and the chart learns the answer. */}}
+{{- define "kubernetes-cluster.publishedCpEndpoint" -}}
+{{- $ns  := include "kubernetes-cluster.lifecycleNamespace" . -}}
+{{- $cp  := include "kubernetes-cluster.cpNodeName"          . -}}
+{{- $node := lookup (include "kubernetes-cluster.nodeApiVersion" .) "BaremetalNode" $ns $cp -}}
+{{- if $node -}}
+{{- $extra := dig "spec" "extra" (dict) $node -}}
+{{- $ep    := index $extra "cp_endpoint" -}}
+{{- if $ep -}}{{- $ep -}}{{- end -}}
+{{- end -}}
 {{- end -}}
 
 {{/* Strip the optional ":port" off controlPlane.endpoint and return just
      the host (or IP). Used by the kube-vip static-pod manifest to know
      which address to claim. Empty when the user hasn't set endpoint. */}}
 {{- define "kubernetes-cluster.controlPlaneVip" -}}
-{{- $cp := default (dict) .Values.controlPlane -}}
-{{- if $cp.endpoint -}}
-{{- regexReplaceAll ":[0-9]+$" $cp.endpoint "" -}}
+{{- $ep := include "kubernetes-cluster.controlPlaneEndpoint" . -}}
+{{- if $ep -}}
+{{- regexReplaceAll ":[0-9]+$" $ep "" -}}
 {{- end -}}
 {{- end -}}
 
@@ -212,9 +280,12 @@ services:
 
        - etcd CA (cert + key, 10y validity)
        - apiserver-etcd-client cert (cert + key, 10y, signed by CA)
-       - per-CP etcd server cert (cert + key, 10y, IP+DNS SANs, signed
-         by CA) — requires user to supply .controlPlane.nodes[].oobIp
-         so the SAN matches what apiserver/peers dial
+       - per-CP etcd server cert: NOT minted here. kubeadm mints it on the
+         node from the chart-supplied CA, so its SANs come from the node's
+         own addresses. This is why 0.13.2 could drop
+         .controlPlane.nodes[].oobIp outright: the comment previously
+         claimed the SAN needed a declared IP, but nothing in this chart
+         ever generated that cert
 
      Stability: certs are generated ONCE on the first chart render via
      genCA / genSignedCert. Subsequent renders `lookup` the persisted
@@ -265,7 +336,7 @@ services:
      version. Embedded in cloud-init userData via /etc/kubernetes/
      .deployed-hash, published to Ironic.node.extra.deployed_configdrive_
      hash by publish-deployed-hash.sh in runcmd's last step, then
-     mirrored to Node CR.spec.extra by the bridge sidecar. The
+     mirrored to BaremetalNode CR.spec.extra by the bridge sidecar. The
      baremetal-host chart's shouldAutoRedeploy compares this value to
      the BH-baked configDriveHashInput (also = .Chart.Version when
      rendered) — match means the running OS is the chart's intended
@@ -497,12 +568,46 @@ services:
       advertiseAddress: __ADVERTISE_IP__
       bindPort: 6443
     certificateKey: __CERT_KEY__
+    {{/* v0.13.20: pin the kubelet's node-ip.
+         Without this the init config has NO nodeRegistration at all, so
+         kubelet auto-detects its node IP and on a dual-NIC blade picks the
+         FIRST interface — the OOB network — while everything else the chart
+         configures sits on the data network. Measured on blade01:
+
+           advertiseAddress:  192.168.0.201   (data)
+           etcd peer URL:     192.168.0.201   (data)
+           derived VIP:       192.168.0.250   (data, enp2s0)
+           node InternalIP:   172.19.74.123   (OOB)  <- the odd one out
+           KUBELET_KUBEADM_ARGS=""                   <- no --node-ip anywhere
+
+         The CP REPLICAS were already correct because their JoinConfiguration
+         carries nodeRegistration.kubeletExtraArgs; only the bootstrap and the
+         workers lacked it, which is why blade02/03 reported data-network
+         addresses and blade01 and the workers did not. __ADVERTISE_IP__ is
+         already substituted by the same sed that fills advertiseAddress. */}}
+    nodeRegistration:
+      kubeletExtraArgs:
+        - name: node-ip
+          value: __ADVERTISE_IP__
     ---
     apiVersion: kubeadm.k8s.io/v1beta4
     kind: ClusterConfiguration
     kubernetesVersion: {{ .Values.k8sVersion }}
 {{- if $cpe }}
     controlPlaneEndpoint: {{ $cpe | quote }}
+{{- else if gt (len (fromYamlArray (include "kubernetes-cluster.cpNodes" .))) 1 }}
+    {{/* v0.13.10: HA with no declared endpoint. $cpe is EMPTY at render time
+         by construction -- the VIP is derived by arping after this node boots
+         -- so `if $cpe` omitted this line entirely and kubeadm init ran with
+         no controlPlaneEndpoint. kubeadm only accepts `--control-plane` joins
+         when the endpoint was set AT INIT TIME, so the cluster was permanently
+         single-CP: controlPlaneEndpoint empty in kubeadm-config, and the VIP
+         absent from the apiserver cert SANs (measured: SANs held only
+         10.96.0.1 and the node's own 192.168.0.201). Replicas then failed for
+         a second, louder reason and this one stayed hidden underneath.
+         Substituted by cp-init.sh from the derived VIP, exactly as
+         __ADVERTISE_IP__ and __CERT_KEY__ already are. */}}
+    controlPlaneEndpoint: __CONTROL_PLANE_ENDPOINT__
 {{- end }}
     networking:
       podSubnet: {{ .Values.network.podCIDR | quote }}
@@ -533,7 +638,19 @@ services:
     discovery:
       bootstrapToken:
         token: {{ $tok | quote }}
-        apiServerEndpoint: {{ $cpe | quote }}
+        {{/* v0.13.19: a PLACEHOLDER, substituted by join.sh from the
+             runtime-resolved endpoint. It was `$cpe` -- the render-time
+             controlPlaneEndpoint helper -- which is empty for every HA render
+             because the VIP is derived by arping after the bootstrap boots. So
+             this rendered `apiServerEndpoint: ""` and kubeadm refused the
+             config outright:
+               discovery.bootstrapToken: Required value: APIServerEndpoint is not set
+               apiServerEndpoint: Invalid value: "": missing port in address
+             join.sh had already resolved the VIP correctly for its healthz
+             poll; the value simply never reached this file. Third surface of
+             the same render-time/runtime split, after join.sh's own VIP and
+             kubeadm-init.yaml's controlPlaneEndpoint. */}}
+        apiServerEndpoint: __CP_ENDPOINT__
         caCertHashes:
           - "sha256:__CA_HASH__"
     controlPlane:
@@ -548,9 +665,231 @@ services:
 {{- end -}}
 {{- end -}}
 
+{{/* v0.13.9: resolve the control-plane endpoint at RUNTIME from Ironic,
+     the store the bootstrap CP itself publishes to.
+
+     WHY THIS EXISTS. The VIP cannot be known at render time. The bootstrap
+     derives it by arping for a free address AFTER it boots, so every replica
+     and worker renders CONCURRENTLY with a bootstrap that has not run yet.
+     The etcd_ip poll fifteen hundred lines down already says this in full --
+     "a render-time lookup would therefore bake an empty endpoint" -- and the
+     VIP was the one value still baked. It baked empty, and three replicas ran
+     `curl -k https:///healthz` 120 times against a URL with no host, logged
+     "apiserver never became reachable", and exited 1 while Ironic reported
+     `active` for all six blades.
+
+     WHY IRONIC AND NOT THE CR. The sibling poll reads the management cluster's
+     copy of this value, which arrives there only if ironic-extra-bridge happens
+     to mirror the key. It did not: its EXTRA_KEYS allowlist predates HA, and
+     rdc then replays CR.spec.extra onto Ironic as the whole `extra` object, so
+     any key the bridge omits is DELETED from Ironic about ninety seconds after
+     the blade publishes it. The VIP's measured lifetime was 82 seconds. The
+     allowlist is fixed, but reading Ironic directly takes that entire lossy hop
+     off the join's critical path: this reads what the publisher wrote, from the
+     store it wrote it to, over the OOB network the blade already uses for
+     exactly this purpose.
+
+     Credentials and reachability are the same .Values.ironicAuth that
+     publish-deployed-hash.sh uses, and that helper is already universal across
+     cpUserData, cpReplicaUserData and workerUserData -- so nothing new is
+     granted to the blade here.
+
+     Prints the endpoint on stdout and nothing else, or exits non-zero. Callers
+     fall back to the rendered value, which is correct and non-empty for a
+     single-CP cluster, where no VIP is derived and none is published. */}}
+{{- define "kubernetes-cluster.resolveNodeExtraWriteFiles" -}}
+- path: /etc/kubernetes/resolve-node-extra.sh
+  permissions: "0755"
+  content: |
+    #!/bin/bash
+    # Poll Ironic for a key of the bootstrap CP's published node.extra.
+    #   $1 = key name (default cp_endpoint)
+    # stdout is the endpoint ONLY -- all logging goes to the log file, so
+    # `VIP=$(bash resolve-node-extra.sh cp_endpoint)` can never capture chatter.
+    set -uo pipefail
+    exec 2>> /var/log/resolve-node-extra.log
+    KEY="${1:-cp_endpoint}"
+    BOOTSTRAP={{ include "kubernetes-cluster.cpNodeName" . | quote }}
+    AUTH_URL={{ .Values.ironicAuth.authUrl | quote }}
+    IRONIC_URL={{ .Values.ironicAuth.ironicUrl | quote }}
+    USERNAME={{ .Values.ironicAuth.username | quote }}
+    PASSWORD={{ .Values.ironicAuth.password | quote }}
+    USER_DOMAIN={{ .Values.ironicAuth.userDomain | quote }}
+    BUDGET={{ (.Values.join).cpEndpointPolls | default 120 }}
+    log() { echo "[$(date -Iseconds)] $*" >&2; }
+    log "resolving $KEY for bootstrap=$BOOTSTRAP budget=${BUDGET}x5s"
+    for i in $(seq 1 "$BUDGET"); do
+      TOKEN=$(curl -sS -D - -o /dev/null --max-time 15 \
+        -H "Content-Type: application/json" \
+        -d "{\"auth\":{\"identity\":{\"methods\":[\"password\"],\"password\":{\"user\":{\"name\":\"$USERNAME\",\"password\":\"$PASSWORD\",\"domain\":{\"name\":\"$USER_DOMAIN\"}}}},\"scope\":{\"system\":{\"all\":true}}}}" \
+        "$AUTH_URL/v3/auth/tokens" 2>/dev/null \
+        | grep -i 'x-subject-token' | awk '{print $2}' | tr -d '\r')
+      if [ -n "$TOKEN" ]; then
+        EP=$(curl -sS --max-time 15 \
+          -H "X-Auth-Token: $TOKEN" \
+          -H "X-OpenStack-Ironic-API-Version: 1.81" \
+          "$IRONIC_URL/v1/nodes/$BOOTSTRAP" 2>/dev/null \
+          | python3 -c "import sys,json; print((json.load(sys.stdin).get('extra') or {}).get(sys.argv[1]) or '')" "$KEY" 2>/dev/null)
+        if [ -n "$EP" ]; then
+          log "resolved $KEY=$EP on poll $i"
+          printf '%s' "$EP"
+          exit 0
+        fi
+        # Say so when the call SUCCEEDED but the key was not there. Without
+        # this the loop is indistinguishable from "not published yet", which
+        # is how a KeyError in this very pipeline burned a whole deploy cycle
+        # looking like a patient wait.
+        if [ -z "$EP" ] && { [ "$i" = "1" ] || [ $((i % 20)) = "0" ]; }; then
+          log "poll $i: token ok, but extra.$KEY not present in the response"
+        fi
+      else
+        log "poll $i: no keystone token"
+      fi
+      sleep 5
+    done
+    # Name what was being waited for. A gate that times out silently is
+    # how the previous failure stayed invisible for half an hour.
+    log "TIMEOUT: bootstrap $BOOTSTRAP never published extra.$KEY"
+    exit 1
+{{- end -}}
+
 {{/* v0.12.3 (Task #91): publish-deployed-hash.sh + /etc/kubernetes/
      .deployed-hash file. Universal across cpUserData, cpReplicaUserData,
      workerUserData. */}}
+{{/* CNCF conformance runner, baked into the bootstrap control plane.
+
+     Why this is in the chart at all: the 443/443 v1.36.6 result in
+     conformance/v1.36/ was produced by hydrophone installed BY HAND on blade01,
+     and a re-image silently takes it away. The runner being absent is not
+     discovered until someone wants to re-certify, which is exactly when they
+     least want to rediscover the install steps. So the chart installs it.
+
+     The SUITE is not run here by default. It takes about two hours and pulls a
+     large image, so `runOnBoot` is off and an operator starts it deliberately:
+
+       sudo env KUBECONFIG=/etc/kubernetes/admin.conf \
+         hydrophone --conformance --output-dir /var/lib/conformance
+
+     Two deliberate choices in the script below:
+       * `curl --fail`. A plain `curl -sS` exits 0 on an HTTP 404 and would
+         hand tar an HTML error page. This repo has already shipped one bug of
+         exactly that shape (the teardown hook's POST, removed in
+         baremetal-host 0.6.2), so every download here fails loudly.
+       * the release checksums file is fetched and verified. An unverified
+         tarball extracted into /usr/local/bin is a straight code-execution
+         path, and `sha256sum -c` costs one line. */}}
+{{- define "kubernetes-cluster.conformanceWriteFiles" -}}
+{{- $c := default (dict) .Values.conformance -}}
+{{- $ver := $c.version | default "v0.8.0" -}}
+{{- $out := $c.outputDir | default "/var/lib/conformance" -}}
+- path: /etc/kubernetes/install-conformance.sh
+  permissions: "0755"
+  content: |
+    #!/bin/bash
+    # Installs the CNCF conformance runner. Runs LAST in runcmd and never
+    # gates cluster bring-up: if this fails the cluster is still correct,
+    # only un-certifiable until someone looks at the log.
+    set -euo pipefail
+    exec >> /var/log/install-conformance.log 2>&1
+    set -x
+    date
+    VER={{ $ver | quote }}
+    OUT={{ $out | quote }}
+    BASE="https://github.com/kubernetes-sigs/hydrophone/releases/download/${VER}"
+    TAR="hydrophone_Linux_x86_64.tar.gz"
+    # The checksum asset is NOT "checksums.txt" -- it is name_version_checksums.txt
+    # with the leading "v" stripped from the tag. Verified against all nine
+    # hydrophone releases (v0.1.0..v0.8.0), so this is the project's pattern and
+    # not a quirk of one tag. Held in a variable precisely so the URL and the
+    # error message below cannot drift apart again: the old message named
+    # "checksums.txt" and was perfectly accurate about a file that never existed.
+    SUMS="hydrophone_${VER#v}_checksums.txt"
+
+    # One EXIT trap, set once, doing both jobs. Bash keeps a SINGLE EXIT trap,
+    # so the `trap 'rm -rf "$WORK"' EXIT` that used to live inside the else
+    # branch would silently REPLACE any trap set out here -- which is how a
+    # failure marker added later would quietly never be written.
+    WORK=""
+    # Distinguishes the two ways this script can fail. With runOnBoot the suite
+    # itself runs here, so "nonzero exit" alone cannot tell "no binary" from
+    # "binary fine, suite failed" -- and a marker claiming hydrophone is absent
+    # when it is sitting on the node sends the reader to the wrong problem.
+    INSTALLED=0
+    mkdir -p "$OUT"
+    cleanup() {
+      rc=$?
+      if [ -n "$WORK" ]; then rm -rf "$WORK"; fi
+      if [ "$rc" -ne 0 ]; then
+        # Without this, a failed install leaves NOTHING in $OUT -- measured
+        # 2026-11-04: the directory was absent entirely, so the one place
+        # anyone looks was indistinguishable from "the runner was never
+        # enabled". Bring-up stays ungated; the failure stops being silent.
+        {
+          if [ "$INSTALLED" -eq 1 ]; then
+            echo "conformance SUITE failed (exit $rc) at $(date -Is)"
+            echo "hydrophone IS installed on this node; the run did not complete."
+          else
+            echo "conformance runner INSTALL failed (exit $rc) at $(date -Is)"
+            echo "Nothing was installed. hydrophone is NOT on this node."
+          fi
+          echo "Full trace: /var/log/install-conformance.log"
+        } > "$OUT/INSTALL-FAILED.txt"
+      else
+        # Clear a stale marker from an earlier failed boot.
+        rm -f "$OUT/INSTALL-FAILED.txt"
+      fi
+    }
+    trap cleanup EXIT
+
+    # `hydrophone --version` prints a MULTI-LINE build block whose first line is
+    # just the program name, so the old `| head -1` recorded "hydrophone" and no
+    # version at all -- a log line whose entire purpose is saying what got
+    # installed, saying nothing. The version is on the `version:` row.
+    hydro_ver() { hydrophone --version 2>&1 | awk '$1=="version:"{print $2; exit}'; }
+
+    if command -v hydrophone >/dev/null 2>&1; then
+      echo "hydrophone already present: $(hydro_ver) (chart requested $VER)"
+    else
+      WORK=$(mktemp -d)
+      # --fail so an HTTP error is an error, not an HTML file fed to tar.
+      curl --fail -sSL -o "$WORK/$TAR"        "$BASE/$TAR"
+      curl --fail -sSL -o "$WORK/sums"        "$BASE/$SUMS" || {
+        echo "FATAL: cannot fetch $SUMS for $VER; refusing to install unverified binary" >&2
+        exit 1
+      }
+      ( cd "$WORK" && grep " ${TAR}\$" sums > sums.one && sha256sum -c sums.one )
+      tar -xzf "$WORK/$TAR" -C /usr/local/bin hydrophone
+      chmod 0755 /usr/local/bin/hydrophone
+      # Assert rather than assume: a tarball whose layout changed would
+      # otherwise leave nothing on PATH and report success.
+      command -v hydrophone >/dev/null || { echo "FATAL: hydrophone not on PATH after extract" >&2; exit 1; }
+      echo "installed: $(hydro_ver) (chart requested $VER)"
+    fi
+    INSTALLED=1
+
+    {{- if $c.runOnBoot }}
+    # runOnBoot is ON. ~2h. Results land in $OUT.
+    env KUBECONFIG=/etc/kubernetes/admin.conf \
+      hydrophone --conformance --output-dir "$OUT"
+    {{- else }}
+    cat > "$OUT/HOW-TO-RUN.txt" <<'EOT'
+    Run the CNCF conformance suite from this node (the kubeconfig never
+    leaves the machine that owns it):
+
+      sudo env KUBECONFIG=/etc/kubernetes/admin.conf \
+        hydrophone --conformance --output-dir {{ $out }}
+
+    Takes roughly two hours. Produces e2e.log and junit_01.xml here.
+    Both are what CNCF wants attached to a submission.
+    EOT
+    # Append the RESOLVED version. The heredoc above is quoted on purpose, so
+    # this goes in afterwards: whoever opens this file to re-certify needs to
+    # know which runner is on the node, not which one the chart asked for.
+    echo "Runner on this node: hydrophone $(hydro_ver) (chart requested $VER)" >> "$OUT/HOW-TO-RUN.txt"
+    echo "runner installed; suite NOT run (conformance.runOnBoot is false)"
+    {{- end }}
+{{- end -}}
+
 {{- define "kubernetes-cluster.publishDeployedHashWriteFiles" -}}
 - path: /etc/kubernetes/.deployed-hash
   permissions: "0644"
@@ -561,7 +900,7 @@ services:
   content: |
     #!/bin/bash
     # Publish the chart-baked deploy hash to Ironic.node.extra.
-    # deployed_configdrive_hash. Bridge sidecar mirrors to Node CR
+    # deployed_configdrive_hash. Bridge sidecar mirrors to BaremetalNode CR
     # spec.extra. baremetal-host chart's shouldAutoRedeploy compares
     # current chart-rendered hash vs spec.extra value. Match = OS is
     # in chart's intended state. Drift = teardown OR chart bump → fire
@@ -601,9 +940,9 @@ services:
 {{/* Cloud-init userData for the CONTROL PLANE node. Installs kubeadm,
      runs `kubeadm init` (with --control-plane-endpoint when set),
      applies the CNI, then mints a join token and publishes it onto the
-     CP's own Node CR via `kubectl patch` against the management cluster.
+     CP's own BaremetalNode CR via `kubectl patch` against the management cluster.
      The patch path is spec.extra.kubeadm_join — chosen because spec.extra
-     is a writable, KOG-reconciled field in the Node CRD (Ironic round-
+     is a writable, KOG-reconciled field in the BaremetalNode CRD (Ironic round-
      trip is handled by the rest-dynamic-controller; we don't fight it).
 
      Token rotation: kubeadm-token-refresh.timer fires every 12h and re-
@@ -648,14 +987,33 @@ write_files:
       # since 2026-02-01". The packages themselves still come from
       # pkgs.k8s.io over HTTPS; this only disables the signature check.
       echo "deb [trusted=yes] https://pkgs.k8s.io/core:/stable:/{{ regexReplaceAll "^(v[0-9]+\\.[0-9]+).*" .Values.k8sVersion "${1}" }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
+      # v0.13.17: containerd 2.x, from Docker's repo, for CONFORMANCE.
+      #
+      # Debian trixie offers containerd 1.7.24 and NOTHING ELSE
+      # (apt-cache policy: Candidate: 1.7.24~ds1-6+deb13u1). The CNCF suite's
+      #   [sig-node] ImageVolume ... (common/node/image_volume.go:119)
+      # mounts an OCI image as a volume, which requires runtime support that
+      # landed in the containerd 2.x line. On 1.7.24 the test pod never reaches
+      # Running and the spec times out after five minutes. It is not a
+      # configuration problem and no feature gate fixes it: the capability is
+      # absent from the runtime, so this is a property of the BASE IMAGE rather
+      # than of the chart's logic.
+      #
+      # download.docker.com is what the Kubernetes documentation prescribes and
+      # what certified installers use, and `containerd.io` tracks the 2.x line
+      # while staying apt-managed. Same `trusted=yes` rationale as the k8s repo
+      # above: trixie's sqv rejects v3 signature packets, the transport is still
+      # HTTPS, and this only skips the signature check.
+      echo "deb [trusted=yes] https://download.docker.com/linux/debian trixie stable" > /etc/apt/sources.list.d/docker.list
       apt-get update
       # Resolve the full Debian package version including the upstream
       # revision suffix (older minors ship -1.1, v1.36+ ships -2.1, etc.)
       # by querying apt-cache rather than hard-coding `-1.1`.
       K8S_PKG_VER=$(apt-cache madison kubelet | awk -v v="{{ trimPrefix "v" .Values.k8sVersion }}" '$3 ~ "^"v"-" {print $3; exit}')
       test -n "$K8S_PKG_VER"
-      apt-get install -y kubelet="$K8S_PKG_VER" kubeadm="$K8S_PKG_VER" kubectl="$K8S_PKG_VER" containerd etcd-client jq
+      apt-get install -y kubelet="$K8S_PKG_VER" kubeadm="$K8S_PKG_VER" kubectl="$K8S_PKG_VER" containerd.io etcd-client jq
       apt-mark hold kubelet kubeadm kubectl
+      bash /etc/kubernetes/publish-stage.sh k8s-packages-installed
       # Debian 13 trixie's containerd ships with bin_dir = "/usr/lib/cni" by
       # default. Flannel's install-cni-plugin initContainer (and kubeadm)
       # drop CNI binaries at /opt/cni/bin instead, so kubelet errors with
@@ -676,6 +1034,26 @@ write_files:
         | sed -e 's|/usr/lib/cni|/opt/cni/bin|g' \
               -e 's|SystemdCgroup = false|SystemdCgroup = true|g' \
         > /etc/containerd/config.toml
+      # v0.13.17: ASSERT the substitution landed, do not assume it.
+      #
+      # Both seds are string matches against whatever `containerd config
+      # default` emits, and that output changed shape in containerd 2.x:
+      # config `version = 3` with renamed plugin paths. If the SystemdCgroup
+      # match silently misses, containerd runs cgroupfs while kubelet defaults
+      # to systemd, and the mismatch kills containers roughly every 11 seconds
+      # — observed as etcd and apiserver flapping 14-28 times in a fresh
+      # bringup. That failure is expensive to diagnose and trivial to detect
+      # here, so detect it here.
+      grep -q 'SystemdCgroup = true' /etc/containerd/config.toml || {
+        echo "containerd config: SystemdCgroup=true NOT set after patching." >&2
+        echo "  `containerd config default` output shape probably changed" >&2
+        echo "  (containerd 2.x uses config version 3). kubelet defaults to" >&2
+        echo "  cgroupDriver: systemd, so proceeding would flap every ~11s." >&2
+        echo "  containerd version: $(containerd --version 2>&1)" >&2
+        grep -n 'SystemdCgroup' /etc/containerd/config.toml >&2 || echo "  no SystemdCgroup key at all" >&2
+        exit 1
+      }
+      echo "containerd config: SystemdCgroup=true confirmed ($(containerd --version 2>&1 | awk '{print $3}'))"
       # systemctl enable --now doesn't restart a unit that's already
       # running; Debian's containerd apt-package enables+starts on
       # install, so without an explicit restart the new config.toml is
@@ -699,7 +1077,7 @@ write_files:
     permissions: "0644"
     content: |
       [Unit]
-      Description=Mint a fresh kubeadm join token and publish it onto our Node CR
+      Description=Mint a fresh kubeadm join token and publish it onto our BaremetalNode CR
       Wants=network-online.target
       After=network-online.target
 
@@ -723,6 +1101,75 @@ write_files:
 
       [Install]
       WantedBy=timers.target
+  - path: /etc/kubernetes/node-uuid
+    permissions: "0644"
+    content: |
+      {{ include "kubernetes-cluster.bootstrapNodeUuid" . }}
+  - path: /etc/kubernetes/publish-stage.sh
+    permissions: "0755"
+    content: |
+      #!/bin/bash
+      # Publish a single progress marker to Ironic node.extra.cp_stage.
+      #
+      # WHY THIS EXISTS. cp-init.sh is a long bash script that runs once, on
+      # first boot, on a machine with no inbound access. Every `set -e` abort in
+      # it is invisible from the cluster: Ironic still reports the node `active`
+      # (it wrote the image successfully — the image is fine, the script failed),
+      # spec.extra stays empty, and there is no way to distinguish "still
+      # installing packages" from "died 40 lines in" without logging into the
+      # blade. That cost hours here, and the only diagnostics available were
+      # port probes, which cannot tell an uninstalled kubelet from an installed
+      # one awaiting kubeadm (neither listens).
+      #
+      # Best effort by design: never let reporting failure break the thing being
+      # reported on. Exits 0 always.
+      #
+      # v0.13.23: "best effort" is NOT "silent", and it used to be. Every exit
+      # below was a bare `exit 0` with no output, and the PATCH sent its own
+      # errors to /dev/null. So a reporter failure looked EXACTLY like the
+      # thing it reports on failing -- an empty cp_stage -- and
+      # docs/KUBERNETES-CLUSTER.md's troubleshooting row for "publishes
+      # NOTHING, no cp_stage" names a different cause entirely (a NIC missing
+      # from the node's ports). A healthy blade whose reporter had lost its
+      # Keystone credential would have sent an operator hunting a network
+      # fault that was not there.
+      #
+      # It now logs every failure path to /var/log/publish-stage.log and still
+      # exits 0. `tail /var/log/publish-stage.log` on the blade distinguishes
+      # "the reporter broke" from "cp-init died", which is the whole question.
+      set +e
+      LOG=/var/log/publish-stage.log
+      log() { echo "[$(date -Iseconds)] $*" >> "$LOG" 2>/dev/null; }
+      STAGE="${1:-unknown}"
+      KEYSTONE_URL="{{ .Values.ironicAuth.authUrl }}"
+      IRONIC_URL="{{ .Values.ironicAuth.ironicUrl }}"
+      NODE_UUID="$(cat /etc/kubernetes/node-uuid 2>/dev/null)"
+      if [ -z "$NODE_UUID" ]; then
+        log "stage=$STAGE NOT PUBLISHED: /etc/kubernetes/node-uuid is absent or empty"
+        exit 0
+      fi
+      AUTH_BODY='{"auth":{"identity":{"methods":["password"],"password":{"user":{"name":"{{ .Values.ironicAuth.username }}","password":"{{ .Values.ironicAuth.password }}","domain":{"name":"{{ .Values.ironicAuth.userDomain }}"}}}},"scope":{"system":{"all":true}}}}'
+      OUT=$(curl -sS -i --max-time 10 -H "Content-Type: application/json" -d "$AUTH_BODY" "${KEYSTONE_URL}/v3/auth/tokens" 2>/dev/null)
+      TOKEN=$(echo "$OUT" | grep -i '^X-Subject-Token:' | awk '{print $2}' | tr -d '\r')
+      if [ -z "$TOKEN" ]; then
+        # Name the status line rather than just "no token": a 401 is a wrong
+        # credential, a timeout is an unreachable Keystone, and the operator
+        # fix differs.
+        log "stage=$STAGE NOT PUBLISHED: no Keystone token from $KEYSTONE_URL -- $(echo "$OUT" | head -1 | tr -d '\r')"
+        exit 0
+      fi
+      ERR=$(curl -fsSL --max-time 10 \
+        -H "X-Auth-Token: ${TOKEN}" \
+        -H "X-OpenStack-Ironic-API-Version: 1.109" \
+        -H "Content-Type: application/json-patch+json" \
+        -X PATCH "${IRONIC_URL}/v1/nodes/${NODE_UUID}" \
+        -d "[{\"op\":\"add\",\"path\":\"/extra/cp_stage\",\"value\":\"${STAGE}\"}]" 2>&1 >/dev/null)
+      if [ $? -ne 0 ]; then
+        log "stage=$STAGE NOT PUBLISHED: PATCH to $IRONIC_URL failed -- ${ERR:-no output}"
+      else
+        log "stage=$STAGE published"
+      fi
+      exit 0
   - path: /etc/kubernetes/publish-join.sh
     permissions: "0755"
     content: |
@@ -732,7 +1179,7 @@ write_files:
       # reach the lab Ironic API over its OOB network, but CANNOT reach
       # the management cluster's API (wg tunnel routes one direction
       # only on this lab). The ironic-extra-bridge sidecar in
-      # wg-ironic-proxy propagates extra back into the k8s Node CR's
+      # wg-ironic-proxy propagates extra back into the k8s BaremetalNode CR's
       # spec.extra, where the chart's lookup picks it up.
       #
       # Called once from cloud-init at boot, then every 12h by
@@ -765,6 +1212,33 @@ write_files:
       if [ -f /etc/kubernetes/cert-key ]; then
         CERT_KEY=$(cat /etc/kubernetes/cert-key)
         PATCH+=',{"op":"add","path":"/extra/cert_key","value":"'$CERT_KEY'"}'
+      fi
+      # v0.13.2: publish THIS node's own etcd address, DERIVED here rather
+      # than declared in values.
+      #
+      # Replica CPs need the bootstrap's etcd client URL to add themselves as
+      # members. That used to come from controlPlane.nodes[0].oobIp — an IP
+      # typed into the CR by hand, which is a fact about one lab hard-coded
+      # into the chart, wrong the moment a lease moves and impossible to
+      # validate at render time. The node knows its own address; nobody else
+      # reliably does.
+      #
+      # /etc/kubernetes/etcd-ip is written by cp-init.sh, which already
+      # derives ADVERTISE_IP for exactly this reason. Reusing that value
+      # keeps the etcd peer address and the apiserver advertise address
+      # consistent by construction instead of by the operator typing the
+      # same number into two places.
+      if [ -f /etc/kubernetes/etcd-ip ]; then
+        ETCD_IP=$(cat /etc/kubernetes/etcd-ip)
+        PATCH+=',{"op":"add","path":"/extra/etcd_ip","value":"'$ETCD_IP'"}'
+      fi
+      # v0.13.2: publish the DERIVED control-plane endpoint, so the chart's
+      # next render gives replicas and workers a VIP nobody had to type in.
+      # Written by cp-init.sh only when the cluster is HA and no endpoint was
+      # declared; absent otherwise, which leaves any declared value untouched.
+      if [ -f /etc/kubernetes/cp-endpoint ]; then
+        CP_ENDPOINT=$(cat /etc/kubernetes/cp-endpoint)
+        PATCH+=',{"op":"add","path":"/extra/cp_endpoint","value":"'$CP_ENDPOINT'"}'
       fi
       PATCH+=']'
 
@@ -916,33 +1390,187 @@ write_files:
       # authentication failed" when downloading uploaded-certs.
       echo "{{ include "kubernetes-cluster.kubeadmCertKey" . }}" > /etc/kubernetes/cert-key
       chmod 0600 /etc/kubernetes/cert-key
+      # v0.13.2: persist the DERIVED advertise address so publish-join.sh can
+      # hand it to replica CPs as the bootstrap etcd endpoint. See the
+      # etcd_ip block there for why this is derived and not an input.
+      echo "$ADVERTISE_IP" > /etc/kubernetes/etcd-ip
+      chmod 0644 /etc/kubernetes/etcd-ip
+{{- if and (gt (len (fromYamlArray (include "kubernetes-cluster.cpNodes" .))) 1) (not (include "kubernetes-cluster.controlPlaneEndpoint" .)) }}
+      # v0.13.2: DERIVE the control-plane VIP. HA cluster, no endpoint declared.
+      #
+      # Picked here rather than in values because this node can verify what the
+      # chart cannot: that the address is inside the blades' own subnet (the
+      # kube-vip interface lookup matches on /24, and silently finds no NIC for
+      # an address outside it) and that nothing currently answers for it.
+      #
+      # Scans DOWN from the top of the subnet: DHCP pools conventionally
+      # allocate upward from the bottom, so the top is the least contended end.
+      # `arping -D` is duplicate-address-detection — the same check a DHCP
+      # client does before accepting a lease.
+      #
+      # NOTE this is first-free-at-probe-time, not a reservation. If this
+      # subnet has no DHCP-excluded range, a later lease could in principle
+      # collide; kube-vip re-announces continuously so the VIP would win ARP,
+      # but the honest fix is an excluded range, declared as a RANGE rather
+      # than as one hand-picked address.
+      apt-get install -y iputils-arping >/dev/null 2>&1 || true
+      VIP_SUBNET=$(echo "$ADVERTISE_IP" | awk -F. '{print $1"."$2"."$3}')
+      VIP_IFACE_DERIVE=$(ip -o -4 addr show \
+        | awk -v p="${VIP_SUBNET}." '$4 ~ "^"p {print $2; exit}')
+      DERIVED_VIP=""
+      for last in $(seq 250 -1 200); do
+        cand="${VIP_SUBNET}.${last}"
+        [ "$cand" = "$ADVERTISE_IP" ] && continue
+        if arping -D -q -c 2 -w 3 -I "$VIP_IFACE_DERIVE" "$cand" >/dev/null 2>&1; then
+          DERIVED_VIP="$cand"
+          echo "derived control-plane VIP $DERIVED_VIP on $VIP_IFACE_DERIVE (arping DAD found it free)"
+          break
+        fi
+      done
+      test -n "$DERIVED_VIP" \
+        || { echo "no free address in ${VIP_SUBNET}.200-250 — abort rather than guess"; exit 1; }
+      echo "$DERIVED_VIP:6443" > /etc/kubernetes/cp-endpoint
+      bash /etc/kubernetes/publish-stage.sh vip-derived-$DERIVED_VIP
+      chmod 0644 /etc/kubernetes/cp-endpoint
+      /etc/kubernetes/write-kube-vip-manifest.sh "$DERIVED_VIP" "$VIP_IFACE_DERIVE"
+{{- end }}
       # v0.12.5: restore PKI from /etc/kubernetes/pki-chart/ to where
       # kubeadm expects it. Survives kubeadm reset because pki-chart/
       # is untouched by reset.
       bash /usr/local/bin/restore-chart-pki.sh
+      # v0.13.10: the control-plane endpoint is known only now, after the
+      # arping derivation above wrote /etc/kubernetes/cp-endpoint. Without
+      # this substitution kubeadm init runs with no controlPlaneEndpoint and
+      # the cluster can never accept a --control-plane join.
+      CP_ENDPOINT_SUB=""
+      if [ -s /etc/kubernetes/cp-endpoint ]; then
+        CP_ENDPOINT_SUB=$(cat /etc/kubernetes/cp-endpoint)
+      fi
       sed -e "s|__ADVERTISE_IP__|$ADVERTISE_IP|g" \
           -e "s|__CERT_KEY__|$(cat /etc/kubernetes/cert-key)|g" \
+          -e "s|__CONTROL_PLANE_ENDPOINT__|${CP_ENDPOINT_SUB}|g" \
         /etc/kubernetes/kubeadm-init.yaml.template \
         > /etc/kubernetes/kubeadm-init.yaml
+      # Fail loudly rather than init a cluster that can never become HA: an
+      # unsubstituted placeholder, or an endpoint line left empty, both mean
+      # the derivation did not produce a VIP.
+      if grep -q "__CONTROL_PLANE_ENDPOINT__" /etc/kubernetes/kubeadm-init.yaml \
+         || grep -qE "^\s*controlPlaneEndpoint:\s*(\"\")?\s*$" /etc/kubernetes/kubeadm-init.yaml; then
+        echo "controlPlaneEndpoint unresolved: HA cluster requires a VIP at init time, derivation produced none — abort"
+        exit 1
+      fi
+      grep -E "controlPlaneEndpoint|advertiseAddress" /etc/kubernetes/kubeadm-init.yaml
       chmod 0600 /etc/kubernetes/kubeadm-init.yaml
       # Skip cert generation phases — chart-baked PKI is already on disk.
       # Kubeadm will detect existing CAs and only generate leaf certs.
+      bash /etc/kubernetes/publish-stage.sh kubeadm-init-start
       kubeadm init --upload-certs \
+        {{- if (.Values.cni).kubeProxyReplacement }}
+        {{- /* Never install kube-proxy rather than install-then-delete:
+               Cilium replaces it, and a kube-proxy that briefly owns the
+               iptables rules then disappears leaves stale chains behind. */}}
+        --skip-phases=addon/kube-proxy \
+        {{- end }}
         --config /etc/kubernetes/kubeadm-init.yaml
+      bash /etc/kubernetes/publish-stage.sh kubeadm-init-ok
       mkdir -p /root/.kube
       cp /etc/kubernetes/admin.conf /root/.kube/config
-      # v0.12.4: retry CNI apply — apiserver may take a few seconds to
+      # CNI install. Two paths, selected by .Values.cni.install.
+      #
+      # v0.12.4: retry either way — the apiserver may take a few seconds to
       # be ready right after `kubeadm init` completes. Without retry, a
-      # single apply at the wrong moment leaves the cluster CNI-less,
+      # single attempt at the wrong moment leaves the cluster CNI-less,
       # and all nodes (CP + workers) stay NotReady forever.
+      export KUBECONFIG=/etc/kubernetes/admin.conf
+      {{- if eq (.Values.cni.install | default "flannel") "cilium" }}
+      # CILIUM — installed with HELM, not a manifest, because that is
+      # Cilium's canonical install path. The single-file quick-install.yaml
+      # is deprecated upstream and hard-codes choices we must vary (most
+      # importantly ipam.mode), so applying it would mean shipping a CNI
+      # configured for someone else's cluster.
+      #
+      # Debian trixie has no helm package, so fetch a pinned release
+      # tarball. Pinned rather than `get-helm-3` because that script
+      # installs whatever is newest at blade-boot time, which makes the
+      # cluster a function of the day it was built.
+      HELM_VER={{ .Values.cni.helmVersion | default "v3.16.4" | quote }}
+      curl -fsSL "https://get.helm.sh/helm-${HELM_VER}-linux-amd64.tar.gz" -o /tmp/helm.tgz
+      tar -xzf /tmp/helm.tgz -C /tmp
+      install -m 0755 /tmp/linux-amd64/helm /usr/local/bin/helm
+      helm repo add cilium https://helm.cilium.io/
+      helm repo update
       for i in $(seq 1 12); do
-        if KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f {{ .Values.cni.manifestUrl }}; then
+        # ipam.mode=kubernetes makes Cilium allocate from the podCIDR
+        # kubeadm already assigned to each Node, instead of its own
+        # cluster-pool default (10.0.0.0/8). Without it the CNI and the
+        # cluster disagree about pod addressing and routing silently
+        # breaks across nodes.
+        #
+        # v0.13.18: k8sServiceHost/Port are resolved at RUNTIME.
+        #
+        # They used to come from the controlPlaneVip helper, which is EMPTY on
+        # every HA render for the same reason the VIP bake was: the address is
+        # derived by arping after this node boots, so the chart cannot know it.
+        # The flags were therefore omitted entirely, and that was survivable
+        # only while kube-proxy existed to implement the in-cluster `kubernetes`
+        # Service.
+        #
+        # With kubeProxyReplacement=true and the kube-proxy addon skipped,
+        # NOTHING implements that Service until Cilium itself is up — so
+        # cilium-agent cannot reach the apiserver, its init container
+        # crash-loops, and `helm --wait` sits for its full ten minutes before
+        # failing. Measured: `Init:CrashLoopBackOff`, 7 restarts, two helm
+        # attempts burning "context deadline exceeded" back to back.
+        #
+        # /etc/kubernetes/cp-endpoint was written by the arping derivation
+        # above and holds the VIP; ADVERTISE_IP is this node's own address and
+        # is the single-CP fallback. Both are known by this point.
+        CILIUM_K8S_HOST=""; CILIUM_K8S_PORT="6443"
+        if [ -s /etc/kubernetes/cp-endpoint ]; then
+          CILIUM_K8S_HOST=$(cut -d: -f1 < /etc/kubernetes/cp-endpoint)
+          CILIUM_K8S_PORT=$(cut -d: -f2 < /etc/kubernetes/cp-endpoint)
+        fi
+        [ -n "$CILIUM_K8S_HOST" ] || CILIUM_K8S_HOST="$ADVERTISE_IP"
+        {{- if (.Values.cni).kubeProxyReplacement }}
+        # Fail loudly rather than spend two hours in `helm --wait`: without an
+        # apiserver address Cilium cannot start, and with kube-proxy skipped
+        # there is no fallback path for it to find one.
+        [ -n "$CILIUM_K8S_HOST" ] || {
+          echo "kubeProxyReplacement=true but no apiserver address for cilium-agent:" >&2
+          echo "  /etc/kubernetes/cp-endpoint: $(cat /etc/kubernetes/cp-endpoint 2>/dev/null || echo '<absent>')" >&2
+          echo "  ADVERTISE_IP: ${ADVERTISE_IP:-<empty>}" >&2
+          echo "  kube-proxy is skipped, so nothing implements the kubernetes Service — abort" >&2
+          exit 1
+        }
+        {{- end }}
+        echo "cilium: k8sServiceHost=$CILIUM_K8S_HOST k8sServicePort=$CILIUM_K8S_PORT"
+        if helm upgrade --install cilium cilium/cilium \
+             --version {{ .Values.cni.version | default "1.20.4" }} \
+             --namespace kube-system \
+             --set ipam.mode=kubernetes \
+             {{- if (.Values.cni).kubeProxyReplacement }}
+             --set kubeProxyReplacement=true \
+             {{- end }}
+             --set k8sServiceHost="$CILIUM_K8S_HOST" \
+             --set k8sServicePort="$CILIUM_K8S_PORT" \
+             --wait --timeout 10m; then
+          echo "CNI (cilium) installed on attempt $i"
+          bash /etc/kubernetes/publish-stage.sh cilium-installed
+          break
+        fi
+        echo "CNI install attempt $i failed; sleeping 10s"
+        sleep 10
+      done
+      {{- else }}
+      for i in $(seq 1 12); do
+        if kubectl apply -f {{ .Values.cni.manifestUrl }}; then
           echo "CNI applied on attempt $i"
           break
         fi
         echo "CNI apply attempt $i failed; sleeping 10s"
         sleep 10
       done
+      {{- end }}
   - path: /etc/kubernetes/publish-workload-kubeconfig.sh
     permissions: "0755"
     content: |
@@ -954,7 +1582,7 @@ write_files:
       # blade06.
       #
       # Authenticates as the chart's `<clusterName>-cp-publisher` SA — the
-      # same SA used by publish-join.sh for the Node CR patch. Its Role
+      # same SA used by publish-join.sh for the BaremetalNode CR patch. Its Role
       # grants `secrets: create, get` in {{ default .Release.Namespace .Values.managementCluster.serviceAccountNamespace }}
       # (see templates/rbac.yaml).
       set -uo pipefail
@@ -1016,6 +1644,10 @@ write_files:
 {{- include "kubernetes-cluster.kubeadmPkiWriteFiles" . | nindent 2 }}
 {{- include "kubernetes-cluster.kubeadmInitWriteFiles" . | nindent 2 }}
 {{- include "kubernetes-cluster.publishDeployedHashWriteFiles" . | nindent 2 }}
+{{- include "kubernetes-cluster.resolveNodeExtraWriteFiles" . | nindent 2 }}
+{{- if (default (dict) .Values.conformance).install }}
+{{- include "kubernetes-cluster.conformanceWriteFiles" . | nindent 2 }}
+{{- end }}
 runcmd:
   # v0.12.7: publish FIRST so the bridge-mirrored observed hash matches
   # current within ~15s of boot — well before bh-chart's 60s reconcile
@@ -1027,10 +1659,16 @@ runcmd:
   - /etc/kubernetes/publish-join.sh
   - systemctl daemon-reload
   - systemctl enable --now kubeadm-token-refresh.timer
+{{- if (default (dict) .Values.conformance).install }}
+  # LAST on purpose. The conformance runner is a convenience for re-certifying;
+  # a cluster that came up correctly must not be reported as failed because a
+  # GitHub release download did not work.
+  - /etc/kubernetes/install-conformance.sh
+{{- end }}
 {{- end -}}
 
 {{/* Cloud-init userData for a WORKER node. Installs kubeadm and runs the
-     join command that was captured live from the CP Node CR. */}}
+     join command that was captured live from the CP BaremetalNode CR. */}}
 {{- define "kubernetes-cluster.workerUserData" -}}
 {{- $jc := include "kubernetes-cluster.joinCommand" . -}}
 #cloud-config
@@ -1059,13 +1697,31 @@ write_files:
       # sqv rejects the k8s repo Release.key as Signature Packet v3 not considered
       # secure since 2026-02-01. Packages still come from pkgs.k8s.io over HTTPS.
       echo "deb [trusted=yes] https://pkgs.k8s.io/core:/stable:/{{ regexReplaceAll "^(v[0-9]+\\.[0-9]+).*" .Values.k8sVersion "${1}" }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
+      # v0.13.17: containerd 2.x, from Docker's repo, for CONFORMANCE.
+      #
+      # Debian trixie offers containerd 1.7.24 and NOTHING ELSE
+      # (apt-cache policy: Candidate: 1.7.24~ds1-6+deb13u1). The CNCF suite's
+      #   [sig-node] ImageVolume ... (common/node/image_volume.go:119)
+      # mounts an OCI image as a volume, which requires runtime support that
+      # landed in the containerd 2.x line. On 1.7.24 the test pod never reaches
+      # Running and the spec times out after five minutes. It is not a
+      # configuration problem and no feature gate fixes it: the capability is
+      # absent from the runtime, so this is a property of the BASE IMAGE rather
+      # than of the chart's logic.
+      #
+      # download.docker.com is what the Kubernetes documentation prescribes and
+      # what certified installers use, and `containerd.io` tracks the 2.x line
+      # while staying apt-managed. Same `trusted=yes` rationale as the k8s repo
+      # above: trixie's sqv rejects v3 signature packets, the transport is still
+      # HTTPS, and this only skips the signature check.
+      echo "deb [trusted=yes] https://download.docker.com/linux/debian trixie stable" > /etc/apt/sources.list.d/docker.list
       apt-get update
       # Resolve the full Debian package version including upstream revision
       # suffix (older minors -1.1, v1.36+ -2.1, etc.) via apt-cache instead
       # of hard-coding `-1.1`.
       K8S_PKG_VER=$(apt-cache madison kubelet | awk -v v="{{ trimPrefix "v" .Values.k8sVersion }}" '$3 ~ "^"v"-" {print $3; exit}')
       test -n "$K8S_PKG_VER"
-      apt-get install -y kubelet="$K8S_PKG_VER" kubeadm="$K8S_PKG_VER" containerd jq
+      apt-get install -y kubelet="$K8S_PKG_VER" kubeadm="$K8S_PKG_VER" containerd.io jq
       apt-mark hold kubelet kubeadm
       # Debian 13 trixie's containerd ships with bin_dir = "/usr/lib/cni" by
       # default. Flannel's install-cni-plugin initContainer (and kubeadm)
@@ -1087,6 +1743,26 @@ write_files:
         | sed -e 's|/usr/lib/cni|/opt/cni/bin|g' \
               -e 's|SystemdCgroup = false|SystemdCgroup = true|g' \
         > /etc/containerd/config.toml
+      # v0.13.17: ASSERT the substitution landed, do not assume it.
+      #
+      # Both seds are string matches against whatever `containerd config
+      # default` emits, and that output changed shape in containerd 2.x:
+      # config `version = 3` with renamed plugin paths. If the SystemdCgroup
+      # match silently misses, containerd runs cgroupfs while kubelet defaults
+      # to systemd, and the mismatch kills containers roughly every 11 seconds
+      # — observed as etcd and apiserver flapping 14-28 times in a fresh
+      # bringup. That failure is expensive to diagnose and trivial to detect
+      # here, so detect it here.
+      grep -q 'SystemdCgroup = true' /etc/containerd/config.toml || {
+        echo "containerd config: SystemdCgroup=true NOT set after patching." >&2
+        echo "  `containerd config default` output shape probably changed" >&2
+        echo "  (containerd 2.x uses config version 3). kubelet defaults to" >&2
+        echo "  cgroupDriver: systemd, so proceeding would flap every ~11s." >&2
+        echo "  containerd version: $(containerd --version 2>&1)" >&2
+        grep -n 'SystemdCgroup' /etc/containerd/config.toml >&2 || echo "  no SystemdCgroup key at all" >&2
+        exit 1
+      }
+      echo "containerd config: SystemdCgroup=true confirmed ($(containerd --version 2>&1 | awk '{print $3}'))"
       # systemctl enable --now doesn't restart a unit that's already
       # running; Debian's containerd apt-package enables+starts on
       # install, so without an explicit restart the new config.toml is
@@ -1117,7 +1793,20 @@ write_files:
       # the discovery token against the apiserver's TLS cert hash).
       exec >> /var/log/join.log 2>&1
       set -x
-      VIP={{ include "kubernetes-cluster.controlPlaneEndpoint" . | quote }}
+      # v0.13.9: resolve the endpoint at RUNTIME from Ironic. The rendered
+      # value is kept ONLY as the single-CP fallback, where no VIP is derived
+      # and none is ever published. For HA it is empty at render time by
+      # construction -- replicas render concurrently with a bootstrap that has
+      # not booted -- and baking it is what produced `https:///healthz`.
+      VIP_RENDERED={{ include "kubernetes-cluster.controlPlaneEndpoint" . | quote }}
+      VIP=$(bash /etc/kubernetes/resolve-node-extra.sh cp_endpoint) || VIP=""
+      if [ -z "$VIP" ]; then
+        VIP="$VIP_RENDERED"
+        echo "[$(date -Iseconds)] Ironic published no extra.cp_endpoint; falling back to rendered endpoint '"'"'$VIP'"'"'"
+      fi
+      # Name what is missing. A gate that aborts without saying what it waited
+      # for is how the previous failure stayed invisible for thirty minutes.
+      test -n "$VIP" || { echo "no control-plane endpoint: the bootstrap published no extra.cp_endpoint to Ironic AND the chart rendered none - cannot join"; exit 1; }
       TOKEN={{ include "kubernetes-cluster.bootstrapToken" . | quote }}
       # Wait for apiserver via VIP, ~10 min budget.
       for i in $(seq 1 120); do
@@ -1134,10 +1823,28 @@ write_files:
       # Use --discovery-token-unsafe-skip-ca-verification — the bootstrap
       # token's signature validates cluster identity, so MITM on the
       # CA cert delivery is detected at token verification time.
+      # v0.13.20: pin the worker's node-ip too. `kubeadm join` has no
+      # --node-ip flag in its CLI form, so it goes to the kubelet via
+      # /etc/default/kubelet, which kubeadm's systemd drop-in sources. Derived
+      # from the VIP's /24 so workers report the same network as the control
+      # plane; without it kubelet picks the first NIC (the OOB network) and the
+      # cluster reports addresses on two different networks.
+      NODE_IP_PREFIX=$(echo "$VIP" | awk -F: '{print $1}' | awk -F. '{print $1"."$2"."$3"."}')
+      NODE_IP=$(ip -o -4 addr show \
+        | awk -v p="$NODE_IP_PREFIX" '$4 ~ "^"p {sub("/.*","",$4); print $4; exit}')
+      if [ -n "$NODE_IP" ]; then
+        echo "KUBELET_EXTRA_ARGS=--node-ip=$NODE_IP" > /etc/default/kubelet
+        echo "worker node-ip pinned to $NODE_IP (from VIP prefix $NODE_IP_PREFIX)"
+      else
+        # Not fatal: the join still works, the node just reports whichever
+        # address kubelet picks. Say so rather than failing a working join.
+        echo "WARNING: no address in $NODE_IP_PREFIX0/24; leaving node-ip to kubelet autodetect" >&2
+      fi
       kubeadm join "$VIP" \
         --token "$TOKEN" \
         --discovery-token-unsafe-skip-ca-verification
 {{- include "kubernetes-cluster.publishDeployedHashWriteFiles" . | nindent 2 }}
+{{- include "kubernetes-cluster.resolveNodeExtraWriteFiles" . | nindent 2 }}
 runcmd:
   # v0.12.7: publish FIRST (see bootstrap CP rationale).
   - bash /etc/kubernetes/publish-deployed-hash.sh
@@ -1148,7 +1855,7 @@ runcmd:
 {{/* Cloud-init userData for a REPLICA CP node (HA). Installs kubeadm
      and runs `kubeadm join ... --control-plane --certificate-key`. The
      join command and cert_key were both published by the bootstrap CP
-     onto its own Node CR's spec.extra. Replica CPs render only when
+     onto its own BaremetalNode CR's spec.extra. Replica CPs render only when
      both lookups resolve (see lifecycle-cp-replicas.yaml gate). */}}
 {{- define "kubernetes-cluster.cpReplicaUserData" -}}
 {{- /* v0.11.4: $jc + $ck are no longer baked at template time —
@@ -1182,13 +1889,31 @@ write_files:
       # since 2026-02-01". The packages themselves still come from
       # pkgs.k8s.io over HTTPS; this only disables the signature check.
       echo "deb [trusted=yes] https://pkgs.k8s.io/core:/stable:/{{ regexReplaceAll "^(v[0-9]+\\.[0-9]+).*" .Values.k8sVersion "${1}" }}/deb/ /" > /etc/apt/sources.list.d/kubernetes.list
+      # v0.13.17: containerd 2.x, from Docker's repo, for CONFORMANCE.
+      #
+      # Debian trixie offers containerd 1.7.24 and NOTHING ELSE
+      # (apt-cache policy: Candidate: 1.7.24~ds1-6+deb13u1). The CNCF suite's
+      #   [sig-node] ImageVolume ... (common/node/image_volume.go:119)
+      # mounts an OCI image as a volume, which requires runtime support that
+      # landed in the containerd 2.x line. On 1.7.24 the test pod never reaches
+      # Running and the spec times out after five minutes. It is not a
+      # configuration problem and no feature gate fixes it: the capability is
+      # absent from the runtime, so this is a property of the BASE IMAGE rather
+      # than of the chart's logic.
+      #
+      # download.docker.com is what the Kubernetes documentation prescribes and
+      # what certified installers use, and `containerd.io` tracks the 2.x line
+      # while staying apt-managed. Same `trusted=yes` rationale as the k8s repo
+      # above: trixie's sqv rejects v3 signature packets, the transport is still
+      # HTTPS, and this only skips the signature check.
+      echo "deb [trusted=yes] https://download.docker.com/linux/debian trixie stable" > /etc/apt/sources.list.d/docker.list
       apt-get update
       # Resolve the full Debian package version including the upstream
       # revision suffix (older minors ship -1.1, v1.36+ ships -2.1, etc.)
       # by querying apt-cache rather than hard-coding `-1.1`.
       K8S_PKG_VER=$(apt-cache madison kubelet | awk -v v="{{ trimPrefix "v" .Values.k8sVersion }}" '$3 ~ "^"v"-" {print $3; exit}')
       test -n "$K8S_PKG_VER"
-      apt-get install -y kubelet="$K8S_PKG_VER" kubeadm="$K8S_PKG_VER" kubectl="$K8S_PKG_VER" containerd etcd-client jq
+      apt-get install -y kubelet="$K8S_PKG_VER" kubeadm="$K8S_PKG_VER" kubectl="$K8S_PKG_VER" containerd.io etcd-client jq
       apt-mark hold kubelet kubeadm kubectl
       # Debian 13 trixie's containerd ships with bin_dir = "/usr/lib/cni" by
       # default. Flannel's install-cni-plugin initContainer (and kubeadm)
@@ -1210,6 +1935,26 @@ write_files:
         | sed -e 's|/usr/lib/cni|/opt/cni/bin|g' \
               -e 's|SystemdCgroup = false|SystemdCgroup = true|g' \
         > /etc/containerd/config.toml
+      # v0.13.17: ASSERT the substitution landed, do not assume it.
+      #
+      # Both seds are string matches against whatever `containerd config
+      # default` emits, and that output changed shape in containerd 2.x:
+      # config `version = 3` with renamed plugin paths. If the SystemdCgroup
+      # match silently misses, containerd runs cgroupfs while kubelet defaults
+      # to systemd, and the mismatch kills containers roughly every 11 seconds
+      # — observed as etcd and apiserver flapping 14-28 times in a fresh
+      # bringup. That failure is expensive to diagnose and trivial to detect
+      # here, so detect it here.
+      grep -q 'SystemdCgroup = true' /etc/containerd/config.toml || {
+        echo "containerd config: SystemdCgroup=true NOT set after patching." >&2
+        echo "  `containerd config default` output shape probably changed" >&2
+        echo "  (containerd 2.x uses config version 3). kubelet defaults to" >&2
+        echo "  cgroupDriver: systemd, so proceeding would flap every ~11s." >&2
+        echo "  containerd version: $(containerd --version 2>&1)" >&2
+        grep -n 'SystemdCgroup' /etc/containerd/config.toml >&2 || echo "  no SystemdCgroup key at all" >&2
+        exit 1
+      }
+      echo "containerd config: SystemdCgroup=true confirmed ($(containerd --version 2>&1 | awk '{print $3}'))"
       # systemctl enable --now doesn't restart a unit that's already
       # running; Debian's containerd apt-package enables+starts on
       # install, so without an explicit restart the new config.toml is
@@ -1326,7 +2071,20 @@ write_files:
       # hash is computed at runtime from the chart-distributed
       # /etc/kubernetes/pki/ca.crt (same CA on every CP via the
       # kubeadmPkiWriteFiles helper).
-      VIP={{ include "kubernetes-cluster.controlPlaneEndpoint" . | quote }}
+      # v0.13.9: resolve the endpoint at RUNTIME from Ironic. The rendered
+      # value is kept ONLY as the single-CP fallback, where no VIP is derived
+      # and none is ever published. For HA it is empty at render time by
+      # construction -- replicas render concurrently with a bootstrap that has
+      # not booted -- and baking it is what produced `https:///healthz`.
+      VIP_RENDERED={{ include "kubernetes-cluster.controlPlaneEndpoint" . | quote }}
+      VIP=$(bash /etc/kubernetes/resolve-node-extra.sh cp_endpoint) || VIP=""
+      if [ -z "$VIP" ]; then
+        VIP="$VIP_RENDERED"
+        echo "[$(date -Iseconds)] Ironic published no extra.cp_endpoint; falling back to rendered endpoint '"'"'$VIP'"'"'"
+      fi
+      # Name what is missing. A gate that aborts without saying what it waited
+      # for is how the previous failure stayed invisible for thirty minutes.
+      test -n "$VIP" || { echo "no control-plane endpoint: the bootstrap published no extra.cp_endpoint to Ironic AND the chart rendered none - cannot join"; exit 1; }
       TOKEN={{ include "kubernetes-cluster.bootstrapToken" . | quote }}
       CERT_KEY={{ include "kubernetes-cluster.kubeadmCertKey" . | quote }}
       # v0.12.8: derive ADVERTISE_IP from the VIP's /24 — same trick the
@@ -1372,7 +2130,41 @@ write_files:
       # so etcdctl works on the FIRST attempt (previously used apiserver-
       # etcd-client.crt, which kubeadm only writes mid-join; the first
       # attempt's silent etcdctl failures left ghosts uncleanable).
-      BOOTSTRAP_ETCD={{ printf "https://%s:2379" (index ((include "kubernetes-cluster.cpNodes" . | fromYamlArray)) 0).oobIp | quote }}
+      # v0.13.2: resolve the bootstrap CP's etcd endpoint AT RUNTIME, from the
+      # address the bootstrap derived for itself and published to its own
+      # BaremetalNode CR's spec.extra.etcd_ip.
+      #
+      # This replaced .controlPlane.nodes[0].oobIp, a hand-typed IP. It must be
+      # a runtime read and NOT a chart `lookup`: replica BHs render
+      # CONCURRENTLY with the bootstrap (v0.11.4, so etcd can reach quorum), so
+      # at render time the bootstrap has not booted and spec.extra is empty. A
+      # render-time lookup would therefore bake an empty endpoint and the
+      # member-add would fail with a URL of "https://:2379" — which looks like
+      # an etcd problem and is not.
+      #
+      # Same credentials publish-join.sh uses for the reverse direction, and
+      # the same management API the VIP health-check path already depends on.
+      # v0.13.14: read etcd_ip from IRONIC, not from the management cluster.
+      #
+      # This polled $MGMT_API (http://198.51.100.5:8443) with a bearer token and
+      # jq. It returned empty 120 times and aborted with "bootstrap never
+      # published spec.extra.etcd_ip" -- while the value was sitting in both
+      # Ironic AND the CR the whole time (etcd_ip=192.168.0.201). The channel
+      # was dead, not the data: that address and port belonged to the wg proxy
+      # pod removed for "zero proxies", and it is plain HTTP against an
+      # apiserver port besides.
+      #
+      # The blade publishes to Ironic over its own OOB network and never needs
+      # a management-API path for the join -- ironic-extra-bridge's own header
+      # comment says exactly this. cp_endpoint already resolves that way and
+      # worked on the first try ("resolved cp_endpoint=192.168.0.250:6443 on
+      # poll 53"); etcd_ip was simply left on the old channel. One source of
+      # truth now, the one the publisher writes to.
+      ETCD_IP=$(bash /etc/kubernetes/resolve-node-extra.sh etcd_ip) || ETCD_IP=""
+      test -n "$ETCD_IP" \
+        || { echo "bootstrap never published extra.etcd_ip to Ironic — abort"; exit 1; }
+      BOOTSTRAP_ETCD="https://${ETCD_IP}:2379"
+      echo "[$(date -Iseconds)] bootstrap etcd resolved to $BOOTSTRAP_ETCD"
       ETCDCTL_AUTH="--cacert=/etc/kubernetes/pki-chart/etcd-ca.crt \
         --cert=/etc/kubernetes/pki-chart/etcd-client.crt \
         --key=/etc/kubernetes/pki-chart/etcd-client.key"
@@ -1445,9 +2237,21 @@ write_files:
         sed -e "s|__ADVERTISE_IP__|$ADVERTISE_IP|g" \
             -e "s|__CA_HASH__|$CA_HASH|g" \
             -e "s|__CERT_KEY__|$CERT_KEY|g" \
+            -e "s|__CP_ENDPOINT__|$VIP|g" \
           /etc/kubernetes/kubeadm-join.yaml.template \
           > /etc/kubernetes/kubeadm-join.yaml
         chmod 0600 /etc/kubernetes/kubeadm-join.yaml
+        # Refuse before burning five kubeadm attempts on a config that cannot
+        # work. kubeadm's own message is clear, but it arrives once per attempt
+        # and says nothing about WHERE the endpoint was supposed to come from.
+        if grep -q "__CP_ENDPOINT__" /etc/kubernetes/kubeadm-join.yaml \
+           || grep -qE "^\s*apiServerEndpoint:\s*(\"\")?\s*$" /etc/kubernetes/kubeadm-join.yaml; then
+          echo "[$(date -Iseconds)] apiServerEndpoint unresolved in kubeadm-join.yaml" >&2
+          echo "  VIP as resolved by join.sh: '${VIP:-<empty>}'" >&2
+          echo "  resolver log: $(tail -1 /var/log/resolve-node-extra.log 2>/dev/null)" >&2
+          exit 1
+        fi
+        grep -E "apiServerEndpoint|advertiseAddress" /etc/kubernetes/kubeadm-join.yaml
         if kubeadm join --config /etc/kubernetes/kubeadm-join.yaml; then
           JOIN_OK=yes
           break
@@ -1461,6 +2265,7 @@ write_files:
 {{- include "kubernetes-cluster.kubeadmPkiWriteFiles" . | nindent 2 }}
 {{- include "kubernetes-cluster.kubeadmJoinWriteFiles" . | nindent 2 }}
 {{- include "kubernetes-cluster.publishDeployedHashWriteFiles" . | nindent 2 }}
+{{- include "kubernetes-cluster.resolveNodeExtraWriteFiles" . | nindent 2 }}
 runcmd:
   # v0.12.7: publish FIRST (see bootstrap CP rationale).
   - bash /etc/kubernetes/publish-deployed-hash.sh
@@ -1468,7 +2273,7 @@ runcmd:
   - /etc/kubernetes/join.sh
 {{- end -}}
 
-{{/* The Bearer token used by the CP to PATCH its own Node CR. Read live
+{{/* The Bearer token used by the CP to PATCH its own BaremetalNode CR. Read live
      via lookup from the SA-bound Secret that templates/rbac.yaml
      created. Empty on the very first reconcile (Secret doesn't exist
      yet) — the chart's cp lifecycle template guards against rendering
@@ -1485,3 +2290,4 @@ runcmd:
 {{- end -}}
 {{- end -}}
 {{- end -}}
+

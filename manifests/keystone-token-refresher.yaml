@@ -1,0 +1,152 @@
+# Keystone token refresher.
+#
+# WHY THIS IS NOT External Secrets Operator
+# -----------------------------------------
+# ESO was the right instinct and I tried to use it. It cannot do this job:
+# Keystone returns the token in the `X-Subject-Token` RESPONSE HEADER, and ESO's
+# webhook provider extracts only from the JSON response BODY via `result.jsonPath`
+# (https://external-secrets.io/latest/provider/webhook/ — there is no
+# header-extraction field in the API spec). Keystone's body carries the catalog
+# and roles, never the token id.
+#
+# The documented workaround is to put something in front of Keystone that copies
+# the header into the body — i.e. a proxy, which is exactly what we just removed.
+# So ESO here would mean reintroducing a proxy to satisfy a tool choice, which is
+# the tail wagging the dog.
+#
+# WHY THIS IS NOT A PROXY
+# -----------------------
+# Nothing here sits in a request path. It is a scheduled job that mints a
+# credential and writes it to a Secret; the data path stays
+# rdc -> Service ironic -> node wg0 -> lab Ironic, with no process in between.
+#
+# WHY IT HAS TO EXIST AT ALL
+# --------------------------
+# Keystone Fernet tokens last ~1h and this repo shipped no rotation, which is
+# fine for a demo and fatal for provisioning six blades: the token expires
+# mid-deploy and every reconcile starts returning 401 with no indication that
+# the cause is a clock rather than a config. That is how this lab lost several
+# hours today.
+#
+# Scope is system-scoped (`system: {all: true}`) deliberately — project-scoped
+# admin returns 403 on baremetal:port:create for nodes whose owner is not yet
+# set, which breaks the enrol step.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: keystone-token-refresher
+  namespace: openstack
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: keystone-token-refresher
+  namespace: openstack
+rules:
+  # Narrow on purpose: this can rewrite exactly one Secret and read the
+  # credentials it needs. A leaked token from this SA cannot read other secrets.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "patch"]
+    resourceNames: ["ironic-keystone-token", "keystone-admin-creds"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: keystone-token-refresher
+  namespace: openstack
+subjects:
+  - kind: ServiceAccount
+    name: keystone-token-refresher
+    namespace: openstack
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: keystone-token-refresher
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keystone-token-refresher
+  namespace: openstack
+data:
+  refresh.sh: |
+    #!/bin/sh
+    set -eu
+    apk add --no-cache curl jq >/dev/null
+
+    AUTH_URL=$(cat /creds/authUrl)
+    USERNAME=$(cat /creds/username)
+    PASSWORD=$(cat /creds/password)
+    DOMAIN=$(cat /creds/userDomain)
+
+    # System-scoped: see the header comment for why project scope breaks enrol.
+    BODY=$(jq -n --arg u "$USERNAME" --arg p "$PASSWORD" --arg d "$DOMAIN" \
+      '{auth:{identity:{methods:["password"],
+         password:{user:{name:$u,password:$p,domain:{name:$d}}}},
+        scope:{system:{all:true}}}}')
+
+    # -D captures headers: the token is in X-Subject-Token, not the body. This is
+    # the exact reason ESO cannot stand in for this script.
+    code=$(curl -s -o /tmp/body.json -D /tmp/head.txt -w '%{http_code}' \
+      -X POST -H 'Content-Type: application/json' \
+      --max-time 20 --data "$BODY" "${AUTH_URL}/v3/auth/tokens")
+    if [ "$code" != "201" ] && [ "$code" != "200" ]; then
+      echo "keystone auth failed: HTTP $code"; sed -e 's/[A-Za-z0-9_-]\{30,\}/<redacted>/g' /tmp/body.json; exit 1
+    fi
+
+    TOKEN=$(awk 'BEGIN{IGNORECASE=1} /^X-Subject-Token:/ {print $2}' /tmp/head.txt | tr -d '\r\n')
+    test -n "$TOKEN" || { echo "no X-Subject-Token in response"; exit 1; }
+    EXPIRES=$(jq -r '.token.expires_at // "unknown"' /tmp/body.json)
+    echo "minted token, expires_at=$EXPIRES, length=${#TOKEN}"
+
+    # Patch the Secret the <Kind>Configuration CRs reference via tokenRef.
+    KAPI=https://kubernetes.default.svc
+    SA=/var/run/secrets/kubernetes.io/serviceaccount
+    B64=$(printf '%s' "$TOKEN" | base64 | tr -d '\n')
+    out=$(curl -s -o /tmp/patch.json -w '%{http_code}' \
+      --cacert "$SA/ca.crt" -H "Authorization: Bearer $(cat $SA/token)" \
+      -H 'Content-Type: application/strategic-merge-patch+json' \
+      -X PATCH "$KAPI/api/v1/namespaces/openstack/secrets/ironic-keystone-token" \
+      --data "{\"data\":{\"token\":\"$B64\"}}")
+    test "$out" = "200" || { echo "secret patch failed: HTTP $out"; cat /tmp/patch.json; exit 1; }
+    echo "ironic-keystone-token updated"
+---
+# Every 20 minutes against a ~60 minute lifetime: two refreshes may fail
+# (Keystone restart, tunnel blip) before anything downstream sees a 401.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: keystone-token-refresher
+  namespace: openstack
+spec:
+  schedule: "*/20 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 3
+      template:
+        spec:
+          serviceAccountName: keystone-token-refresher
+          restartPolicy: OnFailure
+          containers:
+            - name: refresh
+              image: alpine:3.21
+              command: ["/bin/sh", "/scripts/refresh.sh"]
+              volumeMounts:
+                - name: scripts
+                  mountPath: /scripts
+                - name: creds
+                  mountPath: /creds
+                  readOnly: true
+          volumes:
+            - name: scripts
+              configMap:
+                name: keystone-token-refresher
+                defaultMode: 0755
+            - name: creds
+              secret:
+                secretName: keystone-admin-creds

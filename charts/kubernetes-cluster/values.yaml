@@ -5,12 +5,47 @@
 clusterName: lab
 
 # kubeadm-installed k8s version. Drives the kubelet/kubeadm/kubectl
-# package version on every node via cloud-init.
-k8sVersion: v1.31.4
+# package version on every node via cloud-init. The cloud-init resolves
+# this to a concrete apt revision with `apt-cache madison`, so it must be
+# a version pkgs.k8s.io actually publishes.
+k8sVersion: v1.36.6
 
-# CNI is wired by the CP post-init. Default flannel for simplicity.
+# CNI, wired by the CP post-init.
+#
+# `install: cilium` takes the HELM path (see _helpers.tpl); anything else
+# is applied from `manifestUrl` with kubectl. Cilium is the default here
+# because flannel provides no NetworkPolicy — it routes pods and nothing
+# else, so a cluster built on it cannot express "these pods may not talk
+# to those", which is table stakes rather than a feature.
+#
+# Pinned to a stable release deliberately. Cilium's newest tag at the time
+# of writing is a 1.21.0-pre; pre-releases do not belong under real
+# hardware that takes a wipe-and-redeploy cycle to recover.
 cni:
-  install: flannel
+  install: cilium
+  version: "1.20.4"
+  # v0.13.16: replace kube-proxy with Cilium's BPF implementation.
+  #
+  # Required for CONFORMANCE. The CNCF suite's
+  #   [sig-network] HostPort — no conflict between pods with same hostPort,
+  #                            different hostIP and protocol [Conformance]
+  # fails otherwise, because nothing implements hostPort: Cilium only does so
+  # under kube-proxy replacement, and it is not chained with the `portmap` CNI
+  # plugin either. Measured on a live cluster with kube-proxy 6/6 Ready and
+  # `kube-proxy-replacement: false` — a running kube-proxy does NOT cover it.
+  #
+  # Also unblocks Service type=LoadBalancer: Cilium LB-IPAM and L2
+  # announcements both require this to be true.
+  #
+  # When true the kube-proxy addon is skipped at `kubeadm init`, so it is never
+  # installed rather than installed and deleted. k8sServiceHost/Port must be
+  # set for cilium-agent to reach the apiserver without a Service — they
+  # already are, from the derived VIP.
+  kubeProxyReplacement: true
+  # Helm is fetched onto the CP blade at this version (Debian trixie has
+  # no helm package). Only used by the cilium path.
+  helmVersion: v3.16.4
+  # Only used by the non-cilium (kubectl apply) path.
   manifestUrl: https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml
 
 # OS image deployed onto every blade. Must be cloud-init-enabled and
@@ -27,6 +62,28 @@ configurationRef:
   name: ironic-endpoint
   namespace: openstack
 
+# VESTIGIAL. Both keys below are read by NOTHING — verified 2026-11-04 by
+# checking every top-level values key against the whole templates/ tree:
+# `ironicApiUrl` and `ironicApiVersion` were the only two with zero mentions.
+# The endpoint that is actually used is `ironicAuth.ironicUrl`
+# (_helpers.tpl:714); the microversion is declared in the OAS documents and
+# defaulted onto every generated CR by the apiserver.
+#
+# `ironicApiVersion: "1.81"` is the dangerous one, and it is dangerous
+# precisely BECAUSE it is inert. It is set here, in four manifests and on the
+# live cluster CR, and it reads exactly like the knob that controls Ironic's
+# microversion. It is below 1.83, which is the floor for the findby's
+# `include_children=true`. So anyone who "fixes" the apparent disconnect by
+# wiring this value through would silently reintroduce
+#
+#   406 "Request not acceptable. The minimal required API version should be 1.83"
+#
+# on every NodeProvision Observe — the exact failure removed on 2026-11-04,
+# which had gone unnoticed for five days because no transition needed to run.
+#
+# Not deleted yet only because removing them from values.schema.json
+# regenerates the CRD and would prune the field from a live, CNCF-conformant
+# cluster's CR. Delete both at the next parent chart bump, manifests included.
 ironicApiUrl: http://ironic.openstack.svc.cluster.local:6385
 ironicApiVersion: "1.81"
 
@@ -35,7 +92,7 @@ ironicApiVersion: "1.81"
 # rendezvous path for labs where the blade can reach Ironic but NOT the
 # management cluster's apiserver (which the chart's mgmtCluster.apiUrl
 # was designed for). See scripts/ironic-node-extra-bridge.py for the
-# cluster-side propagation back into k8s Node CR spec.extra.
+# cluster-side propagation back into k8s BaremetalNode CR spec.extra.
 ironicAuth:
   authUrl:    ""           # e.g. http://172.19.74.1:5000
   ironicUrl:  ""           # e.g. http://172.19.74.1:6385
@@ -57,7 +114,7 @@ managementCluster:
   # root-ca-cert-publisher disabled.
   caBundle: ""
   # Service account name + namespace used by the CP to patch its own
-  # Node CR. The chart creates the SA + Role + RoleBinding + token
+  # BaremetalNode CR. The chart creates the SA + Role + RoleBinding + token
   # Secret (see templates/rbac.yaml) and reads the token at render time.
   serviceAccountName: ""
   serviceAccountNamespace: ""
@@ -169,3 +226,34 @@ workers:
   drainTimeout: 5m
   nodes:
   removed:
+
+# Dump the full HTTP exchange with Ironic for every node and transition CR this
+# cluster renders (forwarded to krateo.io/connector-verbose on each BaremetalHost).
+# Off by default: oasgen < 0.26.1 printed credential headers under this flag, and
+# the request dump is the first thing anyone enables when debugging a 401.
+debug:
+  connectorVerbose: false
+
+# CNCF conformance runner on the bootstrap control plane.
+#
+# The 443/443 v1.36.6 result in conformance/v1.36/ was produced with hydrophone
+# installed BY HAND on blade01, and a re-image takes it away silently. Nobody
+# notices until they want to re-certify, which is the worst moment to be
+# rediscovering install steps. So the chart can bake it in.
+#
+# `install` only puts the binary on the bootstrap node (and writes a
+# HOW-TO-RUN.txt next to the output directory). It does NOT run the suite:
+# that takes roughly two hours and pulls a large image, so starting it stays a
+# deliberate act. Set `runOnBoot: true` only if you genuinely want every
+# bring-up to spend two hours certifying itself.
+#
+# Run it by hand, on the node, so the cluster-admin kubeconfig never leaves the
+# machine that owns it:
+#
+#   sudo env KUBECONFIG=/etc/kubernetes/admin.conf \
+#     hydrophone --conformance --output-dir /var/lib/conformance
+conformance:
+  install: false
+  version: v0.8.0
+  runOnBoot: false
+  outputDir: /var/lib/conformance

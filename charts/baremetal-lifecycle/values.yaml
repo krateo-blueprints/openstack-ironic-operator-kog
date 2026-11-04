@@ -48,6 +48,13 @@ configDrive:
 # Ironic API endpoint used by the provisioner Job (standalone/noauth).
 ironicApiUrl: "http://ironic.openstack.svc.cluster.local:6385"
 ironicAuthType: "none"
+# VESTIGIAL — read by no template in this chart (verified 2026-11-04). The
+# comment above says "used by the provisioner Job"; it is not, by any spelling
+# (api.version / OS_BAREMETAL_API / microversion all return nothing). The
+# microversion now comes from the OAS documents, which declare it required
+# with a default the apiserver stamps onto every generated CR. Delete at the
+# next bump of this chart. See charts/kubernetes-cluster/values.yaml for why
+# an inert microversion knob is worse than no knob.
 ironicApiVersion: "1.99"
 
 # Per-transition wait timeout (seconds) passed to `openstack baremetal node ... --wait`.

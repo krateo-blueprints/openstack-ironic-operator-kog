@@ -1,0 +1,3 @@
+# Bumped between create/delete cycles so an UPGRADE is distinguishable from a
+# reinstall by its rendered content as well as by its revision number.
+marker: "cycle-unset"

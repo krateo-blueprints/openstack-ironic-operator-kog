@@ -43,6 +43,23 @@ jobs:
           done
 
       - name: helm registry login (GHCR)
+        # The only pipeline in any workflow here, and it deliberately does NOT
+        # set pipefail. Audited 2026-11-04 alongside a `set -e` without pipefail
+        # in scripts/create-ironic-oas-configmap.sh, which DID mask a failing
+        # left side and was fixed.
+        #
+        # This one is correct by construction rather than by luck: the only
+        # command whose failure matters is the last, and a pipeline's status is
+        # already the right side's, so `-e` (the Actions default shell) fails
+        # the step when login fails. An empty token does not slip through
+        # either — `echo ""` succeeds, helm gets empty input on --password-stdin
+        # and login fails. The left side is `echo`, which can only fail on
+        # EPIPE, which requires helm to have exited first, which is already
+        # nonzero.
+        #
+        # Left unchanged on purpose: adding pipefail here would guard nothing,
+        # and an unexplained line in this repo invites the next reader to work
+        # out what it protects and find that it protects nothing.
         run: |
           echo "${{ secrets.GITHUB_TOKEN }}" \
             | helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin

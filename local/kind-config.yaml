@@ -1,0 +1,44 @@
+# kind cluster config for the local/lab clusters.
+#
+# Sole purpose today: raise kubeadm's bounded waits. On Apple Silicon the node runs as
+# amd64 under Docker Desktop's emulation (see KIND_PLATFORM in the Makefile, forced
+# because the airshipit OpenStack images publish no linux/arm64 variant). The emulated
+# control plane starts several times slower than native, and kubeadm's default
+# wait-control-plane deadline expires before the apiserver is serving:
+#
+#   error execution phase wait-control-plane: cannot obtain client without bootstrap:
+#   could not bootstrap the admin user in file admin.conf: unable to create
+#   ClusterRoleBinding: client rate limiter Wait returned an error:
+#   rate: Wait(n=1) would exceed context deadline
+#
+# NOTE the object: `timeouts` lives on InitConfiguration, NOT ClusterConfiguration.
+# Verified against kubernetes/kubernetes cmd/kubeadm/app/apis/kubeadm/v1beta4/types.go --
+# Timeouts is declared at line 78, inside InitConfiguration (lines 30-83);
+# ClusterConfiguration only begins at line 84. Putting it on ClusterConfiguration is
+# rejected with `strict decoding error: unknown field "timeouts"`, which kubeadm emits as
+# a WARNING and then continues with the patch silently discarded -- so the cluster fails
+# with the original timeout and it looks like the timeout fix did not help, rather than
+# like it was never applied.
+#
+# Raising a ceiling is harmless on a native node -- it is a timeout, not a delay -- so
+# this applies to every cluster rather than being conditional on the platform.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+kubeadmConfigPatches:
+  - |
+    apiVersion: kubeadm.k8s.io/v1beta4
+    kind: InitConfiguration
+    timeouts:
+      # All seven fields of kubeadm's Timeouts struct, set generously rather than
+      # guessing which one governs which phase. Raising only
+      # controlPlaneComponentHealthCheck was not enough: the failure is
+      # "unable to create ClusterRoleBinding ... context deadline exceeded", which is a
+      # Kubernetes API call and therefore governed by kubernetesAPICall. Setting all of
+      # them removes the question.
+      controlPlaneComponentHealthCheck: 10m
+      kubeletHealthCheck: 10m
+      kubernetesAPICall: 10m
+      etcdAPICall: 10m
+      tlsBootstrap: 10m
+      discovery: 10m
+      upgradeManifests: 10m

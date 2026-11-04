@@ -1,35 +1,50 @@
-# Singleton NodeConfiguration for the Ironic endpoint.
+# Singleton BaremetalNodeConfiguration for the Ironic endpoint.
 #
 # Why this lives OUTSIDE the per-node baremetal-lifecycle chart:
 # rest-dynamic-controller resolves spec.configurationRef on every reconcile, including the
-# delete path - if the NodeConfiguration is gone when the Node delete event fires, RDC logs
+# delete path - if the BaremetalNodeConfiguration is gone when the Node delete event fires, RDC logs
 # "Configuration not found, real external resource will not be deleted" and orphans the node
-# in Ironic. When NodeConfiguration was bundled in the chart, helm uninstalled BOTH at once
-# and the Node CR's finalizer drained before RDC could read the NodeConfiguration.
+# in Ironic. When BaremetalNodeConfiguration was bundled in the chart, helm uninstalled BOTH at once
+# and the BaremetalNode CR's finalizer drained before RDC could read the BaremetalNodeConfiguration.
 # Making this a namespace-singleton, applied by `make restdef-up`, removes the race entirely.
 #
 # Apply: kubectl apply -f manifests/nodeconfiguration-ironic.yaml
 ---
 apiVersion: baremetal.ogen.krateo.io/v1alpha1
-kind: NodeConfiguration
+kind: BaremetalNodeConfiguration
 metadata:
   name: ironic-endpoint
   namespace: openstack
 spec:
-  # Only verbs declared by restdefinition-node.yaml are accepted here. We have findby/get/
-  # create/delete on the Node RestDefinition (no `update` - Ironic PATCH is JSON-Patch only
-  # and KOG doesn't speak JSON-Patch, so the chart never updates a Node in place).
+  # Keystone auth, replacing the keystone-ironic-proxy. The token is sent verbatim as
+  # X-Auth-Token: valuePrefix is deliberately unset (it defaults to empty) because a
+  # Keystone token is NOT a Bearer token -- a stray "Bearer " prefix 401s.
+  #
+  # The Secret holds the raw token and nothing else. Writing and ROTATING it belongs to a
+  # secret-manager (External Secrets / Vault Agent); this repo ships no refresher by
+  # design. An expired token surfaces only as silent 401s with the CR stuck Ready=False,
+  # so treat the secret-manager as a hard prerequisite in any long-lived environment.
+  authentication:
+    apiKey:
+      header: X-Auth-Token
+      tokenRef:
+        name: ironic-keystone-token
+        namespace: openstack
+        key: token
   configuration:
+    # X-Ironic-Endpoint is gone: it existed only so the proxy knew where to forward.
+    # The endpoint now comes from servers[].url in the OAS, which resolves to the
+    # in-cluster `ironic` Service -> WireGuard tunnel -> the real Ironic.
+    #
+    # Microversion raised 1.99 -> 1.109: at 1.99 Ironic's RBAC returned 403 on
+    # baremetal:port:create for nodes whose owner was not yet set; 1.109 matches the
+    # caller's project against node.owner and the write ops succeed.
     header:
       create:
-        X-Ironic-Endpoint: "http://ironic.openstack.svc.cluster.local:6385"
-        X-OpenStack-Ironic-API-Version: "1.99"
+        X-OpenStack-Ironic-API-Version: "1.109"
       get:
-        X-Ironic-Endpoint: "http://ironic.openstack.svc.cluster.local:6385"
-        X-OpenStack-Ironic-API-Version: "1.99"
+        X-OpenStack-Ironic-API-Version: "1.109"
       delete:
-        X-Ironic-Endpoint: "http://ironic.openstack.svc.cluster.local:6385"
-        X-OpenStack-Ironic-API-Version: "1.99"
+        X-OpenStack-Ironic-API-Version: "1.109"
       findby:
-        X-Ironic-Endpoint: "http://ironic.openstack.svc.cluster.local:6385"
-        X-OpenStack-Ironic-API-Version: "1.99"
+        X-OpenStack-Ironic-API-Version: "1.109"

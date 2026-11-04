@@ -86,9 +86,18 @@ deploy-ironic:
 kubeconfig:   # (re)write the isolated kubeconfig for the kind cluster
 	kind export kubeconfig --name $(KIND_CLUSTER) --kubeconfig $(KUBECONFIG_FILE)
 
+KIND_CONFIG   ?= local/kind-config.yaml
+# kind's own readiness bound, separate from the kubeadm timeouts in KIND_CONFIG and not
+# reachable from them. On an emulated amd64 node (KIND_PLATFORM, forced because the
+# airshipit images publish no linux/arm64) the control plane needs well over the 60s
+# default, and the failure reads as a cluster that would not come up rather than as a
+# deadline that was too short.
+KIND_WAIT     ?= 300s
+
 kind-up:      # create the local kind cluster (idempotent; isolated kubeconfig)
 	@kind get clusters 2>/dev/null | grep -qx $(KIND_CLUSTER) || \
-		kind create cluster --name $(KIND_CLUSTER) --kubeconfig $(KUBECONFIG_FILE) --wait 60s
+		kind create cluster --name $(KIND_CLUSTER) --kubeconfig $(KUBECONFIG_FILE) \
+			--config $(KIND_CONFIG) --wait $(KIND_WAIT)
 	@kind export kubeconfig --name $(KIND_CLUSTER) --kubeconfig $(KUBECONFIG_FILE) >/dev/null
 	@echo "kubeconfig=$(KUBECONFIG_FILE) context=$(KCTX)"
 
@@ -112,15 +121,28 @@ smoke-test:   # drive a fake node enroll->active against the local Ironic (CLEAN
 	kill $$pf 2>/dev/null; exit $$rc
 
 KRATEO_CORE_VERSION ?= 1.0.0
-KRATEO_OASGEN_VERSION ?= 0.11.1
+# The https://charts.krateo.io index stops at oasgen 0.11.1; the real releases
+# live in the OCI registry, which is where the 0.47.0 install actually came
+# from. Pinning the stale index version here meant `make krateo-up` would have
+# silently reinstalled a years-old provider over a working one.
+KRATEO_OASGEN_VERSION ?= 0.50.0
+KRATEO_RDC_VERSION    ?= 0.50.0
+KRATEO_OCI            ?= oci://ghcr.io/krateo-platformops/charts
 
 krateo-up:    # install Krateo KOG (oasgen-provider) + composition engine (core-provider)
 	helm repo add krateo https://charts.krateo.io 2>/dev/null || true
 	helm repo update krateo
 	$(HELMK) upgrade --install krateo-core-provider krateo/core-provider \
 		-n krateo-system --create-namespace --version $(KRATEO_CORE_VERSION) --wait --timeout 6m
-	$(HELMK) upgrade --install krateo-oasgen-provider krateo/oasgen-provider \
-		-n krateo-system --version $(KRATEO_OASGEN_VERSION) --wait --timeout 6m
+	$(HELMK) upgrade --install krateo-oasgen-provider-crds $(KRATEO_OCI)/oasgen-provider-crds \
+		-n krateo-system --create-namespace --version $(KRATEO_OASGEN_VERSION) --wait --timeout 5m
+	$(HELMK) upgrade --install krateo-oasgen-provider $(KRATEO_OCI)/oasgen-provider \
+		-n krateo-system --version $(KRATEO_OASGEN_VERSION) \
+		--set rdc.image.registry=ghcr.io/krateo-platformops \
+		--set rdc.image.repository=rest-dynamic-controller \
+		--set rdc.image.tag=$(KRATEO_RDC_VERSION) \
+		--set rdc.image.pullPolicy=IfNotPresent \
+		--wait --timeout 8m
 	$(KUBECTL) -n krateo-system get pods
 
 restdef-up:   # apply OAS ConfigMaps + RestDefinitions (Node + Port + NodeProvision + NodePower) + endpoint singletons
@@ -176,6 +198,28 @@ chart-host:   # package all four charts (baremetal-lifecycle + baremetal-discove
 		$$($(KUBECTL) -n $(IRONIC_NS) get pod -l app=chartrepo -o jsonpath='{.items[0].metadata.name}'):/usr/share/nginx/html/baremetal-host-$(HOST_CHART_VERSION).tgz
 	$(KUBECTL) -n $(IRONIC_NS) cp dist/kubernetes-cluster-$(CLUSTER_CHART_VERSION).tgz \
 		$$($(KUBECTL) -n $(IRONIC_NS) get pod -l app=chartrepo -o jsonpath='{.items[0].metadata.name}'):/usr/share/nginx/html/kubernetes-cluster-$(CLUSTER_CHART_VERSION).tgz
+
+check-examples:   # every manifest a reader is told to apply would actually apply
+	# Catches the two defect classes that `helm lint` and kubeconform cannot see
+	# and only the API server rejects: a kind no RestDefinition makes real, and a
+	# composition apiVersion from a pruned chart version. Both found in this repo
+	# on 2026-11-04. Historical test fixtures are deliberately out of scope.
+	#
+	# The self-test runs FIRST and the && is load-bearing: it proves the check can
+	# still fail, against real files built to be broken, so a pass below means
+	# something. Without it a screen that silently stopped detecting would report
+	# OK forever -- which is the failure mode the check itself exists to catch,
+	# one level up.
+	python3 scripts/check-example-manifests.py --self-test && \
+		python3 scripts/check-example-manifests.py
+
+chart-host-pinned:   # restore the chart versions the LIVE CompositionDefinitions pin
+	# `chart-host` publishes whatever is in Chart.yaml today. The chartrepo pod has
+	# no volumes, so a cluster restart wipes everything it serves and leaves the
+	# pinned older versions missing -- which surfaces as a chart-inspector 500 and
+	# every composition going Synced=False. This rebuilds the pinned versions from
+	# git and uploads them. Run it after `chart-host` on every resume.
+	./scripts/chart-host-pinned.sh
 
 composition-up: chart-host   # install all four CompositionDefinitions
 	$(KUBECTL) apply -f manifests/compositiondefinition-baremetal-lifecycle.yaml

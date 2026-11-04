@@ -1,23 +1,46 @@
 # Power control — renders when spec.online is explicitly set.
-# CONTINUOUS ENFORCEMENT: name encodes both the target AND the currently observed power
-# state, so whenever they diverge we rename the CR (helm sees a fresh resource, KOG fires a
-# new PUT). Once they match, the CR's name is stable and KOG's 202/Pending guard prevents
-# re-fire. This handles the case where Ironic's deploy step auto-powers the node on after
-# active and our "online: false" intent would otherwise be ignored.
+#
+# ONE CR, STABLE NAME, expressing desired state. Enforcement is continuous because
+# NodePower is declarative (see manifests/restdefinition-power.yaml): its findby lifts the
+# node's observed power state onto `target`, so RDC compares desired against actual every
+# reconcile and calls update whenever they diverge. Nothing here needs to detect that.
+#
+# This used to encode the OBSERVED state in the CR's name (`-power-on-from-off`) so that a
+# divergence renamed the resource and made Helm present it to KOG as new, re-firing the PUT.
+# That worked, but it bought enforcement by reading live state with a `lookup` at RENDER
+# time -- exactly the chart-render-time observation this project forbids, because a template
+# re-rendered for any unrelated reason then sees different state and produces a different
+# resource name. It also meant every power change deleted and recreated a CR to express
+# something a field update already says.
+#
+# The name now carries intent only, and not even the target: flipping spec.online changes
+# spec.target in place, which is drift, which is the update RDC already performs.
 {{- if and .Values.nodeName (hasKey .Values "online") (kindIs "bool" .Values.online) (not (include "baremetal-host.detached" .)) }}
-{{- $targetWord := ternary "on" "off" .Values.online }}
-{{- $observed := include "baremetal-host.powerState" . | replace "power " "" | replace " " "" }}
-{{- if eq $observed "" }}{{ $observed = "unknown" }}{{ end }}
 apiVersion: {{ include "baremetal-host.nodeApiVersion" . }}
 kind: NodePower
 metadata:
-  name: {{ printf "%s-power-%s-from-%s" .Release.Name $targetWord $observed | trunc 63 | trimSuffix "-" }}
+  name: {{ printf "%s-power" .Release.Name | trunc 63 | trimSuffix "-" }}
   namespace: {{ include "baremetal-host.nodeNamespace" . }}
+  {{- if (.Values.debug).connectorVerbose }}
+  annotations:
+    # See values.yaml debug.connectorVerbose. Makes RDC dump the full HTTP exchange
+    # with Ironic for this transition, including the faultstring it otherwise drops.
+    krateo.io/connector-verbose: "true"
+  {{- end }}
   labels:
     app.kubernetes.io/name: baremetal-host
     app.kubernetes.io/instance: {{ .Release.Name }}
     baremetal.ogen.krateo.io/transition: power
 spec:
+  # Required since the apiKey security scheme was added to the OAS: oasgen marks
+  # configurationRef required on every generated kind that declares one, so without this
+  # the CR is refused with "spec.configurationRef: Required value" and the failure shows
+  # up as a Helm render error on the composition rather than as an auth problem.
+  # Singleton lives in manifests/transitionconfiguration-ironic.yaml, outside this chart
+  # so RDC can still resolve it during the delete drain.
+  configurationRef:
+    name: {{ include "baremetal-host.configName" . }}
+    namespace: {{ include "baremetal-host.nodeNamespace" . }}
   node_id: {{ .Values.nodeName | quote }}
   target: {{ ternary "power on" "power off" .Values.online | quote }}
 {{- end }}

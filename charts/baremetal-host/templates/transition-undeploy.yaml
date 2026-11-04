@@ -20,7 +20,7 @@
 #      -> KOG DELETE /v1/nodes/{id} now succeeds (node is at `available`)
 #
 # Cleanup mode is governed by spec.undeployMode (full | none), via spec.automated_clean
-# on the Node CR (see templates/node.yaml).
+# on the BaremetalNode CR (see templates/node.yaml).
 #
 # Gate widened in v0.3.4 to make `spec.undeploy=true` a true "get me out,
 # whatever you're stuck on" signal. Empirical verification on the lab Ironic
@@ -39,20 +39,47 @@
        been wait-callback past threshold — recovers blades whose IPA
        never called back (PXE/network/chassis-manager issue). */ -}}
 {{- $autoRedeploy := include "baremetal-host.shouldAutoRedeploy" . -}}
-{{- $stuckCallback := include "baremetal-host.shouldRecoverStuckCallback" . -}}
+{{/* v0.6.1: $stuckCallback is NO LONGER consulted. It judged "stuck" from the
+     BaremetalNode CR's metadata.creationTimestamp -- the age of the RECORD, not
+     of the current attempt -- so fifteen minutes after a node was first enrolled
+     the predicate was PERMANENTLY TRUE. Every deploy transits `wait call-back`,
+     so every deploy rendered a NEW -undeploy CR, and because NodeProvision has
+     only `findby` and `create` (no update verb), a new CR name is precisely what
+     makes rdc fire. So each cycle fired a real undeploy:
+
+       available -> deploy -> wait call-back -> undeploy -> available -> ...
+
+     A node completed only by racing `wait call-back` -> `active` between two 60s
+     reconciles; blade05 lost that race nineteen times. Load widens the window,
+     which is why it reads as starvation and is not.
+
+     Recovering a genuinely hung deploy is still worth having, but it needs to
+     anchor on how long the node has been IN the state -- Ironic's
+     `provision_updated_at` -- which the BaremetalNode CRD's status does not
+     carry. Until the RestDefinition exposes it, no predicate is better than one
+     that fires on every healthy deploy. */}}
 {{- if .Values.nodeName }}
 {{- if not (include "baremetal-host.detached" .) }}
-{{- if and (or .Values.undeploy $autoRedeploy $stuckCallback) (has $state $undeployStates) }}
+{{- if and (or .Values.undeploy $autoRedeploy) (has $state $undeployStates) }}
 apiVersion: {{ include "baremetal-host.nodeApiVersion" . }}
 kind: NodeProvision
 metadata:
   name: {{ printf "%s-undeploy" .Release.Name | trunc 63 | trimSuffix "-" }}
   namespace: {{ include "baremetal-host.nodeNamespace" . }}
+  {{- if (.Values.debug).connectorVerbose }}
+  annotations:
+    # See values.yaml debug.connectorVerbose. Makes RDC dump the full HTTP exchange
+    # with Ironic for this transition, including the faultstring it otherwise drops.
+    krateo.io/connector-verbose: "true"
+  {{- end }}
   labels:
     app.kubernetes.io/name: baremetal-host
     app.kubernetes.io/instance: {{ .Release.Name }}
     baremetal.ogen.krateo.io/transition: undeploy
 spec:
+  configurationRef:
+    name: {{ include "baremetal-host.configName" . }}
+    namespace: {{ include "baremetal-host.nodeNamespace" . }}
   node_id: {{ .Values.nodeName | quote }}
   target: deleted
 {{- end }}

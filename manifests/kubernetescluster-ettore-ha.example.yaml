@@ -26,7 +26,7 @@
 # the same blade — failure → BH auto-redeploy via v0.4.0 baremetal-host
 # (Task #89) → fresh OS → fresh kubeadm join attempt.
 ---
-apiVersion: composition.krateo.io/v0-12-11
+apiVersion: composition.krateo.io/v0-13-24
 kind: KubernetesCluster
 metadata:
   name: ettore-ha

@@ -1,4 +1,66 @@
-{{- define "baremetal-host.nodeApiVersion" -}}baremetal.ogen.krateo.io/v1alpha1{{- end -}}
+{{/* DO NOT "FIX" spec.node_id IN THE transition-*.yaml TEMPLATES. Measured 2026-11-04.
+
+     All seven transition templates set `spec.node_id`, and the generated
+     NodeProvision / NodePower CRDs HAVE NO SUCH PROPERTY. Their served spec is
+     `{clean_steps, configdrive, configurationRef, target}` and
+     `{configurationRef, target, timeout}` respectively. A CR that sets it is rejected
+     under fieldValidation=Strict ("strict decoding error: unknown field
+     spec.node_id") and silently PRUNED otherwise — which is the path helm takes, so
+     nothing has ever reported it.
+
+     The cause is upstream and confirmed by the oasgen-provider maintainers: the
+     `requestFieldMapping` that redirects the path parameter (`node_id <- spec.node_id`)
+     also SUPPRESSES the spec property, because the suppression is meant to stop an
+     author being asked for a field the controller does not read from them — and it
+     deletes the property the mapping reads. BaremetalNode escapes it only because its
+     mapping is `uuid <- spec.name`, where the two names differ, so both survive.
+
+     AND YET the state machine works: six blades walked available -> active through
+     these exact kinds. So the node identity is arriving from somewhere other than
+     `spec.node_id`, and nobody yet knows where — oasgen is tracing it. Until that lands,
+     these templates stay as written. Removing `node_id` would be removing a field that
+     is already being dropped, which changes nothing; "correcting" it to some other
+     source would be guessing at a mechanism we have not identified. Leave it.
+
+     I also briefly reported a `requestFieldMapping` / `altFieldMapping` rename hazard
+     here. There is none — `altFieldMapping` does not exist; it was a grep artifact of
+     mine. The manifests in manifests/ are safe to apply.
+
+     UPDATE 2026-11-04. KEEP `spec.node_id` IN THESE TEMPLATES. It is the field the
+     mapping reads, so these templates are forward-compatible and will start working
+     when the upstream generation bug is fixed. REMOVING IT IS THE ONE EDIT THAT WOULD
+     STOP THAT FIX FROM REACHING THIS REPO.
+
+     The full mechanism, traced by the oasgen-provider maintainers. A path parameter
+     has exactly four writers, precedence highest first: fieldMapping >
+     requestFieldMapping > Configuration CR > spec > status. Ours is a
+     requestFieldMapping reading `spec.node_id`. All four are empty here: the CRD has
+     no `node_id` property (the generation bug, upstream #419), status is never
+     populated for it (populateStatusFields reads only a response body; our findby
+     items carry no node_id and the PUT returns 202 with no body -- the generator
+     already warns `status field 'node_id' not found in response`), and
+     NodeProvisionConfiguration has no `path` property at all because the
+     RestDefinition declares no configurationFields. The mapping then finds nothing
+     and SILENTLY SKIPS: builder.go:215-217, `if err != nil || !found { continue }`.
+
+     WHAT THIS MEANS HISTORICALLY, and the earlier version of this comment had it
+     backwards. Under rdc 0.47.0 there was no guard, so the UNSUBSTITUTED template
+     went on the wire -- `PUT /v1/nodes/%7Bnode_id%7D/states/provision` -- which a
+     real API answers plausibly. That is worse than a failure, and it is precisely
+     what upstream #363 was filed for. 0.48.0 added detection plus the guard, so the
+     request is now REFUSED with `unresolved path parameter(s) [node_id]`; 0.50.0
+     (#388) fixed the population half for path-item-declared parameters. So the
+     0.47.0 -> 0.50.0 upgrade did NOT break a working system: it made a pre-existing
+     silent failure visible. Expect a refusal on the next deploy, undeploy,
+     power-cycle or clean, and read it as the guard doing its job.
+
+     #388 does not apply to these two kinds: oas/ironic-provision.yaml and
+     oas/ironic-power.yaml declare node_id at OPERATION level, not path-item level,
+     so it always reached ReqParams. #419 is the sole remaining blocker.
+
+     DO NOT guess a different source, and DO NOT pin rdc back to 0.47.0 -- that only
+     restores the silently malformed URL. */}}
+{{- define "baremetal-host.nodeApiVersion" -}}baremetal.ogen.krateo.io/v1-0-0{{- end -}}
 {{- define "baremetal-host.nodeNamespace" -}}
 {{- if .Values.nodeNamespace -}}{{- .Values.nodeNamespace -}}{{- else -}}{{- .Release.Namespace -}}{{- end -}}
 {{- end -}}
@@ -15,19 +77,13 @@
 
 {{/* Live provision_state of the Node via lookup. Empty when CR doesn't exist yet. */}}
 {{- define "baremetal-host.provisionState" -}}
-{{- $node := lookup (include "baremetal-host.nodeApiVersion" .) "Node" (include "baremetal-host.nodeNamespace" .) .Values.nodeName -}}
+{{- $node := lookup (include "baremetal-host.nodeApiVersion" .) "BaremetalNode" (include "baremetal-host.nodeNamespace" .) .Values.nodeName -}}
 {{- if $node -}}{{- dig "status" "provision_state" "" $node -}}{{- end -}}
-{{- end -}}
-
-{{/* Live power_state of the Node via lookup. */}}
-{{- define "baremetal-host.powerState" -}}
-{{- $node := lookup (include "baremetal-host.nodeApiVersion" .) "Node" (include "baremetal-host.nodeNamespace" .) .Values.nodeName -}}
-{{- if $node -}}{{- dig "status" "power_state" "" $node -}}{{- end -}}
 {{- end -}}
 
 {{/* inspection_finished_at via lookup — used to gate provide on completed inspect. */}}
 {{- define "baremetal-host.inspectionFinishedAt" -}}
-{{- $node := lookup (include "baremetal-host.nodeApiVersion" .) "Node" (include "baremetal-host.nodeNamespace" .) .Values.nodeName -}}
+{{- $node := lookup (include "baremetal-host.nodeApiVersion" .) "BaremetalNode" (include "baremetal-host.nodeNamespace" .) .Values.nodeName -}}
 {{- if $node -}}{{- dig "status" "inspection_finished_at" "" $node -}}{{- end -}}
 {{- end -}}
 
@@ -56,8 +112,45 @@
      canonical Ironic shape with snake_case keys: {meta_data, user_data, network_data} —
      this is the dict form documented for the provision PUT body (microversion >= 1.60).
      Used by transition-deploy.yaml. */}}
+{{/* v0.6.2: see the comment in configdrive. Called from node.yaml too, because
+     node.yaml renders unconditionally while configdrive is only reached through
+     the state-gated deploy template -- so a guard living only there cannot be
+     exercised by `helm template`, which is exactly how the broken user-data
+     shipped in the first place. */}}
+{{- define "baremetal-host.validateConfigDrive" -}}
+{{- $cd := .Values.configDrive | default dict -}}
+{{- if $cd.userData -}}
+{{- $parsed := fromYaml $cd.userData -}}
+{{- if hasKey $parsed "Error" -}}
+{{- fail (printf "configDrive.userData for node %s is not valid YAML, so cloud-init would silently discard ALL of it and boot an inert machine that still reports `active`. Parser said: %s" (.Values.nodeName | default "<unnamed>") (get $parsed "Error")) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "baremetal-host.configdrive" -}}
 {{- $cd := .Values.configDrive | default dict -}}
+{{/* v0.6.2: FAIL THE RENDER if userData is not parseable YAML.
+
+     cloud-init silently discards user-data it cannot parse. The network stage
+     still runs (network_data is a separate document), so the machine boots,
+     gets its NICs, answers SSH, and Ironic reports `active` -- while no
+     ssh_pwauth, no write_files and no runcmd were ever applied. Every layer
+     reports success and the machine does nothing.
+
+     Measured: kubernetes-cluster 0.13.9 added a multi-line `python3 -c`
+     snippet to resolve-cp-endpoint.sh whose continuation lines sat at column 3
+     and so dedented out of the enclosing `content: |` block scalar. That
+     invalidated the WHOLE cloud-config:
+
+       ParserError ... expected <block end>, but found '?'
+       in "<unicode string>", line 903, column 3:   try:
+
+     49,704 bytes of user-data, attached to the node, entirely inert. It cost
+     two full six-node rebuilds to find, because nothing anywhere reports it.
+
+     A render that fails is recoverable in seconds. A deploy that boots an
+     inert machine is not distinguishable from success at any layer. */}}
+{{- include "baremetal-host.validateConfigDrive" . -}}
 {{- if or $cd.metaData $cd.userData $cd.networkData -}}
 {{- $out := dict "meta_data" ($cd.metaData | default dict) "user_data" ($cd.userData | default "") "network_data" ($cd.networkData | default dict) -}}
 {{- toYaml $out -}}
@@ -66,7 +159,7 @@
 
 {{/* v0.4.0: configdrive-drift detection enables single-apply redeploys.
      Hash the effective configdrive at chart-template time, stamp the
-     hash as an annotation on the Node CR. On the next reconcile, the
+     hash as an annotation on the BaremetalNode CR. On the next reconcile, the
      chart compares the freshly-rendered hash against the live Node
      annotation (via lookup); if they differ on an `active` node, the
      chart auto-fires transition-undeploy (= NodeProvision target=
@@ -86,12 +179,12 @@
 {{- end -}}
 
 {{- define "baremetal-host.observedConfigDriveHash" -}}
-{{/* v0.4.2 (Task #91): observed hash sourced from Node CR spec.extra.
+{{/* v0.4.2 (Task #91): observed hash sourced from BaremetalNode CR spec.extra.
      deployed_configdrive_hash — set by the bridge sidecar mirroring
      Ironic.node.extra (populated by cloud-init publish-deployed-hash.sh
      at end of runcmd). Empty if blade hasn't successfully completed
      cloud-init + publish yet. */}}
-{{- $node := lookup (include "baremetal-host.nodeApiVersion" .) "Node" (include "baremetal-host.nodeNamespace" .) .Values.nodeName -}}
+{{- $node := lookup (include "baremetal-host.nodeApiVersion" .) "BaremetalNode" (include "baremetal-host.nodeNamespace" .) .Values.nodeName -}}
 {{- if $node -}}{{- dig "spec" "extra" "deployed_configdrive_hash" "" $node -}}{{- end -}}
 {{- end -}}
 
@@ -172,19 +265,56 @@
 {{- define "baremetal-host.shouldRecoverStuckCallback" -}}
 {{- $state := include "baremetal-host.provisionState" . -}}
 {{- if eq $state "wait call-back" -}}
-  {{/* v0.4.4: anchor age on the Node CR's metadata.creationTimestamp.
+  {{/* v0.4.4: anchor age on the BaremetalNode CR's metadata.creationTimestamp.
        v0.4.3 mistakenly looked up sh.helm.release.v1.<release>.v1 — the
        FIRST helm revision Secret — but Helm prunes old revisions, so
        after ~10 cdc reconciles that Secret is gone and the helper
-       silently never fires. The Node CR's creationTimestamp is stable
+       silently never fires. The BaremetalNode CR's creationTimestamp is stable
        across BH-chart helm revisions for the same node and resets
        cleanly on K8sCluster delete → reapply. */ -}}
-  {{- $node := lookup (include "baremetal-host.nodeApiVersion" .) "Node" (include "baremetal-host.nodeNamespace" .) .Values.nodeName -}}
+  {{- $node := lookup (include "baremetal-host.nodeApiVersion" .) "BaremetalNode" (include "baremetal-host.nodeNamespace" .) .Values.nodeName -}}
   {{- if $node -}}
     {{- $created := dig "metadata" "creationTimestamp" "" $node -}}
     {{- if $created -}}
       {{- $ageSec := sub (now | unixEpoch) (toDate "2006-01-02T15:04:05Z" $created | unixEpoch) -}}
-      {{- if gt $ageSec 900 -}}yes{{- end -}}
+      {{/* v0.5.7: suppress while a recent undeploy exists, exactly as
+           shouldAutoRedeploy does, and for a sharper reason.
+
+           THE ANCHOR BELOW IS WRONG and this guard is what makes it survivable.
+           `$created` is the BaremetalNode CR's creationTimestamp -- the age of
+           the RECORD, not of the current deploy attempt. v0.4.4 chose it
+           because it is "stable across BH-chart helm revisions", which is true
+           and is precisely the defect: once the CR is older than 900s, and it
+           always is within fifteen minutes of first enrolment, this condition
+           is PERMANENTLY TRUE. Every deploy transits `wait call-back`. So every
+           deploy was being judged stuck the instant it started and torn back
+           down:
+
+             available -> deploy -> wait call-back -> undeploy -> available -> ...
+
+           A node escaped only by racing `wait call-back` -> `active` between
+           two 60s cdc reconciles. Measured on a six-node rebuild: five won the
+           race, blade05 lost it nineteen times, and because load widens the
+           window the whole thing reads as resource starvation. It is not. It is
+           deterministic for any node whose record is a quarter of an hour old.
+
+           The real fix is to anchor on how long the node has been IN this
+           state -- Ironic's `provision_updated_at` -- which is not in the
+           BaremetalNode CRD's status today and so needs a RestDefinition
+           change. Until then this suppression bounds the damage to one
+           undeploy per ten minutes instead of one per reconcile, which is
+           enough to let a deploy finish. */}}
+      {{- $undeployName := printf "%s-undeploy" .Release.Name | trunc 63 | trimSuffix "-" -}}
+      {{- $recent := lookup (include "baremetal-host.nodeApiVersion" .) "NodeProvision" .Release.Namespace $undeployName -}}
+      {{- $suppressed := false -}}
+      {{- if $recent -}}
+        {{- $uc := dig "metadata" "creationTimestamp" "" $recent -}}
+        {{- if $uc -}}
+          {{- $uAge := sub (now | unixEpoch) (toDate "2006-01-02T15:04:05Z" $uc | unixEpoch) -}}
+          {{- if lt (int $uAge) 600 -}}{{- $suppressed = true -}}{{- end -}}
+        {{- end -}}
+      {{- end -}}
+      {{- if and (gt $ageSec 900) (not $suppressed) -}}yes{{- end -}}
     {{- end -}}
   {{- end -}}
 {{- end -}}

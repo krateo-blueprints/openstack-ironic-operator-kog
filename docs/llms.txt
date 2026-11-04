@@ -12,6 +12,7 @@ docs/log.md: curated history
 examples/baremetal-lifecycle/README.md: a BaremetalLifecycle CR that walks a node enroll -> active
 examples/baremetal-lifecycle/composition.yaml: the composition CR itself
 # Deep-dive references (design + runbook):
+docs/IMPLEMENTATION.md: Krateo Akmon — the complete implementation reference: two-blueprint architecture, the Ironic state machine, the Kubernetes layer and its two conformance-critical settings, operations, the failure modes that report success, and the open upstream issues
 docs/KUBERNETES-CLUSTER.md: the layered kubernetes-cluster composition (kubeadm over Ironic blades)
 docs/KUBERNETES-CLUSTER-PLAN.md: the kubernetes-cluster implementation roadmap
 docs/KUBERNETES-CLUSTER-V0.11.0-DESIGN.md: external-etcd HA design (systemd unit, static bootstrap)

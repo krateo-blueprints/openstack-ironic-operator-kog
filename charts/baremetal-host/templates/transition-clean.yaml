@@ -16,11 +16,20 @@ kind: NodeProvision
 metadata:
   name: {{ printf "%s-clean-%s" .Release.Name $hash | trunc 63 | trimSuffix "-" }}
   namespace: {{ include "baremetal-host.nodeNamespace" . }}
+  {{- if (.Values.debug).connectorVerbose }}
+  annotations:
+    # See values.yaml debug.connectorVerbose. Makes RDC dump the full HTTP exchange
+    # with Ironic for this transition, including the faultstring it otherwise drops.
+    krateo.io/connector-verbose: "true"
+  {{- end }}
   labels:
     app.kubernetes.io/name: baremetal-host
     app.kubernetes.io/instance: {{ .Release.Name }}
     baremetal.ogen.krateo.io/transition: clean
 spec:
+  configurationRef:
+    name: {{ include "baremetal-host.configName" . }}
+    namespace: {{ include "baremetal-host.nodeNamespace" . }}
   node_id: {{ .Values.nodeName | quote }}
   target: clean
   clean_steps: {{- toYaml .Values.cleanSteps | nindent 4 }}

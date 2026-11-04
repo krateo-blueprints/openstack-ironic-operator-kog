@@ -1,0 +1,11 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "marker": {
+      "type": "string",
+      "description": "Bumped between cycles so an UPGRADE is distinguishable from a reinstall by rendered content as well as by revision number."
+    }
+  },
+  "required": ["marker"]
+}
