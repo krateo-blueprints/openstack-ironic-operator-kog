@@ -4,6 +4,19 @@ metadata:
   name: {{ .Release.Name }}-probe
   namespace: {{ .Release.Namespace }}
 data:
+  # `marker` is what the arms assert: it proves an UPGRADE rendered new content
+  # rather than a reinstall producing the same content at revision 1.
   marker: {{ .Values.marker | quote }}
   release: {{ .Release.Name | quote }}
-  revision: {{ .Release.Revision | quote }}
+  # DO NOT add `.Release.Revision` here, or anything else that changes on every
+  # render. v0.1.1 had `revision: {{ "{{" }} .Release.Revision {{ "}}" }}` and it
+  # made the chart NON-CONVERGENT: each render differed from the live object, so
+  # Observe saw drift, the self-heal upgraded, the revision changed, and the next
+  # render differed again. Measured 2026-11-04: the release climbed to revision
+  # 154 and was still rising at ~2 per minute with every condition reporting
+  # healthy -- Synced=True, Ready=True, ChartRenderable=True, zero errors.
+  #
+  # Worth stating because of how it reads: a composition that never settles while
+  # reporting perfectly healthy is indistinguishable from a working one unless
+  # you check revision STABILITY over time. A conditions check alone passes.
+  # Use `helm history` for the revision; it does not belong in rendered output.
