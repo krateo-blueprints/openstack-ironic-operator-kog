@@ -654,11 +654,39 @@ No DELETE dispatched, no RestDefinition recreated, no CR touched.
 **Step 3 is not optional, and it is where this nearly went wrong.** A first run
 polled 96 seconds, saw neither the CRD nor `oasHash` move, and was one message
 away from reporting that `oasHash` detection is inert — with a passing control
-(the live ConfigMap did contain the new field), so the reading looked solid. The
-reconcile cadence for that RestDefinition is **roughly 2–3 minutes**: log
-activity at `22:22, 22:25, 22:26, 22:27, 22:28, 22:31, 22:34`. The 96-second
-window fell inside one gap. **Before trusting that a trigger did not fire, find
-out how often the thing could have fired at all.**
+(the live ConfigMap did contain the new field), so the reading looked solid.
+
+The cause is a **3-minute default poll interval**
+(`OASGEN_PROVIDER_POLL_INTERVAL`, `main.go:46`), which matched the observed
+gaps: `22:22, 22:25, 22:26, 22:27, 22:28, 22:31, 22:34`. The 96-second window
+fell inside one gap. **Before trusting that a trigger did not fire, find out how
+often the thing could have fired at all** — a correct control proves your edit
+landed; it cannot prove your observation window was longer than the mechanism's
+period.
+
+**And the wait is settable, which removes the caveat rather than warning about
+it:**
+
+```
+helm upgrade krateo-oasgen-provider ... --set env.OASGEN_PROVIDER_POLL_INTERVAL=20s
+```
+
+Verified on the isolated cluster rather than taken on trust — measured gaps
+after the override: `20, 22, 20, 21, 20, 21` seconds, median **21s**, against a
+120–180s baseline.
+
+**Why that channel works here and not everywhere:** the oasgen-provider
+container takes `envFrom` a ConfigMap built from `.Values.env`, and the
+deployment hardcodes only `args: ["--debug"]` — **no `--poll`** — so the env
+var governs. Where the chart *does* pass the flag, the flag wins and the env
+var is dead config. `OASGEN_PROVIDER_DEBUG` is exactly that: both this cluster
+and production carry `OASGEN_PROVIDER_DEBUG: "false"` while `--debug` is
+passed, and the process emits 190 DEBUG lines to 10 INFO. A value that reads as
+load-bearing and governs nothing.
+
+**On production the interval is unset**, i.e. the 3-minute default, on oasgen
+0.50.0. Deliberately left alone: a one-off nudge is not worth permanently
+tripling the fleet's reconcile rate.
 
 ### Baseline measured 2026-11-04 on 0.50.0 AND 0.51.0 — the defect is live on a tag
 
