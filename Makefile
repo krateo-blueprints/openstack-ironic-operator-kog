@@ -204,7 +204,14 @@ check-examples:   # every manifest a reader is told to apply would actually appl
 	# and only the API server rejects: a kind no RestDefinition makes real, and a
 	# composition apiVersion from a pruned chart version. Both found in this repo
 	# on 2026-11-04. Historical test fixtures are deliberately out of scope.
-	python3 scripts/check-example-manifests.py
+	#
+	# The self-test runs FIRST and the && is load-bearing: it proves the check can
+	# still fail, against real files built to be broken, so a pass below means
+	# something. Without it a screen that silently stopped detecting would report
+	# OK forever -- which is the failure mode the check itself exists to catch,
+	# one level up.
+	python3 scripts/check-example-manifests.py --self-test && \
+		python3 scripts/check-example-manifests.py
 
 chart-host-pinned:   # restore the chart versions the LIVE CompositionDefinitions pin
 	# `chart-host` publishes whatever is in Chart.yaml today. The chartrepo pod has
