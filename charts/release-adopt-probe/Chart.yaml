@@ -1,0 +1,17 @@
+apiVersion: v2
+name: release-adopt-probe
+description: |
+  Throwaway chart for measuring core-provider#303: when a composition CR is
+  recreated while its previous helm release still exists, does cdc UPGRADE that
+  release or INSTALL a second one beside it?
+
+  Deliberately inert. One ConfigMap, no hooks, no Jobs, no external calls, no
+  cluster-scoped objects. Nothing here can affect the Ironic fleet.
+
+  NOTE: values.schema.json must NOT set `additionalProperties: false`. Helm
+  injects `global`, chart-inspector performs a real dry-run install to derive
+  RBAC, and the rejection surfaces as an opaque HTTP 500 rather than a
+  validation message (core-provider#325).
+type: application
+version: 0.1.1
+appVersion: "1.0"

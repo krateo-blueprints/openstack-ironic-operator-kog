@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-probe
+  namespace: {{ .Release.Namespace }}
+data:
+  marker: {{ .Values.marker | quote }}
+  release: {{ .Release.Name | quote }}
+  revision: {{ .Release.Revision | quote }}
