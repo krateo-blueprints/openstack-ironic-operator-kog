@@ -148,11 +148,36 @@ def self_test():
             "metadata:\n  name: x\n")
         broken_yaml = write("broken.yaml", "apiVersion: [unclosed\n")
 
+        # OVER-EAGERNESS ARMS. Four of the original five cases tested rules I
+        # was thinking about while writing them; only "a correct manifest
+        # passes" guarded the other direction. Two peers independently made
+        # the same point today: the risk is not in the rule you just added, it
+        # is in what the addition sits in front of. A screen that starts
+        # rejecting valid manifests is as bad as one that stops rejecting
+        # invalid ones, and nobody writes that arm because the over-eagerness
+        # would have been obvious the day the rule was written -- not two
+        # months later when someone tightens it.
+        other_kind = write("other-kind.yaml",
+            "apiVersion: baremetal.ogen.krateo.io/v1alpha1\nkind: BaremetalNode\n"
+            "metadata:\n  name: x\n")
+        unmanaged = write("unmanaged.yaml",
+            "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n")
+        no_kind = write("no-kind.yaml", "apiVersion: v1\nmetadata:\n  name: x\n")
+        other_group = write("other-group.yaml",
+            "apiVersion: composition.krateo.io/v0-0-1\nkind: SomethingElse\n"
+            "metadata:\n  name: x\n")
+
         for label, files, want_hit in (
+            # the rules fire on what they should
             ("a stale apiVersion is caught", [bad_version], True),
             ("a nonexistent kind is caught", [bad_kind], True),
             ("unparseable YAML is caught", [broken_yaml], True),
             ("a correct manifest passes", [good], False),
+            # ...and do NOT fire on what they should leave alone
+            ("a non-Configuration kind is left alone", [other_kind], False),
+            ("an unmanaged kind (ConfigMap) is left alone", [unmanaged], False),
+            ("a document with no kind is skipped", [no_kind], False),
+            ("a composition Kind we do not own is left alone", [other_group], False),
         ):
             cases += 1
             problems, seen = check(files, charts, valid, td)

@@ -529,7 +529,17 @@ result is read against a prediction rather than rationalised after:
    404**, not the guard. The guard message would mean the fix is wrong rather
    than late; a 400 about an unexpected body field would mean serialisation
    does not follow the body schema after all.
-3. Nothing breaks at admission. Checked ahead of the tag: **all 13 templates
+3. **`ports`' `uuid` stays ABSENT.** This is the control arm on the upstream
+   fix, and it is the one most likely to be skipped. `ports` maps
+   `uuid <- status.uuid`: the vendor assigns the uuid, an author cannot
+   supply it, and requiring it would make the kind uncreatable — so its
+   absence is *correct*, not a defect, and #419 must leave it alone. If
+   `uuid` appears in the `ports` CRD after the fix, **the fix over-reached**,
+   and that is a worse outcome than it not landing. Same shape as the
+   over-eagerness arms in `scripts/check-example-manifests.py --self-test`:
+   the risk is not only that a rule stops firing, it is that it starts firing
+   on what it should leave alone.
+4. Nothing breaks at admission. Checked ahead of the tag: **all 13 templates
    across the three charts that render a `NodeProvision` or `NodePower`
    already set `node_id`**, so a property that becomes required finds a value
    waiting. This is the concrete reason the instruction below matters — had
