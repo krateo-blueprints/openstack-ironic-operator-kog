@@ -190,6 +190,13 @@ chart-host:   # package all four charts (baremetal-lifecycle + baremetal-discove
 	$(KUBECTL) -n $(IRONIC_NS) cp dist/kubernetes-cluster-$(CLUSTER_CHART_VERSION).tgz \
 		$$($(KUBECTL) -n $(IRONIC_NS) get pod -l app=chartrepo -o jsonpath='{.items[0].metadata.name}'):/usr/share/nginx/html/kubernetes-cluster-$(CLUSTER_CHART_VERSION).tgz
 
+check-examples:   # every manifest a reader is told to apply would actually apply
+	# Catches the two defect classes that `helm lint` and kubeconform cannot see
+	# and only the API server rejects: a kind no RestDefinition makes real, and a
+	# composition apiVersion from a pruned chart version. Both found in this repo
+	# on 2026-11-04. Historical test fixtures are deliberately out of scope.
+	python3 scripts/check-example-manifests.py
+
 chart-host-pinned:   # restore the chart versions the LIVE CompositionDefinitions pin
 	# `chart-host` publishes whatever is in Chart.yaml today. The chartrepo pod has
 	# no volumes, so a cluster restart wipes everything it serves and leaves the

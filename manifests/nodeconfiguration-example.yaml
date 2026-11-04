@@ -8,7 +8,7 @@
 # For standalone (auth_type=none), you may not need this - the default OAS servers URL is used.
 ---
 apiVersion: baremetal.ogen.krateo.io/v1alpha1
-kind: NodeConfiguration
+kind: BaremetalNodeConfiguration
 metadata:
   name: ironic-standalone
   namespace: openstack
