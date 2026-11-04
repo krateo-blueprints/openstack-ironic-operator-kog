@@ -47,6 +47,23 @@ spec:
       - action: create
         method: POST
         path: /v1/nodes
+      # uuid comes from STATUS, which holds the ADOPTED object's identifier.
+      # That is the whole question: does a wrong adoption delete the wrong node?
+      - action: delete
+        method: DELETE
+        path: /v1/nodes/{uuid}
+        # Without this mapping, oasgen makes the path parameter a REQUIRED spec
+        # property and every CR is rejected with `spec.uuid: Required value` --
+        # measured 2026-11-04. A kind whose identity is DISCOVERED by findby
+        # cannot state its uuid up front, so declaring a delete verb by uuid
+        # makes the kind uncreatable.
+        #
+        # The mapping also SUPPRESSES that spec property (oasgen#419), which is
+        # exactly what is wanted here, and resolves the path value from STATUS
+        # -- i.e. from the object findby ADOPTED. That is the whole question.
+        requestFieldMapping:
+          - inPath: uuid
+            inCustomResource: status.uuid
 ---
 apiVersion: ogen.krateo.io/v1alpha1
 kind: RestDefinition
@@ -76,6 +93,23 @@ spec:
       - action: create
         method: POST
         path: /v1/nodes
+      # uuid comes from STATUS, which holds the ADOPTED object's identifier.
+      # That is the whole question: does a wrong adoption delete the wrong node?
+      - action: delete
+        method: DELETE
+        path: /v1/nodes/{uuid}
+        # Without this mapping, oasgen makes the path parameter a REQUIRED spec
+        # property and every CR is rejected with `spec.uuid: Required value` --
+        # measured 2026-11-04. A kind whose identity is DISCOVERED by findby
+        # cannot state its uuid up front, so declaring a delete verb by uuid
+        # makes the kind uncreatable.
+        #
+        # The mapping also SUPPRESSES that spec property (oasgen#419), which is
+        # exactly what is wanted here, and resolves the path value from STATUS
+        # -- i.e. from the object findby ADOPTED. That is the whole question.
+        requestFieldMapping:
+          - inPath: uuid
+            inCustomResource: status.uuid
 ---
 apiVersion: ogen.krateo.io/v1alpha1
 kind: RestDefinition

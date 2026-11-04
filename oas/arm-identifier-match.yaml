@@ -82,6 +82,24 @@ paths:
               schema:
                 $ref: '#/components/schemas/Node'
 
+  # Added 2026-11-04 for the DELETE-path arm (oasgen#444 candidate). Without a
+  # `delete` verb declared, deleting the CR fires no external call at all and
+  # the test is vacuous -- it would "pass" by doing nothing.
+  /v1/nodes/{uuid}:
+    delete:
+      summary: Delete node
+      operationId: deleteNode
+      parameters:
+        - $ref: '#/components/parameters/X-OpenStack-Ironic-API-Version'
+        - name: uuid
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Deleted
+
 components:
   parameters:
     # Without this Ironic negotiates its MINIMUM microversion (1.1), and both

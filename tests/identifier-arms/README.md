@@ -24,6 +24,51 @@ Nothing anywhere says the CR is managing the wrong object.
 usable (arms 2 and 3). So the hazard is reached by leaving a field out, not by
 setting it wrong.
 
+## The DELETE arm: a CR naming `child-b` destroyed `enclosure-a`
+
+`run-delete-arm.sh`, 2026-11-04, rdc 0.50.0. oasgen-provider#444.
+
+```
+positive control  ArmBase, single identifier `name`, asked child-a
+                  -> adopted child-a -> CR deleted -> child-a REMOVED
+                  proves the delete verb fires, so the arm can distinguish
+                  "wrong object deleted" from "nothing deleted"
+
+the arm           ArmOr, policy omitted (OR), asked child-b
+                  -> adopted enclosure-a -> CR deleted
+                  before: child-b enclosure-a enclosure-b
+                  after:  child-b           enclosure-b
+```
+
+Verified on a second channel, not the script's string diff:
+
+```
+GET /v1/nodes/enclosure-a  -> 404     the node OR adopted:   DESTROYED
+GET /v1/nodes/child-b      -> 200     the node the CR NAMED: untouched
+enclosure-b                -> present never referenced:      correct
+```
+
+So the mis-adoption does not merely mismanage an unrelated object — **it
+deletes one**, with `Synced=True` throughout and no event. `enclosure-a` was a
+*parent*, so the blast radius is the enclosure its children hang off.
+
+### Adding the delete verb surfaced two more things
+
+**A delete verb with a path parameter makes that parameter a REQUIRED spec
+field.** `DELETE /v1/nodes/{uuid}` gave `spec.uuid: Required value` on every CR,
+making the kind **uncreatable** — a CR whose identity is *discovered* by findby
+cannot state a uuid it does not yet have. A `requestFieldMapping`
+(`inPath: uuid` → `inCustomResource: status.uuid`) suppresses the property and
+resolves from the adopted object. The oasgen#419 suppression rule acting as the
+remedy rather than the defect.
+
+**`RestDefinition Ready=True` is not a statement about the generated CRD.**
+After applying that mapping the RestDefinitions reported `Ready=True` while the
+served CRD still carried `required: [uuid]`. One step from reporting "the
+mapping does not suppress". Forcing a clean regeneration to **disambiguate
+stale-schema from no-suppression** showed `uuid` gone. A readiness condition on
+the generator is not a readiness condition on the artifact.
+
 ## Two findings about the fixture that outrank the arms
 
 **1. Ironic's node COLLECTION is abridged to seven fields.**
