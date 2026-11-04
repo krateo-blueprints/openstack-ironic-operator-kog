@@ -60,3 +60,58 @@ curl -s -H "X-OpenStack-Ironic-API-Version: 1.81" http://localhost:6385/v1/nodes
 | `ironic.conf` | Standalone Ironic config (noauth, sqlite, fake drivers) |
 | `ironic-standalone.yaml` | Namespace + Ironic Deployment (with nginx version-proxy sidecar) + Service |
 | `kubeconfig.ironic-kog` | Isolated kubeconfig (generated, gitignored) |
+
+## Pausing and resuming the `ironic-kog` management cluster
+
+The kind cluster holds only the **control plane** (Krateo, cdc, rdc, the
+RestDefinitions, the `lab-ha` composition). It does **not** hold the blades'
+Ironic records: the in-cluster `ironic` Deployment is a leftover from local
+testing — its config says so, it has 0 nodes, and the `ironic` Service has no
+selector. `EndpointSlice/ironic-lab` points the Service at **172.19.74.1:6385**,
+the real Ironic in the lab, reached over the WireGuard proxy. So pausing the
+cluster cannot lose node records, and the Kubernetes cluster on the blades is
+self-contained (its own VIP) and keeps running untouched.
+
+**Pause** — stop the container, do not delete the cluster. `kind delete` would
+destroy the CRDs, the CompositionDefinitions and the `lab-ha` CR, which is
+hours of rebuild, not a pause:
+
+```bash
+docker stop ironic-kog-control-plane
+```
+
+Other kind clusters on this machine belong to other sessions. Only ever name
+`ironic-kog-control-plane`.
+
+**Resume:**
+
+```bash
+docker start ironic-kog-control-plane
+# wait for the API, then RE-PUBLISH THE CHARTS:
+make chart-host
+```
+
+`make chart-host` is **not optional** on resume. The `chartrepo` nginx
+Deployment has **no volumes**, so the `.tgz` files are in its container
+filesystem and are gone once the pod is recreated. Without them every
+CompositionDefinition fails to fetch its chart and cdc reports errors that look
+like a chart-version problem.
+
+### Why a paused control plane is not dangerous
+
+Both destructive transitions are gated off while the blades sit at `active`,
+verified 2026-11-04:
+
+- `transition-deploy` requires `provisionState == "available"`. That helper
+  reads the **BaremetalNode CR's** `status.provision_state` via helm `lookup`,
+  not Ironic, so it keeps its last value (`active`) while nothing reconciles.
+- `transition-undeploy` requires `spec.undeploy=true` **or**
+  `shouldAutoRedeploy`. All six BHs have `undeploy=False`, and
+  `shouldAutoRedeploy` needs a non-empty `spec.extra.deployed_configdrive_hash`
+  — empty on all six, because the bridge deliberately does not mirror that key.
+
+The dangerous case is not a pause; it is an Ironic that comes back **empty**.
+Then the CRs re-enrol the nodes (Ironic honours a client-supplied uuid), the
+chart walks them to `available`, and `transition-deploy` fires and re-images a
+blade. That cannot happen from pausing this cluster, because the records are not
+in it.
