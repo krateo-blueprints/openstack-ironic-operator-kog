@@ -558,8 +558,19 @@ machines and no IP addresses, wait for six `Ready` nodes (about 25 minutes,
 most of it `apt` and image pulls), then run `hydrophone` **on the bootstrap
 node** so the cluster-admin kubeconfig never leaves the machine that owns it.
 
-The submission metadata is in
-[`conformance/v1.36/PRODUCT.yaml`](../conformance/v1.36/PRODUCT.yaml). Every
-field is filled and verified except the vendor identity, which is a question
-about which legal entity signs CNCF's participation form rather than anything
-technical; the file records the options and what each costs.
+**The CNCF submission is parked**, by the owner's decision on 2026-11-04. Not
+blocked, not waiting on anyone — parked. What is parked is the *submission*,
+not the result: the run stands on its own, the artefacts and checksums are in
+this repo, the procedure above reproduces it, and the runner is now in the
+chart so a re-image cannot lose it.
+
+Resuming needs two non-engineering things: a decision about which legal entity
+certifies, and one email to CNCF asking what that costs.
+[`conformance/v1.36/PRODUCT.yaml`](../conformance/v1.36/PRODUCT.yaml) records
+both, along with every field that *is* settled and verified.
+
+The one thing that ages: CNCF's certifiable window is the current Kubernetes
+release plus the two before it, so v1.36 stays submittable while 1.37 and 1.38
+are current. After that the suite must be re-run against a newer release —
+which is a chart flag now rather than a hand-install, so resuming late costs a
+bring-up and two hours rather than a rediscovery.

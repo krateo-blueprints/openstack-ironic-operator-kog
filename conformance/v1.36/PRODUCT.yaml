@@ -1,8 +1,32 @@
 # CNCF Certified Kubernetes submission metadata.
 #
-# Everything here except `vendor`, `name` and `contact_email_address` is settled
-# and verified. Those three wait on one decision that is not an engineering
-# question -- see "THE ONE OPEN DECISION" below.
+# ===========================================================================
+# PARKED 2026-11-04, by the owner's decision. Nothing here is blocked or
+# waiting on anyone; nobody needs to chase it.
+#
+# WHAT IS PARKED is the SUBMISSION, not the result. The conformance run stands
+# on its own and is not provisional: v1.36.6, 443 of 443 specs passed, 0
+# failed, artefacts and checksums in this directory, reproduction steps in
+# README.md, and the runner itself now baked into the chart so a re-image
+# cannot lose it. That work is finished and useful whether or not a badge is
+# ever applied for.
+#
+# TO RESUME, two things are needed and neither is engineering:
+#   1. Decide which legal entity certifies (see THE ONE OPEN DECISION below).
+#   2. Send the drafted email to conformance@cncf.io, which asks the two
+#      questions that settle it. The draft lives outside the repo; it asks
+#      about the Silver-for-startups dues and whether a company-owned repo
+#      rules out the free individual route.
+#
+# WHAT WOULD AGE: the certifiable window is the current Kubernetes release
+# plus the two before it. v1.36 stays submittable while 1.37 and 1.38 are
+# current. Past that the suite has to be re-run against a newer release --
+# which is now a chart flag rather than a hand-install, so the cost of
+# resuming late is a bring-up and two hours, not a rediscovery.
+# ===========================================================================
+#
+# Everything here except `vendor` and `contact_email_address` is settled and
+# verified.
 #
 # `type: installer` is settled by CNCF's own definitions: an installer
 # "downloads and then installs vanilla upstream Kubernetes", whereas a
