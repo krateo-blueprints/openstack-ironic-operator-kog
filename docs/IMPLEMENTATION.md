@@ -325,11 +325,31 @@ Worth its own section, because the conclusion generalises beyond this repo.
    `--fail`, output to `/dev/null`, so an HTTP 422 was indistinguishable from
    success. It logged "creating NodeProvision" on a twenty-minute loop while
    zero such CRs existed.
-3. **The one that kills the idea.** rdc 0.50.0 scopes its informer to
-   `krateo.io/oas-version`, a label **cdc injects** on resources it renders and
-   that no chart can set. A CR created by a hook is therefore invisible to rdc
-   forever. **A helm hook cannot drive a KOG transition at all** — fixing 1 and
-   2 would only have got the CR created and then ignored.
+3. ~~**The one that kills the idea.**~~ **RETRACTED — this was wrong.** I
+   claimed rdc's `krateo.io/oas-version` informer selector made hook-created
+   CRs permanently invisible, because cdc injected that label and no chart
+   could set it. The selector is real (shipped in **0.28.0**, not 0.50.0), but
+   **cdc does not inject the label** — a `MutatingAdmissionPolicy` that
+   oasgen-provider creates per API group does, on CREATE and UPDATE, for
+   `resources: '*'` with empty namespace and object selectors and **no client
+   filtering**. Measured with both arms:
+
+   ```
+   kubectl, no labels in the manifest, --dry-run=server : krateo.io/oas-version=v1-0-0
+   same object,                        --dry-run=client : none        <- CONTROL
+   ```
+
+   So a hook-created CR **is** labelled and **would** be reconciled. I never
+   observed otherwise — the hook's CR was never created at all (defect 1), so
+   the question never arose. I saw the label sitting beside the
+   `krateo.io/composition-*` labels that cdc really does set, and read a
+   correlation as a mechanism.
+
+   One caveat that may matter elsewhere: `MutatingAdmissionPolicy` is GA at
+   Kubernetes 1.36, which is exactly this chart's floor. On an older
+   management cluster the policy would not take effect, an unlabelled CR
+   genuinely would be invisible, and the same chart would silently reconcile
+   or silently not depending on the apiserver underneath.
 
 ---
 
