@@ -618,6 +618,48 @@ Serialisation follows the body schema, not the spec, so Ironic keeps seeing
 because its OAS declares the path parameter in the body schema deliberately —
 the two cases come apart on that one line.
 
+### How to adopt an oasgen generation fix without de-enrolling the fleet
+
+**An oasgen upgrade does not regenerate existing CRDs.** Observe compares four
+stored hashes — `status.digest`, `status.resourceHash`, `status.oasHash`,
+`status.authSecretDigest` — and **none covers the generator's own version**. So
+a new binary changes nothing Observe looks at, Observe reports up-to-date, and
+generation never runs again. A CRD built by 0.50.0 keeps its 0.50.0 schema
+indefinitely under 0.51.0. Filed upstream as oasgen **#453**.
+
+That matters here because delete-and-recreate — the obvious way to force a
+re-render — **fires the external DELETE on every live CR of the kind**. With
+six `BaremetalNode`s and twelve `Port`s on the fleet, that means de-enrolling
+machines from Ironic. It is not available in production.
+
+**The safe path is to edit the referenced OAS document**, because `oasHash`
+*is* hashed:
+
+```
+1. append a comment to the OAS document (that alone moves oasHash)
+2. re-apply the ConfigMap
+3. WAIT for the CRD's resourceVersion to move
+```
+
+Measured on an isolated cluster, `nodepowers`, both directions:
+
+| step | oasHash | CRD rv | result |
+|---|---|---|---|
+| inert comment | `4e5c1ba2` → `e11a30b8` | unchanged | reconcile ran; re-render identical, so correctly nothing written |
+| semantic edit (new body field) | `e11a30b8` → `fdf88f53` | `22874` → `23895` | the field **appears** in the generated spec |
+| ConfigMap restored | — | `23895` → `24204` | the field **disappears** again |
+
+No DELETE dispatched, no RestDefinition recreated, no CR touched.
+
+**Step 3 is not optional, and it is where this nearly went wrong.** A first run
+polled 96 seconds, saw neither the CRD nor `oasHash` move, and was one message
+away from reporting that `oasHash` detection is inert — with a passing control
+(the live ConfigMap did contain the new field), so the reading looked solid. The
+reconcile cadence for that RestDefinition is **roughly 2–3 minutes**: log
+activity at `22:22, 22:25, 22:26, 22:27, 22:28, 22:31, 22:34`. The 96-second
+window fell inside one gap. **Before trusting that a trigger did not fire, find
+out how often the thing could have fired at all.**
+
 ### Baseline measured 2026-11-04 on 0.50.0 AND 0.51.0 — the defect is live on a tag
 
 Taken on an **isolated** kind cluster (own kubeconfig, fake-driver Ironic,
