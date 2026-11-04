@@ -345,11 +345,20 @@ Worth its own section, because the conclusion generalises beyond this repo.
    `krateo.io/composition-*` labels that cdc really does set, and read a
    correlation as a mechanism.
 
-   One caveat that may matter elsewhere: `MutatingAdmissionPolicy` is GA at
-   Kubernetes 1.36, which is exactly this chart's floor. On an older
-   management cluster the policy would not take effect, an unlabelled CR
-   genuinely would be invisible, and the same chart would silently reconcile
-   or silently not depending on the apiserver underneath.
+   I initially kept a caveat here that this is version-dependent, since
+   `MutatingAdmissionPolicy` is GA at Kubernetes 1.36 and that is exactly the
+   generated CRD chart's floor. **That is not a coincidence and not a
+   hazard**: per the oasgen-provider maintainers, GA of that policy is
+   *why* the floor is `>=1.36.0-0` — CRD schema ratcheting, the other
+   candidate, has been GA since 1.33 and cannot be what sets it. The floor is
+   enforced at render time, so below 1.36 the chart is refused rather than
+   silently installed. There is therefore no supported cluster where the
+   policy is inert while selector-scoped watching is active, and the
+   unlabelled-CR case is unreachable wherever the chart can be installed.
+
+   The one genuine window is a **migration**, not a steady state: a CR created
+   under 0.27.x, where label stamping shipped but scoped watching had not,
+   could pre-exist unlabelled and become invisible on upgrade to 0.28.0+.
 
 ---
 
