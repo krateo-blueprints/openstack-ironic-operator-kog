@@ -377,6 +377,50 @@ cluster could never have been HA. The trap within the trap: `curl -k` returned
 certificate SANs did not contain the VIP. The fix is placeholders substituted
 at runtime, plus assertions that fail loudly.
 
+**A credential audit, and the two boundaries that make its result readable.**
+`--debug` is on for *any* oasgen chart install — the deployment hardcodes
+`args: ["--debug"]`, and the chart's own `OASGEN_PROVIDER_DEBUG: "false"` is
+inert config beside a working `MAX_RECONCILE_RATE` (oasgen **#454**). Since this
+project's `values.yaml` records that "oasgen < 0.26.1 printed credential headers
+under this flag", that was worth measuring rather than assuming.
+
+Searched every pod in both namespaces, completed Jobs included,
+`--all-containers`, for the **live Keystone token** and the **non-rotating admin
+password** — the second being the one that matters, because a leak of it does
+not self-heal. **62 pods, zero hits**, with both greps calibrated against known
+positives so the zero is a result rather than a pattern that never matched. Also
+zero instances of `x-auth-token`/`authorization` followed by a 20+ character
+value; header *names* appear, and a name is not a secret.
+
+**What the clean result does NOT cover**, because both boundaries are
+configuration rather than code:
+
+1. **rdc runs at INFO here, not DEBUG.** It is passed no debug flag and logs
+   300/300 INFO with zero DEBUG lines — the opposite of oasgen in the same
+   monorepo, which the upstream maintainer confirmed is a genuine asymmetry
+   between the two components. So the audit says nothing about what rdc would
+   emit at DEBUG.
+2. **`debug.connectorVerbose` is off**, and that — not oasgen's `--debug` — is
+   the flag that dumps the full HTTP exchange with Ironic. Verified absent on
+   all six `BaremetalNode` CRs. It is the actual disclosure path in this system.
+
+And the scope is the **retained** log window (last 3000 lines per pod), so this
+is "not present on a live fleet", never "never".
+
+The transferable half, which cost an upstream maintainer a wrong safety
+assumption: **the audience of a log level is a deployment property, not a code
+property.** "We log it at Debug so it is not in production logs" is false for
+one component and true for the other, in one repository, with nothing in either
+codebase telling a reader which side a given statement is on.
+
+**And the same error in a different costume, twice in one evening:** I read
+`ALREADY RUNNING` from a `pgrep` in a pod log and briefly believed a two-hour
+conformance suite was running — it was a completed Job from 36 hours earlier.
+Earlier the same night I read the extra-bridge's DNS errors as current when they
+were a window that had closed nine hours before. **A log line, a process listing
+and an issue body are all snapshots; the timestamp is part of the datum.** Find
+out when it was written before deciding what it says about now.
+
 **And the inverse: a healthy fleet that reports failure forever.** Every
 `BaremetalHost` sits at `Ready=False`, reason `Creating`, message *"1 of 4
 managed children are not ready: nodepowers/..."* — permanently, on a cluster
