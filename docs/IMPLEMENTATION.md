@@ -676,19 +676,30 @@ re-render — **fires the external DELETE on every live CR of the kind**. With
 six `BaremetalNode`s and twelve `Port`s on the fleet, that means de-enrolling
 machines from Ironic. It is not available in production.
 
-> **DO NOT use this nudge on `ports`, `portgroups`, `allocations` or
-> `deploytemplates` until oasgen #455 is resolved.** All four declare
-> `excludedSpecFields: [uuid]` while their OAS declares `uuid` as a
-> **path-level** `required: true` parameter on `/v1/<kind>/{uuid}`, and their
-> verbs use that path. From oasgen 0.51.0 (#410/#414) the exclusion is
-> *refused* rather than applied, so a regeneration puts `uuid` back into the
-> spec **and into `required`** — and all 12 live `Port` CRs have
-> `spec.uuid` empty, correctly, because Ironic assigns it. Regenerating those
-> kinds would invalidate every one of them and make the kind uncreatable.
+> **An earlier version of this section said the nudge was UNSAFE on `ports`,
+> `portgroups`, `allocations` and `deploytemplates`. That was wrong and is
+> retracted.** The reasoning was that each sets `excludedSpecFields: [uuid]`
+> while its OAS declares `uuid` as a path-level `required: true` parameter, and
+> that oasgen 0.51.0 (#410/#414) refuses such an exclusion.
 >
-> **So the unregenerated CRDs are currently protecting this fleet from a
-> schema change.** Uncomfortable, and the reason upstream has put automatic
-> regeneration on hold until #455 has a migration story.
+> **Measured instead of reasoned:** the `ports` CRD generated *by 0.51.0* on an
+> isolated cluster (uid `3fc83f7d…`, created `22:25:30Z`, after the upgrade)
+> has `uuid` absent from both `properties` and `required`. The exclusion was
+> applied.
+>
+> The predicate I tested was `excluded ∩ required-parameters`. The guard's
+> actual condition is `excluded ∩ (required-parameters NOT supplied by a
+> mapping)` — and all four supply `uuid` through a request-direction
+> `requestFieldMapping` (`uuid <- status.uuid` for ports, `uuid <- spec.name`
+> for the other three), which oasgen deliberately exempts. **I had the
+> exemption in front of me and modelled the predicate without it.**
+>
+> Three successive static answers, each more careful than the last, were all
+> wrong; the first thing actually run settled it. A correct answer to one half
+> of a conjunction reads as confirmation of the whole.
+>
+> oasgen **#455** remains a real breaking change for a definition whose
+> excluded required parameter is *not* mapped. This fleet is simply not one.
 
 **The safe path is to edit the referenced OAS document**, because `oasHash`
 *is* hashed:
