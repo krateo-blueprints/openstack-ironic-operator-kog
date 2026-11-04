@@ -97,7 +97,7 @@ Sanity-check from kind:
 
 ```bash
 make ironic-forward &        # background port-forward to localhost:6385
-curl -s -H "X-OpenStack-Ironic-API-Version: 1.81" http://localhost:6385/v1/nodes \
+curl -s -H "X-OpenStack-Ironic-API-Version: 1.109" http://localhost:6385/v1/nodes \
   | jq '.nodes[] | {name, uuid, provision_state}'
 # expect bm1/bm2 from your Bifrost testenv
 ```

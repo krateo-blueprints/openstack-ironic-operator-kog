@@ -86,7 +86,7 @@ placeholders — a real cluster overrides them on the `KubernetesCluster` CR.
 | `image.source` / `.checksum` | *(empty)* | cloud-init OS image deployed onto every blade (Debian/Ubuntu-shaped). |
 | `lifecycleNamespace` | *(empty)* | where the rendered `BaremetalLifecycle` CRs land. |
 | `configurationRef` | `ironic-endpoint` / `openstack` | Ironic auth, same shape as lifecycle. |
-| `ironicApiUrl` / `ironicApiVersion` | `http://ironic.openstack.svc.cluster.local:6385` / `1.81` | Ironic endpoint. |
+| `ironicApiUrl` / `ironicApiVersion` | `http://ironic.openstack.svc.cluster.local:6385` / `1.81` | **INERT — read by no template.** Documented only because it is still in `values.yaml`. Note `1.81` is *below* the 1.83 floor `parent_node` and `include_children` need, so wiring it through would reintroduce the `406` this project hit. The live microversion comes from the OAS documents, which declare it required with a `1.109` default the apiserver stamps onto every generated CR. |
 | `ironicAuth.*` | `""` (userDomain `Default`) | Keystone creds baked into CP cloud-init so `publish-join.sh` can PATCH Ironic's `node.extra` from the blade. |
 | `managementCluster.apiUrl` / `.caBundle` / `.serviceAccount*` | `""` | management API the CP cloud-init patches to publish the join token. `caBundle` is optional (the chart `lookup`s `kube-root-ca.crt`). |
 | `network.podCIDR` / `.serviceCIDR` | `10.244.0.0/16` / `10.96.0.0/12` | cluster networking. |

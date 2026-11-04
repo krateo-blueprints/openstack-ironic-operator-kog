@@ -31,9 +31,14 @@ operator's config (OAS endpoint, RestDefinitions, chart) is unchanged.
 make local-up
 ```
 
-This installs Krateo (KOG `oasgen-provider` + composition `core-provider`) and applies both
-RestDefinitions (`Node` CRUD + `NodeProvision` action). It also starts the local fake Ironic —
-that's fine; the next step repoints the `ironic` Service away from it.
+This installs Krateo (KOG `oasgen-provider` + composition `core-provider`) and applies **four**
+RestDefinitions, generating `BaremetalNode`, `Port`, `NodeProvision` and `NodePower`. It also
+starts the local fake Ironic — that's fine; the next step repoints the `ironic` Service away
+from it.
+
+(Corrected 2026-11-05: this said "both RestDefinitions (`Node` CRUD + `NodeProvision`)". There
+are four, and the node kind is `BaremetalNode` — a reader following the old text would apply a
+`kind: Node` that nothing serves, which is the same defect the quickstart had.)
 
 ### 2. Point the operator at your real Ironic
 
@@ -61,15 +66,35 @@ make ironic-backend-direct   # the endpoint IRONIC_BACKEND_MANIFEST declares
 make ironic-backend-local    # the in-cluster fake Ironic, for local testing
 ```
 
-### 3. Verify connectivity through the proxy
+### 3. Verify reachability — and auth separately, because they fail differently
 
 ```bash
 KCTL="kubectl --kubeconfig local/kubeconfig.ironic-kog --context kind-ironic-kog"
 $KCTL -n openstack port-forward svc/ironic 6385:6385 &
-curl -s -H "X-OpenStack-Ironic-API-Version: 1.81" http://localhost:6385/v1/nodes | jq .
+
+# Reachability only. No token, so a Keystone-protected Ironic answers 401 --
+# which is a PASS for this step: it proves the request arrived.
+curl -s -o /dev/null -w '%{http_code}\n' \
+  -H "X-OpenStack-Ironic-API-Version: 1.109" http://localhost:6385/v1/nodes
+
+# Auth. The token is the one the keystone-token-refresher CronJob maintains.
+TOKEN=$($KCTL -n openstack get secret ironic-keystone-token -o jsonpath='{.data.token}' | base64 -d)
+curl -s -H "X-Auth-Token: $TOKEN" \
+  -H "X-OpenStack-Ironic-API-Version: 1.109" http://localhost:6385/v1/nodes | jq '.nodes | length'
 ```
 
-A `200` with your real nodes (or an empty list) confirms Keystone auth + Ironic reachability.
+**`200` on the first call without a token means your Ironic is noauth**, not that auth works.
+`401` means reachable and protected — then the second call must return a node count.
+
+Two corrections here, 2026-11-05, both of which made this step unable to verify what it claimed:
+
+- the title said "through the proxy"; **there is no proxy** (see §2);
+- it sent **no token** while claiming a `200` "confirms Keystone auth". Against a
+  Keystone-protected Ironic that request 401s, so the documented pass condition could only be
+  met by an Ironic that was not checking credentials at all;
+- the microversion was `1.81`, below the **1.83** floor this system needs. `parent_node` and
+  `include_children` require ≥ 1.83, and an unset or too-low microversion is what produced
+  `406 Request not acceptable` on every Observe for five days. Use `1.109`.
 
 ### 4. Provision (real hardware values)
 
@@ -153,8 +178,11 @@ sidecar does this; reuse that pattern pointing at the external host). The operat
 
 ## Notes / gotchas
 
-- The microversion header is mandatory for Ironic writes; the proxy injects `1.81` (override with
-  `IRONIC_API_VERSION`).
+- The microversion header is mandatory for Ironic writes. **There is no proxy injecting it**
+  (that was the deleted `keystone-ironic-proxy`): each OAS document declares
+  `X-OpenStack-Ironic-API-Version` as a *required* parameter with a `1.109` default, so the
+  apiserver stamps it onto every generated CR and RDC puts it on the wire. Anything below
+  **1.83** breaks `parent_node` and `include_children` with a `406`.
 - The `Node` RestDefinition has **no `update` verb** on purpose (Ironic PATCH is JSON-Patch-only
   and clears `instance_info` during cleaning, which would freeze the Node CR). Node spec is set at
   create; lifecycle is via `NodeProvision`.

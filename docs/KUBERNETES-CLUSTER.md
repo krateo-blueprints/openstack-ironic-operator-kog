@@ -345,6 +345,9 @@ spec:
 
 ```yaml
 spec:
+  # Both INERT -- read by no template. Still accepted, still ignored; removed
+  # from charts/kubernetes-cluster's own values.yaml in 0.13.25. 1.81 is below
+  # the 1.83 floor, so wiring it through would reintroduce a 406.
   ironicApiUrl: http://ironic.openstack.svc.cluster.local:6385
   ironicApiVersion: "1.81"
   ironicAuth:
