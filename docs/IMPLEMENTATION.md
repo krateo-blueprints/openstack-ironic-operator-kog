@@ -547,6 +547,15 @@ result is read against a prediction rather than rationalised after:
    three charts would have started failing admission on the day the fix
    shipped.
 
+**When the run happens, tell the nova KOG session.** They are running the
+mirror of this against Nova's quota kind — same upstream fix, a different
+vendor, a different verb set (`create`/`get`/`delete`, no `findby`), and
+their own four arms including the same over-reach control on their four
+`status.*`-sourced mappings. They stopped watching for the tag, so the ping
+has to come from here. Report this run as **one vendor, one verb set** and
+name which prediction falls, including when none does — that is where the
+temptation to generalise is strongest.
+
 **Two things not to do.** Do not remove `spec.node_id` from the
 `transition-*.yaml` templates — it is the field the mapping reads, so they are
 forward-compatible, and removing it is the one edit that would stop the
