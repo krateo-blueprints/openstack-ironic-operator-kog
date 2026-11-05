@@ -1095,3 +1095,81 @@ Generalising, because it is the same shape as §9.8 one turn later: fixing the
 value a system *renders* says nothing about the values it has already *stored*.
 I had the first half measured and was one command from arming on the strength of
 it.
+
+### §9.10 — replacing the inline Keystone admin password with a scoped user
+
+§9.8 recorded that each blade's config drive carries **three plaintext copies of
+the Keystone `admin` password**, because every Ironic publisher
+(`publish-join.sh`, `publish-stage.sh`, `publish-deployed-hash.sh`,
+`publish-drain-kubeconfig.sh`, `resolve-node-extra.sh`) authenticates the same
+way. A config drive is readable from `node.instance_info`, so this is a cloud
+admin credential sitting where any Ironic reader can take it.
+
+**The expected blocker is not there.** I assumed Ironic's default policy would
+require admin for a node write, which would have meant shipping a custom
+`policy.yaml` before anything could be scoped. It does not. The live Ironic runs
+the default policy — no policy file, no `policy` setting in `ironic.conf` — and
+the two rules these scripts need are:
+
+```
+baremetal:node:update_extra
+  (role:member and system_scope:all) or rule:service_role
+  or (role:member and (project_id:%(node.owner)s or project_id:%(node.lessee)s))
+  or (role:service and system_scope:all)
+
+baremetal:node:get
+  (role:reader and system_scope:all) or ... or (role:reader and (project_id:%(node.owner)s ...))
+```
+
+**`member`, not `admin`.** So a correctly scoped user needs no policy file at
+all, and `update_extra` is its own rule — distinct from `baremetal:node:update` —
+so the publisher can be allowed to write `extra` without being able to change a
+node's driver, power, provision target or instance_info.
+
+#### The commands (yours to run — they create a credential on the live deployment)
+
+```bash
+# 1. a dedicated project the publisher lives in
+openstack project create --description 'blade-side Ironic publishers' ironic-publishers
+
+# 2. the user. Generate the password; do not reuse anything.
+openstack user create --project ironic-publishers \
+  --password-prompt ironic-publisher
+
+# 3. member at SYSTEM scope -- satisfies both rules above for every node
+openstack role add --user ironic-publisher --system all member
+
+# 4. verify BEFORE changing the chart: it can read and write extra ...
+openstack --os-system-scope all --os-username ironic-publisher \
+  baremetal node show blade01 -f value -c extra
+
+# ... and verify it CANNOT do the things it should not
+openstack --os-system-scope all --os-username ironic-publisher \
+  baremetal node set --driver fake-hardware blade01     # expect 403
+openstack --os-system-scope all --os-username ironic-publisher \
+  baremetal node power off blade01                      # expect 403
+```
+
+Step 4's second half is the part worth not skipping: a scoped credential is only
+scoped if the negative case is checked. `member` at system scope is broader than
+`update_extra` alone, so **measure** what it can reach rather than assuming the
+rule list above is exhaustive.
+
+Then set `ironicAuth.username` / `ironicAuth.password` on the KubernetesCluster CR
+to the new user. No chart change is needed — the chart already parameterises
+these — which is also why this was never a code problem, only a credential one.
+
+**It takes effect per blade on its next deploy**, exactly like §9.9's hash: the
+credential is baked into cloud-init, so existing blades keep the admin password in
+their config drive until they are redeployed. Same publisher-before-consumer
+ordering, same reason.
+
+**Tighter option, if you want it later.** Setting each node's `owner` to the
+`ironic-publishers` project lets the user hold `member` on that project only, with
+no system scope — then it can write `extra` on *its own* nodes and is invisible to
+every other node in the Ironic. That is strictly better and costs one field per
+node, but it changes node ownership semantics, so it is a separate decision rather
+than something to fold in here.
+
+**Status: unblocked but not applied.** Nothing here runs without creating a live
+credential, which is yours.
