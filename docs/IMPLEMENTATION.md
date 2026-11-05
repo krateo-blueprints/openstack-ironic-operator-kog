@@ -1869,3 +1869,49 @@ which core-provider says to call it wedged.
 
 So the derived figures hold against a live cluster with external state behind the
 compositions. The six blades were untouched throughout both probes.
+
+### §9.21 — the plumbing v1.26.x defaulting predicate: zero, and a nearly vacuous zero
+
+oasgen is holding a `plumbing` v1.14.2 → v1.26.x bump and asked both available
+fleets to screen for its predicate: an **optional** object property (not in its
+parent's `required`) with a **reachable defaulted descendant** and **no required
+properties of its own**. At v1.26.1 such a parent gains `default: {}`; the
+apiserver applies defaults on *read* from etcd, and rdc sends top-level spec
+values whole — so after a re-render an existing CR could put a stanza on the wire
+that nobody authored, separated from the upgrade by the #453 regeneration gap.
+
+`scripts/check-defaulted-optional-objects.py`, 6-case control (3 must trip, 3
+must not), refuses to scan if the control fails. Result: **0 hits across all 8
+OAS documents.**
+
+**Then the question that mattered more: is the zero informative?**
+
+| document | defaults | nested objects | optional objects |
+|---|---|---|---|
+| all 8 combined | **4** | **26** | **26** |
+
+The optional-object half is satisfied **26 times over** — every nested object in
+this fleet is optional, so the zero is not "our objects are required". And all
+four `default:` occurrences turn out to be **the same thing**:
+
+```
+components.parameters.X-OpenStack-Ironic-API-Version.schema.default = '1.109'
+```
+
+A **header parameter** default, in four documents. **There is not one default in
+any request-body schema anywhere in this fleet.**
+
+**So the zero is real for us and nearly worthless as evidence.** The predicate
+needs two ingredients and one of them is entirely absent from our documents — we
+could not trip it whatever our object nesting looked like. We are clear by a
+general property rather than by an accident of shape, which is stronger than the
+other fleet's reason, but it also means **neither available fleet is a witness**:
+theirs is clear because its nested defaults sit under a required parent, ours
+because it has no body defaults at all.
+
+That is worth more to the person holding the bump than a clean report would be:
+it says the change is **untested in the field**, not screened safe.
+
+Secondary checks, both 0 across all 8 documents: `maxProperties` (the bound
+silently dropped at v1.14.2 and kept at v1.26.1) and `type: [integer, string]`
+nodes (which become `x-kubernetes-int-or-string`). Same as the other fleet.
