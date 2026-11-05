@@ -2144,3 +2144,53 @@ why.
 The transferable part is about **scope, not mechanism**: my screen's blind spot
 was a file class, oasgen's was a scheme type, and neither of us could see our own
 from inside our own code.
+
+#### §9.22 addendum 2 — the `nodeconfigurations` loose end, closed; and a falsification that was itself unsound
+
+oasgen proposed a falsifiable hypothesis for the odd kind out: its document
+declared **more than one** apiKey scheme at generation time, which suppresses the
+authored default while leaving the shape intact. Cheap to kill, and it is dead —
+the document declared **zero**, not several:
+
+```
+restdefinition-node.yaml @129e84a    resource.kind: Node          -> NodeConfiguration
+restdefinition-node.yaml @HEAD       resource.kind: BaremetalNode -> BaremetalNodeConfiguration
+
+oas/ironic-node.yaml  f09f65a 2026-02-16   apiKey schemes: 0
+                      a24a833 2026-05-29   apiKey schemes: 0
+                      7501fe0 2026-06-10   apiKey schemes: 0   <- in effect at generation
+                      fe9fdfb 2026-10-31   apiKey schemes: 1   <- X-Auth-Token added here
+```
+
+All five Configuration CRDs were created on **2026-10-29**. The document gained
+its single apiKey scheme on **2026-10-31**, two days later. Four of the five
+nevertheless carry `authentication.apiKey.header: "X-Auth-Token"` today — a
+default that can only come from a scheme the document did not have when they were
+created. **So those four must have had their schemas rewritten after 10-31**, which
+is what the regeneration nudges of 11-04 and 11-05 did (an `oasHash` change forces
+the re-read; under #453 an upgrade alone does not).
+
+`nodeconfigurations` is the one kind no RestDefinition has pointed at since the
+`Node` → `BaremetalNode` rename. Nothing would re-read a document for it, so its
+schema still reflects the June document with no security schemes at all. Zero live
+resources. Closed, and not a hazard.
+
+**The part worth keeping is about my own falsification.** I proposed exactly this
+regeneration explanation in the previous addendum and then rejected it, because
+`portconfigurations` is the *oldest* of the five by `creationTimestamp` and does
+carry the default. That falsification was unsound — and unsound in the same way
+the hypothesis was. **A CRD's `creationTimestamp` says nothing about when its
+schema was last written.** Creation time and generation-of-current-content time
+are different quantities, and I compared the wrong one, so the test could not have
+addressed the claim either way. I abandoned a correct explanation on the strength
+of an instrument that was never pointed at the question.
+
+`managedFields` would have been the obvious instrument and it carries no `time` on
+these objects, so it gives nothing. What actually dated the schemas was their
+**content**: a default that can only originate in a scheme the document lacked
+until 10-31 dates the schema to after 10-31, with no clock involved.
+
+This repo has a standing note that a null result is a claim about the instrument
+first. The inverse holds and had not been written down: **a falsification is a
+claim about the instrument too.** Rejecting your own hypothesis feels like rigour,
+which is exactly why it gets less scrutiny than accepting one.
