@@ -10,7 +10,7 @@
 #
 #   kubectl apply -f manifests/kubernetescluster-example.yaml
 ---
-apiVersion: composition.krateo.io/v0-13-25
+apiVersion: composition.krateo.io/v0-13-26
 kind: KubernetesCluster
 metadata:
   name: lab

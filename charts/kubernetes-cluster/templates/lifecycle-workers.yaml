@@ -75,7 +75,7 @@ spec:
     networkData:
       {{- $nd | nindent 6 }}
     {{- end }}
-  deployedConfigDriveHash: {{ include "kubernetes-cluster.deployedConfigDriveHash" $ | quote }}
+  deployedConfigDriveHash: {{ include "kubernetes-cluster.deployedConfigDriveHash" (dict "ctx" $ "builder" "kubernetes-cluster.workerUserData") | quote }}
   configurationRef:
     {{- toYaml $.Values.configurationRef | nindent 4 }}
 {{- end }}
@@ -129,7 +129,7 @@ spec:
     {{- include "kubernetes-cluster.image" $ | nindent 4 }}
   undeploy: true
   undeployMode: {{ default "full" $w.undeployMode | quote }}
-  deployedConfigDriveHash: {{ include "kubernetes-cluster.deployedConfigDriveHash" $ | quote }}
+  deployedConfigDriveHash: {{ include "kubernetes-cluster.deployedConfigDriveHash" (dict "ctx" $ "builder" "kubernetes-cluster.workerUserData") | quote }}
   configurationRef:
     {{- toYaml $.Values.configurationRef | nindent 4 }}
 {{- end }}

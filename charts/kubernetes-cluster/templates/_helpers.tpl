@@ -381,8 +381,33 @@ services:
      Stable across cdc reconciles because .Chart.Version doesn't
      change between renders of the same chart. Drift fires when the
      CHART itself bumps (operator-triggered redeploy). */}}
+{{/* v0.13.26: a CONTENT hash, not the chart version.
+
+     Takes (dict "ctx" . "builder" "<userData template name>") and returns
+     sha256 of that builder's rendered userData, with this very value replaced
+     by a sentinel during the hashing pass. That sentinel is what breaks the
+     "hash includes hash" recursion which v0.4.2 had sidestepped by using
+     .Chart.Version -- and using the chart version is why the bridge had to
+     refuse to mirror the published hash at all, since every bump then looked
+     like drift and would have reimaged every blade. See scripts/
+     ironic-node-extra-bridge.py and docs/IMPLEMENTATION.md §9.8.
+
+     Consequence worth stating plainly: the hash now tracks the configdrive,
+     so a chart bump that changes no userData produces the SAME hash and
+     fires nothing, while a genuine userData change fires a redeploy. That is
+     the feature working as designed rather than shipped inert.
+
+     The builder is passed explicitly rather than inferred because the three
+     node classes render different userData and must hash their own. */}}
 {{- define "kubernetes-cluster.deployedConfigDriveHash" -}}
-{{- .Chart.Version -}}
+{{- $ctx := .ctx -}}
+{{- if $ctx.Values.__cdHashSentinel -}}
+__CONFIGDRIVE_HASH_SENTINEL__
+{{- else -}}
+{{- $vals := merge (dict "__cdHashSentinel" true) (deepCopy $ctx.Values) -}}
+{{- $probe := dict "Values" $vals "Chart" $ctx.Chart "Release" $ctx.Release "Capabilities" $ctx.Capabilities "Template" $ctx.Template "Files" $ctx.Files -}}
+{{- include .builder $probe | sha256sum | trunc 16 -}}
+{{- end -}}
 {{- end -}}
 
 {{/* Stable per-cluster bootstrap token. Format kubeadm requires:
@@ -926,10 +951,11 @@ services:
 {{- end -}}
 
 {{- define "kubernetes-cluster.publishDeployedHashWriteFiles" -}}
+{{- $ctx := .ctx -}}
 - path: /etc/kubernetes/.deployed-hash
   permissions: "0644"
   content: |
-    {{ include "kubernetes-cluster.deployedConfigDriveHash" . }}
+    {{ include "kubernetes-cluster.deployedConfigDriveHash" (dict "ctx" $ctx "builder" .builder) }}
 - path: /etc/kubernetes/publish-deployed-hash.sh
   permissions: "0755"
   content: |
@@ -947,11 +973,11 @@ services:
     HASH=$(cat /etc/kubernetes/.deployed-hash)
     test -n "$HASH"
     HN="$(hostname)"
-    AUTH_URL={{ .Values.ironicAuth.authUrl | quote }}
-    IRONIC_URL={{ .Values.ironicAuth.ironicUrl | quote }}
-    USERNAME={{ .Values.ironicAuth.username | quote }}
-    PASSWORD={{ .Values.ironicAuth.password | quote }}
-    USER_DOMAIN={{ .Values.ironicAuth.userDomain | quote }}
+    AUTH_URL={{ $ctx.Values.ironicAuth.authUrl | quote }}
+    IRONIC_URL={{ $ctx.Values.ironicAuth.ironicUrl | quote }}
+    USERNAME={{ $ctx.Values.ironicAuth.username | quote }}
+    PASSWORD={{ $ctx.Values.ironicAuth.password | quote }}
+    USER_DOMAIN={{ $ctx.Values.ironicAuth.userDomain | quote }}
     TOKEN=$(curl -sS -D - -o /dev/null \
       -H "Content-Type: application/json" \
       -d "{\"auth\":{\"identity\":{\"methods\":[\"password\"],\"password\":{\"user\":{\"name\":\"$USERNAME\",\"password\":\"$PASSWORD\",\"domain\":{\"name\":\"$USER_DOMAIN\"}}}},\"scope\":{\"system\":{\"all\":true}}}}" \
@@ -1787,7 +1813,7 @@ write_files:
       exit 1
 {{- include "kubernetes-cluster.kubeadmPkiWriteFiles" . | nindent 2 }}
 {{- include "kubernetes-cluster.kubeadmInitWriteFiles" . | nindent 2 }}
-{{- include "kubernetes-cluster.publishDeployedHashWriteFiles" . | nindent 2 }}
+{{- include "kubernetes-cluster.publishDeployedHashWriteFiles" (dict "ctx" . "builder" "kubernetes-cluster.cpUserData") | nindent 2 }}
 {{- include "kubernetes-cluster.resolveNodeExtraWriteFiles" . | nindent 2 }}
 {{- if (default (dict) .Values.conformance).install }}
 {{- include "kubernetes-cluster.conformanceWriteFiles" . | nindent 2 }}
@@ -1987,7 +2013,7 @@ write_files:
       kubeadm join "$VIP" \
         --token "$TOKEN" \
         --discovery-token-unsafe-skip-ca-verification
-{{- include "kubernetes-cluster.publishDeployedHashWriteFiles" . | nindent 2 }}
+{{- include "kubernetes-cluster.publishDeployedHashWriteFiles" (dict "ctx" . "builder" "kubernetes-cluster.workerUserData") | nindent 2 }}
 {{- include "kubernetes-cluster.resolveNodeExtraWriteFiles" . | nindent 2 }}
 runcmd:
   # v0.12.7: publish FIRST (see bootstrap CP rationale).
@@ -2408,7 +2434,7 @@ write_files:
       [ -n "$JOIN_OK" ] || { echo "all attempts failed"; exit 1; }
 {{- include "kubernetes-cluster.kubeadmPkiWriteFiles" . | nindent 2 }}
 {{- include "kubernetes-cluster.kubeadmJoinWriteFiles" . | nindent 2 }}
-{{- include "kubernetes-cluster.publishDeployedHashWriteFiles" . | nindent 2 }}
+{{- include "kubernetes-cluster.publishDeployedHashWriteFiles" (dict "ctx" . "builder" "kubernetes-cluster.cpReplicaUserData") | nindent 2 }}
 {{- include "kubernetes-cluster.resolveNodeExtraWriteFiles" . | nindent 2 }}
 runcmd:
   # v0.12.7: publish FIRST (see bootstrap CP rationale).

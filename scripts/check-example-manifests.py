@@ -505,13 +505,32 @@ def check_configdrive_hash_interlock(root=None):
     looks like drift and reimages all six blades.
 
     The blade does publish the hash to Ironic. The bridge declining to carry it is
-    the whole interlock, and until this commit a comment was its only protection:
-    adding one tuple entry -- the obvious way to "fix" drift detection not working
-    -- arms a fleet reimage with nothing objecting.
+    the whole interlock, and a comment was once its only protection: adding one
+    tuple entry -- the obvious way to "fix" drift detection not working -- arms a
+    fleet reimage with nothing objecting.
 
-    This guard is the one place where a PASS is not the goal of the feature. It
-    should be deleted when the rendered hash becomes a content hash, in the same
-    commit that makes it one, and not before.
+    v0.13.26 made the rendered value a real content hash, which removes the
+    ORIGINAL reason for the exclusion: a chart bump no longer looks like drift.
+    It does NOT make arming safe, and this is the part worth reading before
+    deleting this guard. What each blade has already published to Ironic is a
+    chart-version STRING from whenever it was last deployed. Measured 2026-11-05:
+
+        blade01  None       (bootstrap CP never published)
+        blade02  "0.13.19"      blade04  "0.13.18"
+        blade03  "0.13.19"      blade05  "0.13.18"
+                                blade06  "0.13.18"
+
+    None of those can equal a content hash. So mirroring the key today sets
+    observed to a stale version string and fires auto-undeploy on the five blades
+    whose value is non-empty -- including two of three control planes, which takes
+    etcd quorum with it. blade01 is spared only because v0.4.3 suppresses on
+    empty-observed.
+
+    The precondition for arming is therefore not "the hash is a content hash" but
+    "every blade has republished under a chart that stamps one", which happens on
+    each blade's next deploy. Verify by reading Ironic's node.extra and seeing
+    content hashes rather than version strings -- then add the key and delete this
+    guard in the same commit.
     """
     root = root or REPO
     path = os.path.join(root, "scripts/ironic-node-extra-bridge.py")
@@ -530,9 +549,13 @@ def check_configdrive_hash_interlock(root=None):
         return [f"{rel}: deployed_configdrive_hash is in EXTRA_KEYS. Mirroring it "
                 f"arms baremetal-host's auto-undeploy on every chart bump, because "
                 f"the rendered hash is the parent CHART VERSION, not a content "
-                f"hash -- a bump that changes nothing would reimage every blade. "
-                f"Make the rendered value a real content hash first, and delete "
-                f"this guard in that same commit."]
+                f"hash. As of v0.13.26 the RENDERED value is a content hash, but "
+                f"what the blades have PUBLISHED is still a stale chart-version "
+                f"string, so mirroring now fires auto-undeploy on every blade whose "
+                f"published value is non-empty -- measured 2026-11-05 as five of "
+                f"six, including two of three control planes. Arm only once every "
+                f"blade has republished under v0.13.26+; see this function's "
+                f"docstring for how to check."]
     return []
 
 

@@ -1040,3 +1040,58 @@ replaces an admin.conf publish — but three plaintext copies of the Keystone ad
 password ride in each blade's config drive. The right fix is a Keystone user
 scoped to the Ironic writes these scripts perform, not `admin`; that is a design
 change, not folded in here. **Open, unfixed, and not introduced by 0.13.25.**
+
+### §9.9 — 0.13.26: the configdrive hash is a content hash, and why arming still waits
+
+The defect §9.8 landed on was that `deployedConfigDriveHash` was `.Chart.Version`,
+not a hash of the configdrive. That is why the bridge had to refuse to mirror it:
+with a version as the hash, *every* bump looks like drift, and drift at `active`
+means Ironic wipes the blade.
+
+**Fixed properly.** `kubernetes-cluster.deployedConfigDriveHash` now returns
+sha256 of the rendered userData, with its own value replaced by
+`__CONFIGDRIVE_HASH_SENTINEL__` during the hashing pass. That sentinel is what
+breaks the "hash includes hash" recursion which v0.4.2 had sidestepped by
+reaching for the chart version. The builder is passed explicitly — the three node
+classes render different userData and must hash their own — which also means the
+three classes get three different hashes, as they should.
+
+Calibrated three ways against the live cluster, because a hash that cannot move
+and a hash that always moves are both useless:
+
+| test | expected | result |
+|---|---|---|
+| render twice, same chart | identical | identical (3 values, 1/2/3 nodes) |
+| bump chart 0.13.25 → 0.99.99, userData untouched | **unchanged** | unchanged |
+| genuine one-line userData edit | **changed** | all three changed |
+
+**And then the measurement that stopped me arming it.** Removing the bridge
+exclusion looked like the natural last step. It is not, and the reason is on the
+other side of the wire: what each blade has *already published* to Ironic is a
+chart-version string from whenever it was last deployed. Read from Ironic
+2026-11-05, via `include_children=true` because the node collection is abridged:
+
+```
+blade01  None        blade04  "0.13.18"
+blade02  "0.13.19"   blade05  "0.13.18"
+blade03  "0.13.19"   blade06  "0.13.18"
+```
+
+Three different stale values across six blades, and the bootstrap CP never
+published at all. None of them can equal a content hash. So mirroring the key
+today would set observed to a stale version string and fire auto-undeploy on the
+**five** blades whose value is non-empty — including blade02 and blade03, two of
+three control planes, which takes etcd quorum with it. blade01 is spared only
+because v0.4.3 suppresses on empty-observed.
+
+So the precondition for arming is not "the rendered hash is a content hash" — it
+is **"every blade has republished under a chart that stamps one"**, which happens
+on each blade's next deploy and cannot be made to happen any sooner without
+deploying them. The interlock and its guard both stay, with that precondition
+written into the guard alongside the measured values. This is the ordering of a
+two-sided migration, not a hedge: the publisher has to move before the consumer.
+
+Generalising, because it is the same shape as §9.8 one turn later: fixing the
+value a system *renders* says nothing about the values it has already *stored*.
+I had the first half measured and was one command from arming on the strength of
+it.
