@@ -249,10 +249,13 @@ check-mapping-sources:   # every request-direction fieldMapping reads from a fie
 	#
 	# This reads the DOCUMENTS, so it answers before a single API call, and it is
 	# calibrated the hard way: it must find the two known-broken mappings and will
-	# exit NON-ZERO if it finds zero. #421 fixes those two rows and is merged to
-	# oasgen main (8461460), but no released tag contains it and the generator
-	# deployed here is 0.50.0 -- so a clean run means the screen broke, not that
-	# the repo healed. The gate is the DEPLOYED generator, not the merge.
+	# exit NON-ZERO if it finds zero. The chain is merged -> tagged -> published ->
+	# deployed -> REGENERATED, and only the last rung decides what these documents
+	# render to. #421 is merged (8461460), in no released tag, the generator here
+	# is 0.50.0 -- and even once it ships, oasgen does not regenerate an existing
+	# CRD on upgrade (#453), so a deployed fix alone changes nothing. Verified on
+	# the stored side: node_id is ABSENT from both served CRD schemas. A clean run
+	# means the screen broke, not that the repo healed.
 	python3 -I scripts/check-mapping-sources.py
 
 chart-host-pinned:   # restore the chart versions the LIVE CompositionDefinitions pin

@@ -14,17 +14,40 @@ instead of after a 406 went unnoticed for five days.
 Calibration: it must report the TWO KNOWN cases below and nothing else. A run
 reporting zero problems means the screen broke, not that the repo is clean.
 
-That holds because of what is DEPLOYED, not what is merged. oasgen #421 fixes
-these two rows and was merged to main as 8461460 on 2026-11-04, but no released
-tag contains it yet -- every tag from 0.46.0 to 0.51.0 compares `behind` that
-commit -- and the provider running here is 0.50.0. The rows clear when a tag
-containing 8461460 is DEPLOYED, which is checkable in one call:
+That holds because of what the GENERATED CRD contains, which is a longer chain
+than it looks. oasgen #421 fixes these two rows, merged to main as 8461460 on
+2026-11-04. The chain is:
 
-    gh api repos/krateo-platformops/oasgen-provider/compare/8461460...<tag> \
-      --jq .status      # "identical" or "ahead" => the fix is in that tag
+    merged  ->  tagged  ->  published  ->  deployed  ->  REGENERATED
 
-Until then a clean run is an instrument failure. "Merged upstream" is not the
-gate; the generator that reads these documents is.
+and only the last rung decides whether these documents are rendered correctly.
+Today: merged yes, tagged no (every tag 0.46.0..0.51.0 compares `behind` that
+commit), deployed generator 0.50.0.
+
+The rung that is easy to forget is the last one, and it is not implied by the
+one before it. oasgen does not regenerate an existing CRD on upgrade -- its
+Observe compares four hashes and none covers the generator version (#453) -- so
+installing a fixed version leaves every already-generated CRD exactly as the
+broken version wrote it. A deployed fix with no regeneration changes nothing
+here.
+
+So do not infer this from a version. Observe the stored side directly:
+
+    kubectl get crd nodepowers.baremetal.ogen.krateo.io -o json | python3 -c "
+    import json,sys
+    for v in json.load(sys.stdin)['spec']['versions']:
+        if v['served']:
+            p = v['schema']['openAPIV3Schema']['properties']['spec'].get('properties',{})
+            print(v['name'], 'node_id present =', 'node_id' in p)"
+
+Measured 2026-11-05: `node_id` ABSENT from the served schema of both
+nodepowers and nodeprovisions -- the defect, seen where it actually bites rather
+than deduced from a tag. When that prints True for both, and only then, empty
+KNOWN_BROKEN. Until then a clean run from THIS screen is an instrument failure.
+
+Regenerating is a separate action: the referenced OAS ConfigMap IS hashed
+(`status.oasHash`), so editing it is the supported nudge. See docs/
+IMPLEMENTATION.md §9.
 """
 import glob
 import os
@@ -34,7 +57,10 @@ import sys
 import yaml
 
 # The two mappings that ARE broken by upstream defect #419. #421 fixes them and
-# is merged to main (8461460) but UNRELEASED; the deployed generator is 0.50.0.
+# is merged to main (8461460) but UNRELEASED; the deployed generator is 0.50.0;
+# and even once it is deployed the existing CRDs will not regenerate on their own
+# (#453). Verified on the stored side 2026-11-05: node_id is absent from the
+# served spec schema of both nodepowers and nodeprovisions.
 # Listed so a clean run is recognised as a BROKEN SCREEN rather than good news.
 KNOWN_BROKEN = {
     ("restdefinition-power.yaml", "node_id", "spec.node_id"),
@@ -99,8 +125,9 @@ def main():
 
     if missing:
         print(f"\n  SCREEN BROKEN: expected to find {sorted(missing)} and did not.")
-        print("  #421 (8461460) is merged upstream but in no released tag, and the")
-        print("  deployed generator is 0.50.0 -- so these cannot legitimately be clean.")
+        print("  #421 (8461460) is merged upstream but in no released tag; the")
+        print("  deployed generator is 0.50.0; and an upgrade does not regenerate an")
+        print("  existing CRD (#453). So these cannot legitimately be clean.")
         print("  A zero here means the audit stopped working, not that the repo did.")
         return 2
     if new:
@@ -108,8 +135,9 @@ def main():
         print("  resolves to nothing at request time and the call goes out malformed.")
         return 1
     print(f"\n  OK: exactly the {len(KNOWN_BROKEN)} known #419 mappings, nothing new.")
-    print("  When a tag containing 8461460 is DEPLOYED, this should reach zero")
-    print("  and KNOWN_BROKEN should be emptied in the same commit.")
+    print("  Clears when the GENERATED CRD carries node_id again -- deployed AND")
+    print("  regenerated, not deployed alone. Observe it, do not infer it from a")
+    print("  version; this function's docstring has the one-command check.")
     return 0
 
 
