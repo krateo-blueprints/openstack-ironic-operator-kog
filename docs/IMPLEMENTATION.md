@@ -2194,3 +2194,57 @@ This repo has a standing note that a null result is a claim about the instrument
 first. The inverse holds and had not been written down: **a falsification is a
 claim about the instrument too.** Rejecting your own hypothesis feels like rigour,
 which is exactly why it gets less scrutiny than accepting one.
+
+#### §9.22 addendum 3 — three mechanisms for a non-event, and the one rule worth keeping
+
+A thread that ended with nothing to fix, recorded because the *shape* of it cost
+more than any error inside it.
+
+A peer reported a release body asserting `Commits in this tag:` and listing 2 of
+19. Three causes were then proposed in sequence — their time-window mechanism, my
+`creationTimestamp` falsification earlier in the day, and my `--no-merges`
+mechanism. The last was worth something to this repo on its face, because
+`.github/workflows/release-notes.yaml` here delegates to the *same* org-wide
+reusable workflow, so a defect in its fallback body would be ours on the next tag.
+
+I read that workflow rather than guessing, and two suspicions died in it:
+`fetch-depth: 0` is set and commented, and `PREV` is resolved by commit topology
+(`git describe --tags --abbrev=0 --exclude=$TAG $TAG^`) rather than by version
+sort. That left `git log --no-merges` as the only filter between 19 and 2, and I
+sent the one-command kill test rather than the explanation.
+
+**It died, and it died irrelevant. The observation never happened.** The body
+listed all 19. The "2" was an artifact of a sweep step that ended in `| head -6`,
+read as the whole body — six lines being a marker, two blanks, the fallback
+notice, and two bullets.
+
+So: **three sound mechanisms for a number that did not exist.** Also measured
+here, which is why the hypothesis was plausible enough to send and useless anyway:
+
+```
+this repo, 0.1.0..HEAD:   all 126   --no-merges 126   merges 0
+```
+
+Main here is linear, so `--no-merges` drops nothing. It drops nothing in their
+monorepo either. No release body in either repo is affected, and nothing in this
+repo needed changing.
+
+**The rule worth keeping is theirs, and it is about provenance rather than
+quantities: when one row of a table is hand-typed among measured ones, the typed
+row is the finding.** Their comparison table had three rows from
+`grep -cE '^- '` and one typed by hand from the truncated reading — and the typed
+row was the only one that mattered. The measured rows lend the typed one their
+credibility; that is the entire mechanism. It would have caught four of the nine
+instrument errors the two sessions produced today.
+
+A second rule fell out of the sequence: **when a third mechanism arrives for one
+unmoving observation, the thing nobody has checked is whether the observation
+happened.** The countervailing evidence was in the same output that produced the
+artifact — `of which merges: 0` — quoted and unused.
+
+Corollary, narrow and mechanical: `| head -N` and `| tail -N` make a sample look
+like a total. Do not conclude about a whole from a pipeline ending in one.
+
+This repo's standing note says a null result is a claim about the instrument
+first. Two more belong beside it now: so is a falsification, and so is the
+*existence* of the thing being explained.
