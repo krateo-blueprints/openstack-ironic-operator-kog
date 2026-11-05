@@ -1792,3 +1792,80 @@ works alone.** Declaring the field alone adds a permanently empty one; calling
 the setter alone gets pruned by the schema. **Shipping either half reproduces
 today's symptom while looking fixed** — which is the failure mode most likely to
 close the issue.
+
+### §9.20 — core-provider 2.13.65: both adoption variants pass, with the grace measured
+
+Upgraded `core-provider` + `chart-inspector` 2.13.62 → 2.13.65 after the image
+became pullable. Verified on the four axes: compositions 4× `ReconcileSuccess`,
+per-CR conditions 6× `ReconcileSuccess`, controller restarts 0, helm revisions
+unchanged (63/72/76/82/53/63/32), six blades `active/power on`.
+
+The per-version cdc pods were **replaced** (new names, 0 restarts, ready). That
+is 2.13.65 adding a `readinessProbe` on `/readyz` to each generated cdc
+Deployment, which core-provider flagged as expected — so the restart-count axis
+reading zero *and* new pod names is the correct signature, not a crash.
+
+#### Probe 1 — recreated CR, empty status (the 2.13.62 defect)
+
+The case my earlier route structurally could not reach: a recreated CR has no
+`status.digest`, and `plumbing`'s `maps.NestedString` reported the missing key as
+an error, so Observe failed every pass.
+
+```
+t+0s   label=None  digest=NO   (the defective precondition, captured)
+t+10s  label=adopt-probe-cwv9c7v6  digest=yes  Ready=Available  Synced=ReconcileSuccess
+       release rev1 -> rev2 "Upgrade complete"
+```
+
+**Completed in 10s.** The orphan was adopted and upgraded, not reinstalled, and
+one release existed throughout. The `digest=NO` sample matters: it shows the
+precondition was genuinely present rather than assumed.
+
+#### Probe 2 — `pending-install` orphan, and a void first attempt
+
+**My first attempt was void and I nearly reported it as a pass.** I constructed
+`pending-install` by setting the Secret's `status` **label**, then ran the probe
+and saw it complete in 15s. Two faults: helm reads `info.status` from the release
+**data** (base64 of base64 of gzipped JSON), so the label is only a query index;
+and I had labelled revision `.v2` while an adoption had already created `.v3`. So
+the probe tested a *deployed* orphan twice. That is
+[[reference_setup-cannot-produce-the-state]] — a fourth instance, committed hours
+after writing the note, in a script whose own header warns about constructed
+state.
+
+`scripts/helm-set-release-status.py` does it properly — patches the release data
+**and** the label, on the current revision, and optionally stamps
+`info.last_deployed` to now, because the grace is measured from `last_deployed`
+and a stale one is already past its grace. **Verified with `helm list` before
+proceeding**, which is the step the first attempt skipped.
+
+Against a real `pending-install` orphan:
+
+```
+t+0s     label=None                        release rev3 pending-install
+t+15s    Ready=PendingHelmOperation        "pending for 26s"
+t+61s    Ready=PendingHelmOperation        "pending for 1m13s"
+t+123s   Ready=PendingHelmOperation        "pending for 2m13s"
+t+170s   Ready=PendingHelmOperation        "pending for 3m13s"
+t+234s   Ready=PendingHelmOperation        "pending for 4m14s"
+t+297s   label=adopt-probe-cwv9c7v6  Ready=Available  rev5 deployed
+```
+
+```
+rev3  12:07:51  pending-install  Upgrade complete   <- constructed
+rev4  12:13:05  superseded       Rollback to 3      <- grace expired, rollback
+rev5  12:13:06  deployed         Upgrade complete   <- then the upgrade
+```
+
+**Adopt → helm lock → grace → rollback → upgrade, exactly as predicted.**
+`Synced` stayed `True/ReconcileSuccess` throughout, so `PendingHelmOperation`
+on `Ready` is the only waiting signal — and it carries `pendingFor`, so it is
+self-describing.
+
+**Grace, measured:** `last_deployed` 12:07:51 → rollback 12:13:05 = **5m14s**,
+against a derived 5m default plus reconcile timing. Total to completion
+**4m57s**, inside the ~7m expected ceiling and well inside the 10m threshold at
+which core-provider says to call it wedged.
+
+So the derived figures hold against a live cluster with external state behind the
+compositions. The six blades were untouched throughout both probes.
