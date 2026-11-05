@@ -1677,3 +1677,49 @@ adoption is: **strip the label, then change the spec.**
 Teardown was finalizer-safe — CR first so cdc could still uninstall, then the
 CompositionDefinition. The generated CRD deleted cleanly with no `Terminating`
 hang, which is the hazard in [[krateo-cd-stuck-crd-finalizer]].
+
+### §9.18 — 0.13.26 promoted, verified on the axes §9.12 got wrong
+
+CompositionDefinition 0.13.25 → 0.13.26, applied 11:08:42Z, cdc at revision 82
+within 15s, `v0-13-26` served and the old version already pruned.
+
+Pre-flight was a server-side dry run: 6 BaremetalHost + 1 Secret, **no
+`NodeProvision`**, and exactly 12 changed spec fields — the hash and the userData
+line carrying it, on each of six. Per node class, matching the §9.9 calibration
+exactly.
+
+**Verified on the corrected axes, not the ones that produced a false clean:**
+
+| axis | before | after |
+|---|---|---|
+| per-CR conditions | 6× `ReconcileSuccess` | 6× `ReconcileSuccess` |
+| controller restarts | all 0 | all 0 |
+| helm revisions (children) | 62/71/75/52/62/31 | 63/72/76/53/63/32 (+1 each) |
+| blades | 6× `active/power on` | 6× `active/power on` |
+| `NodeProvision` CRs | none | none |
+
+The child revisions incrementing is the expected consequence — cdc re-applied
+each baremetal-host release with the new hash. **Controller restarts staying at
+zero is the distinction worth naming:** §9.12's restarts came from an *oasgen*
+re-render re-applying the generated rdc Deployments, which a composition chart
+promotion does not do. Two superficially similar operations, different blast
+radii, and the difference is only visible on an axis I added after being wrong.
+
+**The feature is live and the interlock is holding.** The live BaremetalHost CRs
+now carry real content hashes:
+
+```
+lab-ha-cp-blade01      dd8c9c77b71f7299    (bootstrap CP)
+lab-ha-cp-blade02/03   ae655ff2f0d7b4ac    (CP replicas)
+lab-ha-worker-04/05/06 e62df77bd404edbc    (workers)
+```
+
+Three distinct values for three node classes, as designed. And
+`deployed_configdrive_hash` is on **0 of 6** BaremetalNode CRs, so nothing can
+auto-undeploy: the bridge still refuses to mirror it, the guard still asserts
+that refusal, and `make check-examples` passes.
+
+So drift detection now has an honest input and remains deliberately disarmed.
+The remaining step is unchanged and is not a code change: every blade must
+republish under 0.13.26+ before the key can be mirrored, which happens on each
+blade's next deploy. [[rendered-vs-stored]].
