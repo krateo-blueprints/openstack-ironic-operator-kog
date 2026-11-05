@@ -264,6 +264,21 @@ check-mapping-sources:   # every request-direction fieldMapping reads from a fie
 	# means the screen broke, not that the repo healed.
 	python3 -I scripts/check-mapping-sources.py
 
+regenerate-crds:   # force oasgen to re-read the OAS and rewrite the generated CRDs
+	# oasgen does NOT regenerate an existing CRD when the provider is upgraded --
+	# Observe compares four hashes and none covers the generator version (#453).
+	# So a version that fixes a schema defect leaves every already-generated CRD
+	# exactly as the broken version wrote it. Upgrading is not the procedure;
+	# upgrading and then regenerating is, and `oasHash` is the hash that moves.
+	#
+	# The script VERIFIES the nudge took rather than reporting success because the
+	# commands ran: if oasHash does not move, it says the procedure failed and
+	# refuses to let you read the stored side as a verdict on the generator.
+	python3 -I scripts/regenerate-restdefinition-crds.py --kubectl "$(KUBECTL)"
+
+regenerate-crds-check:   # read the stored side only; change nothing
+	python3 -I scripts/regenerate-restdefinition-crds.py --kubectl "$(KUBECTL)" --check-only
+
 chart-host-pinned:   # restore the chart versions the LIVE CompositionDefinitions pin
 	# `chart-host` publishes whatever is in Chart.yaml today. The chartrepo pod has
 	# no volumes, so a cluster restart wipes everything it serves and leaves the
