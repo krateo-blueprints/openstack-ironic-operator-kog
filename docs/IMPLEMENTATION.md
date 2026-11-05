@@ -958,3 +958,61 @@ status source (exit 1).
 This is [[calibrate-before-trusting-a-zero]] applied to a static check rather
 than to a measurement, and it is the first screen here that answers a wire-level
 defect without touching the wire.
+
+### §9.8 — promoting 0.13.25, and what the pre-flight found
+
+0.13.25 is live: CompositionDefinition moved 0.13.23 → 0.13.25, cdc upgraded the
+release to revision 81, all six blades stayed `active` / `power on`, and no
+`NodeProvision` CR exists — so nothing reimaged. baremetal-host 0.6.2 needed no
+move; it had been live on all six since 2026-11-04 13:07, so this was a
+single-chart promotion and the parent/child lockstep hazard never applied.
+
+**The pre-flight found a defect review had not.** See §9.7's commit: the parent's
+`lifecycleApiVersion` fallback named `v0-5-6`, a version no longer served, and
+the field is optional with no schema default — so a fresh cluster CR would have
+wedged. Folded into 0.13.25 before promoting.
+
+**Two readings I had to discard before trusting anything.** `helm upgrade
+--dry-run` does not run `lookup`, so it rendered 147 lines, no BaremetalHosts,
+and a diff against it "showed" the six hosts being deleted. Only
+`--dry-run=server` renders the real thing (4088 lines). Separately a jsonpath on
+`status.provisionState` returned empty for all six blades; the field is
+`status.provision_state`, and reading the empty as data would have inverted the
+next conclusion.
+
+**The destructive path, and why it did not fire.** baremetal-host's drift
+detection compares the rendered configdrive hash — which is literally the parent
+chart version — against `node.extra.deployed_configdrive_hash`, and on a
+mismatch at `active` it auto-fires transition-undeploy: Ironic wipes the blade
+and redeploys. The hash moved 0.13.23 → 0.13.25 on all six, and the userData
+genuinely changed. So on the face of it, promoting reimages the whole HA cluster
+on one apply.
+
+It does not, because `deployed_configdrive_hash` is **absent** from every node's
+`spec.extra`, and v0.4.3 fires only when observed is non-empty. Verified by
+dry-running the child itself against the live cluster at both hashes and with the
+real new configdrive: identical inventories all three times (BaremetalNode,
+NodePower, 2 Ports), no `NodeProvision` rendered, and the BaremetalNode body
+unchanged but for the hash annotation. The new configdrive reaches Ironic only
+through a deploy transition, which an already-active node does not render.
+
+Worth being explicit that this safety is **accidental**: these blades are in the
+state the chart's own comment calls "will never auto-redeploy", because the
+publish step never populated the observed hash. Drift detection is inert on this
+fleet. A fleet where it worked would have been reimaged by this promotion, and
+nothing in the chart would have asked first.
+
+**The version-stripping window is real but short.** Both `v0-13-23` and
+`v0-13-25` were served at t+12s; by the next read `v0-13-23` was pruned and only
+`v0-13-25` served. The hazard in [[krateo-crd-version-stripping]] exists during
+that window, not after it.
+
+**Credential effect, measured on the rendered userData rather than reasoned.**
+0.13.25 removes the inline never-expiring management-cluster SA bearer token
+(1 → 0) that the dead `publish-workload-kubeconfig.sh` carried, and adds a third
+copy of the Keystone **admin** password inline (2 → 3), because every Ironic
+publisher authenticates the same way. Net clearly better — a scoped drain SA
+replaces an admin.conf publish — but three plaintext copies of the Keystone admin
+password ride in each blade's config drive. The right fix is a Keystone user
+scoped to the Ironic writes these scripts perform, not `admin`; that is a design
+change, not folded in here. **Open, unfixed, and not introduced by 0.13.25.**
