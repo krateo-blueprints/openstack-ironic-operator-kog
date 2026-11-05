@@ -285,6 +285,24 @@ regenerate-crds:   # force oasgen to re-read the OAS and rewrite the generated C
 regenerate-crds-check:   # read the stored side only; change nothing
 	python3 -I scripts/regenerate-restdefinition-crds.py --kubectl "$(KUBECTL)" --check-only
 
+check-oas-defaults:   # no OAS body schema may acquire the v1.26.x defaulting shape
+	# An OPTIONAL object property with a reachable defaulted descendant and no
+	# required properties of its own gains `default: {}` under plumbing v1.26.x.
+	# The apiserver materialises defaults on READ, and rdc sends top-level spec
+	# values whole, so a re-render would put a stanza on the wire that nobody
+	# authored -- arriving at the next re-render rather than at the upgrade.
+	#
+	# This is a STANDING check, not a one-off reading, because the exposure
+	# arrives with a NEW OAS document and because it is NOT REVERSIBLE: once a
+	# default is materialised, one unrelated write persists it to etcd, pinning
+	# the CRD back does not remove it, and the field is unowned in managedFields
+	# so `kubectl apply` will not prune it. Measured by the aruba fleet, which
+	# found the only field instances anyone has (2 of 35).
+	python3 -I scripts/check-defaulted-optional-objects.py
+
+check: check-examples check-mapping-sources check-oas-defaults   # every standing screen
+	@echo "all standing screens passed"
+
 chart-host-pinned:   # restore the chart versions the LIVE CompositionDefinitions pin
 	# `chart-host` publishes whatever is in Chart.yaml today. The chartrepo pod has
 	# no volumes, so a cluster restart wipes everything it serves and leaves the

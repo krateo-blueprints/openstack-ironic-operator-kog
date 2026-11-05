@@ -1915,3 +1915,43 @@ it says the change is **untested in the field**, not screened safe.
 Secondary checks, both 0 across all 8 documents: `maxProperties` (the bound
 silently dropped at v1.14.2 and kept at v1.26.1) and `type: [integer, string]`
 nodes (which become `x-kubernetes-int-or-string`). Same as the other fleet.
+
+**Addendum — a real witness was found, and the caveat on my own screen was the
+useful part.** I had reported that my walker does not follow
+`allOf`/`anyOf`/`oneOf`. oasgen checked theirs against that and found it walked
+only `properties`, `items` and `additionalProperties` — so it reported **0 on the
+only shape anyone has found in the field**. Their two controls had both passed,
+and both used inline `properties`, because both came from their own model of the
+shape. *A control drawn from your own model tests the implementation against the
+model, not against the world.*
+
+The field instance, from the aruba fleet — **2 of 35** — is
+`allOf: [{$ref: .../PropertiesDto}]` with `nullable: true`, and the defaulted
+payload is a property literally named `default`, documented *"Only one default vpc
+for region is admissible."* So the injection would make every Vpc CR whose author
+omitted `properties` assert a region-unique role.
+
+**So the bump is no longer untested — the field evidence exists and is positive**,
+which supersedes my "neither fleet is a witness" conclusion. It was right when
+written and is not now.
+
+I closed the same hole here: the screen resolves local `$ref` with cycle
+detection and merges composition members for **both** `properties` and
+`required`. Three new controls are drawn from the field shape rather than my
+model, and **one of them immediately caught a bug in my own fix** — `own_req`
+was still reading the node's own `required`, so a parent whose `required` arrives
+through `allOf` would have tripped falsely. 6 controls → 9, all passing, and the
+0 survives the stricter walker.
+
+**And the risk is not reversible, which is why this is now a standing check
+rather than a reading.** aruba measured that once a default is materialised, one
+unrelated write — an annotation, a label, any controller touch — persists it to
+etcd; **pinning the CRD back does not remove it**, and the field is unowned in
+`managedFields`, so `kubectl apply` will not prune it. An object created fresh at
+the same moment comes back clean while one that lived through the window keeps
+the value.
+
+For this fleet that means the exposure would arrive with a **new Ironic OAS
+document**, at the next re-render, and could not be undone by pinning. A one-off
+reading cannot catch that; `make check-oas-defaults` can, and `make check` now
+runs all three standing screens together.
