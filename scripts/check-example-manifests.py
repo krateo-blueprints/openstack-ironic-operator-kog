@@ -438,6 +438,26 @@ def self_test():
             failures.append("EXTRA_KEYS being reshaped away did not trip the "
                             "interlock guard -- it would verify nothing silently")
 
+    # Arm: the isolation check must catch each of the three real shapes found, and
+    # must NOT fire on a bare `helm package`, which never contacts a cluster.
+    with tempfile.TemporaryDirectory() as td:
+        cases_mk = [
+            ("\tkubectl apply -f x.yaml\n", True, "bare kubectl apply"),
+            ("\thelm upgrade --install foo ./chart\n", True, "bare helm upgrade"),
+            ("\t./scripts/create-ironic-oas-configmap.sh ns\n", True,
+             "OAS script without KUBECTL="),
+            ("\thelm package charts/foo -d dist/\n", False, "bare helm package"),
+            ("\t$(KUBECTL) apply -f x.yaml\n", False, "$(KUBECTL) apply"),
+            ("\t# kubectl apply -f x.yaml\n", False, "a commented-out kubectl"),
+        ]
+        for recipe, should_fire, label in cases_mk:
+            with open(os.path.join(td, "Makefile"), "w") as fh:
+                fh.write("target:\n" + recipe)
+            cases += 1
+            fired = bool(check_kubeconfig_isolation(td))
+            if fired != should_fire:
+                failures.append(f"isolation check {'missed' if should_fire else 'falsely fired on'} {label}")
+
     print(f"  self-test: {cases} cases")
     for f in failures:
         print(f"    FAIL {f}")
@@ -559,6 +579,51 @@ def check_configdrive_hash_interlock(root=None):
     return []
 
 
+# Helm subcommands that never contact a cluster, so a bare `helm` is fine.
+_HELM_LOCAL = ("package", "template", "lint", "repo", "show", "dependency", "create")
+
+
+def check_kubeconfig_isolation(root=None):
+    """No Makefile recipe may reach a cluster through bare `kubectl` or `helm`.
+
+    Every cluster call must go through $(KUBECTL) / $(HELMK), which carry
+    --kubeconfig local/kubeconfig.<cluster> and an explicit --context. A bare
+    command silently targets whatever ~/.kube/config points at -- so the failure
+    is not an error, it is a correct-looking apply against the wrong cluster, and
+    nothing reports it.
+
+    Found 2026-11-05 in four recipes, two of them `helm upgrade --install`
+    (baremetal-lifecycle and ironic itself), plus apply-oas invoking a script that
+    defaults KUBECTL to bare `kubectl` when the Makefile does not pass it. That
+    last one is the reason this checks for the script invocation too and not just
+    for the two binaries: a recipe can leak isolation without naming kubectl.
+    """
+    root = root or REPO
+    path = os.path.join(root, "Makefile")
+    rel = os.path.relpath(path, root)
+    problems = []
+    with open(path) as fh:
+        for n, line in enumerate(fh, 1):
+            if not line.startswith("\t"):
+                continue
+            body = line[1:].lstrip("-@").strip()
+            if body.startswith("#") or not body:
+                continue
+            first = body.split()[0] if body.split() else ""
+            if first == "kubectl":
+                problems.append(f"{rel}:{n}: bare `kubectl` -- use $(KUBECTL), which "
+                                f"pins --kubeconfig and --context: {body[:60]}")
+            elif first == "helm":
+                sub = body.split()[1] if len(body.split()) > 1 else ""
+                if sub not in _HELM_LOCAL:
+                    problems.append(f"{rel}:{n}: bare `helm {sub}` reaches a cluster "
+                                    f"-- use $(HELMK): {body[:60]}")
+            elif "create-ironic-oas-configmap.sh" in body and "KUBECTL=" not in body:
+                problems.append(f"{rel}:{n}: the OAS script defaults KUBECTL to bare "
+                                f"`kubectl`; pass KUBECTL=\"$(KUBECTL)\": {body[:60]}")
+    return problems
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--self-test", action="store_true",
@@ -576,10 +641,12 @@ def main():
         problems, seen = check(files, charts, config_kinds(), REPO, rmap)
     problems += check_lifecycle_fallback(charts)
     problems += check_configdrive_hash_interlock()
+    problems += check_kubeconfig_isolation()
     print(f"  checked {seen} resources across {len(files)} files "
           f"({len(snippets)} of them ```yaml fences in docs/) "
           f"+ the parent's child-apiVersion fallback "
-          f"+ the configdrive-hash interlock")
+          f"+ the configdrive-hash interlock "
+          f"+ Makefile kubeconfig isolation")
     if problems:
         print(f"  {len(problems)} problem(s):")
         for p in problems:

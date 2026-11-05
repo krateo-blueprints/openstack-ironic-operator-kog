@@ -1173,3 +1173,41 @@ than something to fold in here.
 
 **Status: unblocked but not applied.** Nothing here runs without creating a live
 credential, which is yours.
+
+### §9.11 — six Makefile recipes reached a cluster without the isolated kubeconfig
+
+Found while building regeneration tooling, not by looking for it. Six recipe
+lines called a cluster through bare `kubectl` / `helm`, so they targeted whatever
+`~/.kube/config` pointed at rather than `local/kubeconfig.<cluster>` with an
+explicit `--context`:
+
+```
+Makefile:44  ./scripts/create-ironic-oas-configmap.sh $(IRONIC_NS)
+Makefile:47  kubectl apply -f manifests/restdefinition-node.yaml
+Makefile:48  kubectl apply -f manifests/restdefinition-port.yaml
+Makefile:49  kubectl apply -f manifests/restdefinition-provision.yaml
+Makefile:52  helm upgrade --install baremetal-lifecycle ./charts/baremetal-lifecycle
+Makefile:77  helm upgrade --install ironic openstack-helm/ironic
+```
+
+Two of them install charts and one installs **Ironic itself**. Line 44 is the
+subtle one: it names no `kubectl` at all, but the script it calls does
+`KUBECTL="${KUBECTL:-kubectl}"` and the Makefile never passed it — so a recipe
+can leak isolation without mentioning either binary. That is why the screen
+checks the script invocation and not only the two command names.
+
+The failure mode is what makes this worth a guard rather than a fix: a bare
+command does not error. It succeeds, against the wrong cluster, and reports
+success. Nothing distinguishes that from working.
+
+`make check-examples` now fails on any recipe reaching a cluster without
+`$(KUBECTL)` / `$(HELMK)`, with six self-test arms (24 → 30 cases) covering each
+real shape plus two that must NOT fire — `helm package`, which never contacts a
+cluster, and a commented-out `kubectl`. Calibrated the way that actually counts:
+run against the **real pre-fix Makefile from git**, it reports all six.
+
+**Separately, `apply-restdef` omitted `restdefinition-power.yaml`** while the
+NodePower definition is live in the cluster — so the target left it at whatever
+an earlier apply had put there. Added, with a note that allocation,
+deploy-template and portgroup exist in `manifests/` but are not installed. Only
+four of the seven RestDefinitions are live: node, port, provision, power.

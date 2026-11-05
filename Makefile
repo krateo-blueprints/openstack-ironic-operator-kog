@@ -41,15 +41,21 @@ help:
 	@echo "  local-down     - Delete the local kind cluster"
 
 apply-oas:
-	./scripts/create-ironic-oas-configmap.sh $(IRONIC_NS)
+	KUBECTL="$(KUBECTL)" ./scripts/create-ironic-oas-configmap.sh $(IRONIC_NS)
 
 apply-restdef: apply-oas
-	kubectl apply -f manifests/restdefinition-node.yaml
-	kubectl apply -f manifests/restdefinition-port.yaml
-	kubectl apply -f manifests/restdefinition-provision.yaml
+	# All four definitions that are actually installed. restdefinition-power was
+	# missing here while being live in the cluster, so `apply-restdef` silently
+	# left the NodePower definition at whatever an earlier apply had put there.
+	# allocation / deploy-template / portgroup exist in manifests/ but are not
+	# installed; add them here when they are.
+	$(KUBECTL) apply -f manifests/restdefinition-node.yaml
+	$(KUBECTL) apply -f manifests/restdefinition-port.yaml
+	$(KUBECTL) apply -f manifests/restdefinition-provision.yaml
+	$(KUBECTL) apply -f manifests/restdefinition-power.yaml
 
 deploy-chart:
-	helm upgrade --install baremetal-lifecycle ./charts/baremetal-lifecycle \
+	$(HELMK) upgrade --install baremetal-lifecycle ./charts/baremetal-lifecycle \
 		-n $(HELM_NAMESPACE) --create-namespace
 
 package-chart:
@@ -74,7 +80,7 @@ validate-chart:
 
 # Deploy Ironic via openstack-helm (requires: helm repo add openstack-helm, rabbitmq/mariadb/memcached/keystone/glance/neutron)
 deploy-ironic:
-	helm upgrade --install ironic openstack-helm/ironic \
+	$(HELMK) upgrade --install ironic openstack-helm/ironic \
 		--namespace=$(IRONIC_NS) \
 		-f deploy/values/ironic-overrides.yaml
 
