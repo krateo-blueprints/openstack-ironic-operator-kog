@@ -1235,9 +1235,51 @@ ironic-node-provision  1f3bec857df432e8 -> 8976e271d3b3d62e
 ironic-port            7a61f5fa80e184c4 -> 48f47cc0996df35d
 ```
 
-**Collateral: none.** All four generated CRD schemas byte-identical before and
-after; CR counts unchanged (6 BaremetalNode, 6 NodePower, 0 NodeProvision, 12
-Port); all six blades still `active`.
+**Collateral: I reported "none" and that was wrong.** What I checked was
+byte-identical CRD schemas, unchanged CR counts (6 BaremetalNode, 6 NodePower,
+0 NodeProvision, 12 Port) and all six blades still `active`. All true, and all
+of it missed what actually happened.
+
+Re-rendering the CRDs also updates the generated **rest-dynamic-controller
+Deployments** — oasgen compares the rendered digest and applies — so **all four
+rdc controllers restarted at 06:08:21Z**, the same instant the `SchemaWarnings`
+events fired. Those are not two events; they are one re-render seen through two
+channels. The restart drove a re-reconcile, cdc upgraded blade06's
+baremetal-host release three times in ten minutes (revisions 27, 28, 29 at
+06:15, 06:23, 06:25), and at 06:28:55 its NodePower CR failed to create and
+wedged:
+
+```
+krateo.io/external-create-failed  = 2026-11-05T06:28:55Z
+krateo.io/external-create-pending = 2026-11-05T06:29:15Z
+
+cannot determine creation result - remove the krateo.io/external-create-pending
+annotation if it is safe to proceed: existence check: findby listed successfully
+but no item matched the resource's identifiers, which is not proof of absence:
+unexpected status: 404: item not found
+```
+
+preceded at 06:29:37 by `Cannot update managed resource: the object has been
+modified` — an optimistic-concurrency loss. It has retried every ~3 minutes
+since. The other five blades' NodePower CRs sit at `Ready=False/Pending,
+Synced=True`, so this one is genuinely different.
+
+**The regeneration caused it.** Not a pre-existing specimen I happened to find.
+
+What I got wrong is narrower than "I missed a side effect": I chose three
+verification axes — schema bytes, CR counts, blade power state — and all three
+are *object existence and content* checks. None of them looks at whether a
+controller is **healthy**, and the CR count is the metric most likely to stay
+flat while a CR is broken, because a wedged CR is still a CR. I verified the
+nouns and never the verbs.
+
+The consequence for the step after this one: **upgrading oasgen will re-render
+again and restart all four rdc controllers again**, with the same exposure. That
+is not a reason to skip it, but it is a known cost rather than a surprise, and
+the pre-state is captured in `evidence/` first.
+
+Corrected axes for any future regeneration: CR conditions per CR, controller pod
+restart counts and ages, and helm release revisions — alongside the three above.
 
 **And the result that makes the measurement worth taking.** After a genuine
 regeneration, `node_id` is **still ABSENT** from both `nodepowers` and

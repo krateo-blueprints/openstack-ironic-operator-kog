@@ -1,0 +1,62 @@
+{
+    "apiVersion": "baremetal.ogen.krateo.io/v1-0-0",
+    "kind": "NodePower",
+    "metadata": {
+        "annotations": {
+            "krateo.io/external-create-failed": "2026-11-05T06:28:55Z",
+            "krateo.io/external-create-pending": "2026-11-05T06:29:15Z",
+            "meta.helm.sh/release-name": "lab-ha-worker-blade06-vzx5x9vd",
+            "meta.helm.sh/release-namespace": "openstack"
+        },
+        "creationTimestamp": "2026-11-04T07:59:10Z",
+        "finalizers": [
+            "composition.krateo.io/finalizer"
+        ],
+        "generation": 1,
+        "labels": {
+            "app.kubernetes.io/instance": "lab-ha-worker-blade06-vzx5x9vd",
+            "app.kubernetes.io/managed-by": "Helm",
+            "app.kubernetes.io/name": "baremetal-host",
+            "baremetal.ogen.krateo.io/transition": "power",
+            "krateo.io/composition-group": "composition.krateo.io",
+            "krateo.io/composition-id": "adc1c5a8-1ad9-4762-b0b6-fb4ed0605dda",
+            "krateo.io/composition-installed-version": "v0-6-2",
+            "krateo.io/composition-kind": "BaremetalHost",
+            "krateo.io/composition-name": "lab-ha-worker-blade06",
+            "krateo.io/composition-namespace": "openstack",
+            "krateo.io/composition-resource": "baremetalhosts",
+            "krateo.io/krateo-namespace": "krateo-system",
+            "krateo.io/oas-version": "v1-0-0"
+        },
+        "name": "lab-ha-worker-blade06-vzx5x9vd-power",
+        "namespace": "openstack",
+        "resourceVersion": "1166621",
+        "uid": "7d1f5def-f333-45ad-a16e-d56f13ece76a"
+    },
+    "spec": {
+        "X-OpenStack-Ironic-API-Version": "1.109",
+        "configurationRef": {
+            "name": "ironic-endpoint",
+            "namespace": "openstack"
+        },
+        "target": "power on"
+    },
+    "status": {
+        "conditions": [
+            {
+                "lastTransitionTime": "2026-11-05T06:53:36Z",
+                "message": "cannot determine creation result - remove the krateo.io/external-create-pending annotation if it is safe to proceed: existence check: findby listed successfully but no item matched the resource's identifiers, which is not proof of absence: unexpected status: 404: item not found",
+                "reason": "ReconcileError",
+                "status": "False",
+                "type": "Synced"
+            },
+            {
+                "lastTransitionTime": "2026-11-05T06:53:36Z",
+                "message": "",
+                "reason": "Creating",
+                "status": "False",
+                "type": "Ready"
+            }
+        ]
+    }
+}
