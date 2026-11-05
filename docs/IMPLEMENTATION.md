@@ -1765,3 +1765,30 @@ observation. **A measurement with the wrong subject attached is worse than no
 measurement, because it is actionable.** Same family as
 [[reference_setup-cannot-produce-the-state]]: the finding was real and the frame
 around it was not.
+
+**Addendum — the write path, traced by oasgen (filed as #466).** My reading
+established that nothing *removes* the field. They asked what *writes* it, since
+a writer plus an undeclared schema would mean the apiserver prunes it — the
+silent-loss mechanism from §9.14. It is unwired in **three** independent places:
+
+1. **Nothing writes it.** `unstructured-runtime` v1.7.4 ships
+   `statusprojection.SetObservedGeneration` with **zero call sites** — not in
+   rest-dynamic-controller, not in the reconciler that ships it.
+2. **Nothing declares it.** The status builder mirrors the OAS response plus
+   `conditions`, no synthetic fields (what §9.19 measured).
+3. **Something already protects it.** `observe_restaction.go:177` skips
+   `conditions` and `observedGeneration` when composing a delegated observe
+   result — *"Never let the composed result clobber runtime-managed status
+   fields."* A guard on a field nothing manages, which the schema would prune
+   anyway.
+
+A writer waiting for a schema, a schema mirroring the response, and a guard
+protecting the writer's output. Each part is defensible alone; together they do
+nothing. [[reference_what-ships-that-nothing-exercises]] three times over in one
+feature.
+
+**The constraint for anyone fixing it: both halves are required and neither
+works alone.** Declaring the field alone adds a permanently empty one; calling
+the setter alone gets pruned by the schema. **Shipping either half reproduces
+today's symptom while looking fixed** — which is the failure mode most likely to
+close the issue.
