@@ -26,7 +26,7 @@
 # the same blade — failure → BH auto-redeploy via v0.4.0 baremetal-host
 # (Task #89) → fresh OS → fresh kubeadm join attempt.
 ---
-apiVersion: composition.krateo.io/v0-13-24
+apiVersion: composition.krateo.io/v0-13-26
 kind: KubernetesCluster
 metadata:
   name: ettore-ha
@@ -56,8 +56,9 @@ spec:
     password:   <KEYSTONE_ADMIN_PASSWORD>
     userDomain: Default
   managementCluster:
-    apiUrl:                  http://198.51.100.5:8443
-    serviceAccountName:      ettore-ha-cp-publisher
+    # apiUrl / serviceAccountName REMOVED in chart 0.13.25: the CP no longer
+    # talks to the management apiserver at all. The drain credential travels
+    # through Ironic's node.extra like every other published value.
     serviceAccountNamespace: openstack
   controlPlane:
     endpoint: "172.19.74.51:6443"

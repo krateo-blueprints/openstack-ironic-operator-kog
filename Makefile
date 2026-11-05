@@ -1,6 +1,7 @@
 # openstack-ironic-operator - Ironic + Krateo integration
 .PHONY: help apply-oas apply-restdef deploy-chart package-chart template-chart deploy-ironic validate-chart \
-        kind-up kind-down local-up local-down ironic-up ironic-down ironic-forward smoke-test kubeconfig
+        kind-up kind-down local-up local-down ironic-up ironic-image ironic-down ironic-forward smoke-test kubeconfig \
+        ironic-backend-direct ironic-backend-local
 
 HELM_NAMESPACE ?= default
 IRONIC_NS ?= openstack
@@ -30,9 +31,8 @@ help:
 	@echo "  composition-up - Host the chart + install the CompositionDefinition (real cdc path)"
 	@echo "  composition-demo - Create a BaremetalLifecycle instance; cdc walks it to active"
 	@echo "  bifrost-up     - Point the operator at a remote standalone Ironic (BIFROST_URL=http://host:6385)"
-	@echo "  bifrost-down   - Repoint the ironic Service back at the local fake Ironic"
-	@echo "  keystone-up    - Point the operator at a Keystone-protected Ironic (CLOUDS_FILE + OS_CLOUD)"
-	@echo "  keystone-down  - Repoint the ironic Service back at the local fake Ironic"
+	@echo "  ironic-backend-direct - Point Service/ironic at IRONIC_BACKEND_MANIFEST's endpoint"
+	@echo "  ironic-backend-local  - Point Service/ironic at the in-cluster fake Ironic"
 	@echo "Dedicated lab cluster (WireGuard tunnel runs in-cluster, host networking untouched):"
 	@echo "  lab-up         - Spin up a separate kind cluster with WG + Keystone proxy + operator"
 	@echo "  lab-down       - Delete the lab kind cluster"
@@ -41,15 +41,21 @@ help:
 	@echo "  local-down     - Delete the local kind cluster"
 
 apply-oas:
-	./scripts/create-ironic-oas-configmap.sh $(IRONIC_NS)
+	KUBECTL="$(KUBECTL)" ./scripts/create-ironic-oas-configmap.sh $(IRONIC_NS)
 
 apply-restdef: apply-oas
-	kubectl apply -f manifests/restdefinition-node.yaml
-	kubectl apply -f manifests/restdefinition-port.yaml
-	kubectl apply -f manifests/restdefinition-provision.yaml
+	# All four definitions that are actually installed. restdefinition-power was
+	# missing here while being live in the cluster, so `apply-restdef` silently
+	# left the NodePower definition at whatever an earlier apply had put there.
+	# allocation / deploy-template / portgroup exist in manifests/ but are not
+	# installed; add them here when they are.
+	$(KUBECTL) apply -f manifests/restdefinition-node.yaml
+	$(KUBECTL) apply -f manifests/restdefinition-port.yaml
+	$(KUBECTL) apply -f manifests/restdefinition-provision.yaml
+	$(KUBECTL) apply -f manifests/restdefinition-power.yaml
 
 deploy-chart:
-	helm upgrade --install baremetal-lifecycle ./charts/baremetal-lifecycle \
+	$(HELMK) upgrade --install baremetal-lifecycle ./charts/baremetal-lifecycle \
 		-n $(HELM_NAMESPACE) --create-namespace
 
 package-chart:
@@ -74,7 +80,7 @@ validate-chart:
 
 # Deploy Ironic via openstack-helm (requires: helm repo add openstack-helm, rabbitmq/mariadb/memcached/keystone/glance/neutron)
 deploy-ironic:
-	helm upgrade --install ironic openstack-helm/ironic \
+	$(HELMK) upgrade --install ironic openstack-helm/ironic \
 		--namespace=$(IRONIC_NS) \
 		-f deploy/values/ironic-overrides.yaml
 
@@ -101,7 +107,34 @@ kind-up:      # create the local kind cluster (idempotent; isolated kubeconfig)
 	@kind export kubeconfig --name $(KIND_CLUSTER) --kubeconfig $(KUBECONFIG_FILE) >/dev/null
 	@echo "kubeconfig=$(KUBECONFIG_FILE) context=$(KCTX)"
 
-ironic-up:    # deploy standalone Ironic (fake drivers, noauth) into the kind cluster
+IRONIC_IMAGE ?= quay.io/airshipit/ironic:2026.2-ubuntu_resolute
+
+ironic-image: # pull the Ironic image for the node's platform and side-load it
+	# The airshipit Ironic images are published for linux/amd64 ONLY. On an
+	# arm64 host, containerd inside the kind node refuses the pull with
+	# "no match for platform in manifest: not found", so `ironic-up` could
+	# never work on a fresh Apple Silicon cluster -- measured 2026-11-04.
+	#
+	# The long-lived lab cluster worked only because the image had been
+	# side-loaded by hand at some point, and NOTHING in this repo recorded
+	# that step. So the documented path was broken while a working cluster
+	# sat beside it as evidence that it was fine.
+	#
+	# --platform is explicit rather than inherited: on an arm64 host the
+	# daemon would otherwise pick the host platform and fail the same way.
+	docker pull --platform linux/amd64 $(IRONIC_IMAGE)
+	kind load docker-image $(IRONIC_IMAGE) --name $(KIND_CLUSTER)
+	# Assert it actually landed: `kind load` exits 0 on some no-ops, and a
+	# missing image here reappears later as an ImagePullBackOff that looks
+	# like a registry problem.
+	# Match repo AND tag. Grepping the repo alone would pass on any stale
+	# ironic tag already in the node -- an assertion that is true for free,
+	# which is the failure mode this assertion exists to prevent.
+	@docker exec $(KIND_CLUSTER)-control-plane crictl images \
+		| grep -q "$(word 1,$(subst :, ,$(IRONIC_IMAGE))).*$(word 2,$(subst :, ,$(IRONIC_IMAGE)))" \
+		|| { echo "FATAL: $(IRONIC_IMAGE) not present in $(KIND_CLUSTER) after kind load" >&2; exit 1; }
+
+ironic-up: ironic-image  # deploy standalone Ironic (fake drivers, noauth) into the kind cluster
 	$(KUBECTL) apply -f local/ironic-standalone.yaml
 	$(KUBECTL) -n $(IRONIC_NS) create configmap ironic-config \
 		--from-file=ironic.conf=local/ironic.conf --dry-run=client -o yaml | $(KUBECTL) apply -f -
@@ -213,6 +246,45 @@ check-examples:   # every manifest a reader is told to apply would actually appl
 	python3 scripts/check-example-manifests.py --self-test && \
 		python3 scripts/check-example-manifests.py
 
+check-mapping-sources:   # every request-direction fieldMapping reads from a field that EXISTS
+	# A mapping declares `inPath: X <- inCustomResource: spec.Y`, and declaring it
+	# has a side effect: oasgen removes X's spec property. So when Y == X the
+	# mapping's own declaration deletes the field it reads from, and the parameter
+	# resolves to nothing on the wire -- oasgen-provider #419, which cost five days
+	# here because the 406 it produced went unread.
+	#
+	# This reads the DOCUMENTS, so it answers before a single API call, and it is
+	# calibrated the hard way: it must find the two known-broken mappings and will
+	# exit NON-ZERO if it finds zero. The chain is merged -> tagged -> published ->
+	# deployed -> REGENERATED, and only the last rung decides what these documents
+	# render to. #421 is merged (8461460), in no released tag, the generator here
+	# is 0.50.0 -- and even once it ships, oasgen does not regenerate an existing
+	# CRD on upgrade (#453), so a deployed fix alone changes nothing. Verified on
+	# the stored side: node_id is ABSENT from both served CRD schemas. A clean run
+	# means the screen broke, not that the repo healed.
+	python3 -I scripts/check-mapping-sources.py
+
+regenerate-crds:   # force oasgen to re-read the OAS and rewrite the generated CRDs
+	# oasgen does NOT regenerate an existing CRD when the provider is upgraded --
+	# Observe compares four hashes and none covers the generator version (#453).
+	# So a version that fixes a schema defect leaves every already-generated CRD
+	# exactly as the broken version wrote it. Upgrading is not the procedure;
+	# upgrading and then regenerating is, and `oasHash` is the hash that moves.
+	#
+	# The script VERIFIES the nudge took rather than reporting success because the
+	# commands ran: if oasHash does not move, it says the procedure failed and
+	# refuses to let you read the stored side as a verdict on the generator.
+	#
+	# SCOPE: oasgen is implementing #453, which makes an upgrade regenerate by
+	# itself. From whatever release carries that, this stops being the mechanism
+	# and becomes the pre-#453 procedure, the opt-out path, and the recovery path
+	# for anyone already sitting on a stale schema. Check whether your build
+	# regenerates on its own first.
+	python3 -I scripts/regenerate-restdefinition-crds.py --kubectl "$(KUBECTL)"
+
+regenerate-crds-check:   # read the stored side only; change nothing
+	python3 -I scripts/regenerate-restdefinition-crds.py --kubectl "$(KUBECTL)" --check-only
+
 chart-host-pinned:   # restore the chart versions the LIVE CompositionDefinitions pin
 	# `chart-host` publishes whatever is in Chart.yaml today. The chartrepo pod has
 	# no volumes, so a cluster restart wipes everything it serves and leaves the
@@ -240,26 +312,46 @@ composition-demo: # create a BaremetalLifecycle instance; composition-dynamic-co
 # operator: a proxy authenticates with your clouds.yaml and the `ironic` Service is repointed
 # at it. The OAS server URL never changes.
 CLOUDS_FILE ?= clouds.yaml
-# Default cloud entry name used by wg-ironic-proxy / keystone-ironic-proxy when
+# Default cloud entry name used by the openstack client in lab tooling when
 # authenticating to the lab Keystone. Must match an entry in clouds.yaml.
 # `ironic-system` is the system-scoped admin entry used in the Ettore lab
 # (see reference_ironic-system-scope-clouds memory: project-scoped admin
 # returns 403 on baremetal:port:create at the deploy walk).
 OS_CLOUD ?= ironic-system
 
-keystone-up: # deploy the Keystone-auth proxy and point the `ironic` Service at your real Ironic
-	@test -f "$(CLOUDS_FILE)" || { echo "ERROR: set CLOUDS_FILE=<path to clouds.yaml> (got '$(CLOUDS_FILE)')"; exit 1; }
-	$(KUBECTL) -n $(IRONIC_NS) create secret generic ironic-clouds \
-		--from-file=clouds.yaml="$(CLOUDS_FILE)" --dry-run=client -o yaml | $(KUBECTL) apply -f -
-	$(KUBECTL) -n $(IRONIC_NS) create configmap keystone-ironic-proxy-script \
-		--from-file=keystone-ironic-proxy.py=scripts/keystone-ironic-proxy.py --dry-run=client -o yaml | $(KUBECTL) apply -f -
-	$(KUBECTL) apply -f manifests/keystone-ironic-proxy.yaml
-	$(KUBECTL) -n $(IRONIC_NS) set env deploy/keystone-ironic-proxy OS_CLOUD=$(OS_CLOUD)
-	$(KUBECTL) -n $(IRONIC_NS) rollout status deploy/keystone-ironic-proxy --timeout=150s
-	$(KUBECTL) -n $(IRONIC_NS) patch service ironic -p '{"spec":{"selector":{"app":"keystone-ironic-proxy"}}}'
-	@echo "ironic Service -> Keystone-auth proxy. Operator endpoint (OAS) unchanged."
+# --- What backs Service/ironic ---------------------------------------------------
+#
+# AGNOSTIC BY CONSTRUCTION, and verified rather than asserted on 2026-11-04:
+# every OAS document addresses `ironic.openstack.svc.cluster.local:6385`, and a
+# server-side render of kubernetes-cluster contains ZERO occurrences of
+# `wireguard`, `wg0`, `bifrost` or `wg-lab-route`. The operator and the charts
+# cannot tell whether Ironic is in-cluster, on another host, or across a VPN.
+# The only addresses in the render come from values (environment input) or are
+# derived at runtime -- the VIP the bootstrap node picks with `arping -D`.
+#
+# So "which Ironic" is a property of THIS layer only, and switching it is
+# ALWAYS EXPLICIT. There is deliberately no `*-down` target any more: the two
+# that existed patched `selector: {app: ironic}`, which selects the in-cluster
+# FAKE Ironic holding zero nodes. They read as "undo" and silently repointed
+# Krateo at an empty Ironic -- every node would appear to vanish, with nothing
+# erroring. Measured 2026-11-04.
+#
+# Point this at your own environment's manifest; nothing below assumes a VPN.
+IRONIC_BACKEND_MANIFEST ?= manifests/wg-lab-route.yaml
 
-keystone-down: # repoint the `ironic` Service back at the local fake Ironic
+ironic-backend-direct: # Service/ironic -> the endpoint IRONIC_BACKEND_MANIFEST declares (no proxy)
+	@test -f "$(IRONIC_BACKEND_MANIFEST)" || { echo "ERROR: IRONIC_BACKEND_MANIFEST not found: '$(IRONIC_BACKEND_MANIFEST)'"; exit 1; }
+	# selector:null FIRST. A Service with any selector makes Kubernetes manage
+	# its EndpointSlices, which silently overrides the hand-written one -- so
+	# applying the manifest while a selector is still set does nothing useful.
+	-$(KUBECTL) -n $(IRONIC_NS) patch service ironic --type=merge -p '{"spec":{"selector":null}}'
+	$(KUBECTL) apply -f $(IRONIC_BACKEND_MANIFEST)
+	@echo "ironic Service -> endpoint from $(IRONIC_BACKEND_MANIFEST). Operator endpoint (OAS) unchanged."
+	$(KUBECTL) -n $(IRONIC_NS) get endpointslice -l kubernetes.io/service-name=ironic \
+		-o custom-columns=NAME:.metadata.name,ENDPOINTS:.endpoints[*].addresses
+
+ironic-backend-local: # Service/ironic -> the in-cluster fake Ironic (local testing ONLY)
+	@echo "NOTE: this selects the in-cluster fake Ironic. It holds no real nodes."
 	$(KUBECTL) -n $(IRONIC_NS) patch service ironic -p '{"spec":{"selector":{"app":"ironic"}}}'
 
 # --- Remote standalone Ironic (Bifrost) -----------------------------------------
@@ -272,11 +364,18 @@ bifrost-up:   # deploy the in-cluster proxy and point `ironic` Service at a remo
 	$(KUBECTL) apply -f manifests/bifrost-proxy.yaml
 	$(KUBECTL) -n $(IRONIC_NS) rollout restart deploy/bifrost-proxy
 	$(KUBECTL) -n $(IRONIC_NS) rollout status deploy/bifrost-proxy --timeout=120s
+	# Setting ANY selector makes Kubernetes manage this Service's EndpointSlices,
+	# which overrides the hand-written one. That is intended here and it is also
+	# destructive: it replaces whatever backend was in place.
+	@echo "WARNING: this replaces the current Service/ironic backend. Restore afterwards with"
+	@echo "         make ironic-backend-direct   (or ironic-backend-local for the fake)"
 	$(KUBECTL) -n $(IRONIC_NS) patch service ironic -p '{"spec":{"selector":{"app":"bifrost-proxy"}}}'
 	@echo "ironic Service -> Bifrost at $(BIFROST_URL). Operator endpoint (OAS) unchanged."
 
-bifrost-down: # repoint the `ironic` Service back at the local fake Ironic
-	$(KUBECTL) -n $(IRONIC_NS) patch service ironic -p '{"spec":{"selector":{"app":"ironic"}}}'
+# bifrost-down REMOVED 2026-11-04: it patched `selector: {app: ironic}`, i.e. the
+# in-cluster fake Ironic. To leave bifrost mode, say which backend you want:
+#   make ironic-backend-direct   (the endpoint IRONIC_BACKEND_MANIFEST declares)
+#   make ironic-backend-local    (the in-cluster fake, for local testing)
 
 # --- Lab cluster: dedicated kind cluster with in-cluster WireGuard + Keystone proxy ----
 # A separate kind cluster (default name: ironic-lab) where the WireGuard tunnel runs inside the
@@ -284,26 +383,49 @@ bifrost-down: # repoint the `ironic` Service back at the local fake Ironic
 # `ironic.openstack.svc.cluster.local:6385` and traffic exits via WG to the real Ironic.
 LAB_CLUSTER ?= ironic-lab
 WG_CONF     ?= local/wireguard/ironic-lab.conf
+# NOTE: `managementCluster.apiUrl` (http://198.51.100.5:8443) has no listener.
+#
+# Measured 2026-11-04, and the ADDRESS is fine -- the LISTENER is gone:
+#   * the live wg-lab-route pod still holds 198.51.100.5/32 on wg0, and the
+#     lab routes 198.51.100.0/28 through the tunnel, so the address resolves
+#     and routes. (198.51.100.0/24 is RFC 5737 TEST-NET-2, chosen deliberately
+#     as an overlay range precisely because it is not routed on the internet.)
+#   * but :8443 was served by a `mgmt-api-proxy` kubectl-proxy SIDECAR inside
+#     the wg-ironic-proxy pod. wg-lab-route has ONE container and no such
+#     sidecar, and nothing listens on 8443 on that address.
+#
+# So the CP cloud-init's publish-workload-kubeconfig.sh POSTs into a refused
+# connection, retries 5 times, logs to the blade and exits 1 without gating
+# bring-up -- which is why the <cluster>-workload-kubeconfig Secret has never
+# existed. Tracked separately; do NOT "fix" it by reinstating the proxy, which
+# would overwrite Service/ironic and break the route to Ironic.
 # Project-scoped admin works at microversion 1.109+ for both node:create and port:create
 # (Ironic's RBAC matches the caller's project against node.owner). At 1.99 it returned 403
 # and needed a system_scope:all workaround; that's no longer the default.
-# OS_CLOUD default lives near the keystone-up target (currently `ironic-system`).
+# OS_CLOUD default is set above (currently `ironic-system`); lab tooling only.
 
-lab-tunnel-up: # apply the wg+proxy Deployment+Service + Secrets/ConfigMap (kubeconfig from caller)
+# v2026-11-04: applies wg-lab-route, NOT the removed wg-ironic-proxy.
+#
+# The proxy was superseded by the "zero proxies" work: wg-lab-route is a
+# DaemonSet that terminates the tunnel and publishes `ironic` and `keystone`
+# Services backed by EndpointSlices pointing straight at the lab gateway. Both
+# manifests declared `Service/ironic`, so this target used to OVERWRITE the
+# working Service with a selector aimed at proxy pods that no longer exist --
+# i.e. running it would have broken Krateo's only route to Ironic. Measured
+# 2026-11-04; the proxy manifest is deleted.
+lab-tunnel-up: # apply the WG route DaemonSet + the extra-bridge + their Secrets/ConfigMaps
 	@test -f "$(WG_CONF)" || { echo "ERROR: set WG_CONF (got '$(WG_CONF)')"; exit 1; }
 	@test -f "$(CLOUDS_FILE)" || { echo "ERROR: set CLOUDS_FILE (got '$(CLOUDS_FILE)')"; exit 1; }
-	$(KUBECTL) apply -f manifests/wg-ironic-proxy.yaml
+	$(KUBECTL) apply -f manifests/wg-lab-route.yaml
 	$(KUBECTL) -n $(IRONIC_NS) create secret generic ironic-wg-config \
 		--from-file=wg0.conf="$(WG_CONF)" --dry-run=client -o yaml | $(KUBECTL) apply -f -
 	$(KUBECTL) -n $(IRONIC_NS) create secret generic ironic-clouds \
 		--from-file=clouds.yaml="$(CLOUDS_FILE)" --dry-run=client -o yaml | $(KUBECTL) apply -f -
-	$(KUBECTL) -n $(IRONIC_NS) create configmap keystone-ironic-proxy-script \
-		--from-file=keystone-ironic-proxy.py=scripts/keystone-ironic-proxy.py --dry-run=client -o yaml | $(KUBECTL) apply -f -
 	$(KUBECTL) -n $(IRONIC_NS) create configmap ironic-extra-bridge-script \
 		--from-file=ironic-node-extra-bridge.py=scripts/ironic-node-extra-bridge.py --dry-run=client -o yaml | $(KUBECTL) apply -f -
-	$(KUBECTL) -n $(IRONIC_NS) set env deploy/wg-ironic-proxy OS_CLOUD=$(OS_CLOUD)
-	$(KUBECTL) -n $(IRONIC_NS) rollout restart deploy/wg-ironic-proxy
-	$(KUBECTL) -n $(IRONIC_NS) rollout status deploy/wg-ironic-proxy --timeout=300s
+	$(KUBECTL) apply -f manifests/ironic-extra-bridge.yaml
+	$(KUBECTL) -n $(IRONIC_NS) rollout status ds/wg-lab-route --timeout=300s
+	$(KUBECTL) -n $(IRONIC_NS) rollout status deploy/ironic-extra-bridge --timeout=300s
 
 lab-up: # bring up the lab cluster end-to-end (kind + Krateo + WG/proxy + RestDefinitions)
 	$(MAKE) KIND_CLUSTER=$(LAB_CLUSTER) KUBECONFIG_FILE=local/kubeconfig.$(LAB_CLUSTER) \

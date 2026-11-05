@@ -10,7 +10,12 @@ info:
 
 servers:
   - url: http://ironic.openstack.svc.cluster.local:6385
-    description: Ironic API (proxied by keystone-ironic-proxy)
+    # Deliberately says nothing about HOW this endpoint is reached. The Service
+    # may be backed by an in-cluster Ironic, by an EndpointSlice pointing across
+    # a VPN, or by a proxy -- that is environment configuration and this
+    # document must not encode it. The keystone-ironic-proxy this once named was
+    # deleted on 2026-11-04; auth now comes from the Configuration CR.
+    description: Ironic API
 
 # Applies the apiKey scheme defined under components. The token itself comes from the
 # <Kind>Configuration's spec.authentication.apiKey.tokenRef; where no tokenRef is
@@ -124,3 +129,4 @@ components:
         target_power_state:
           type: string
           readOnly: true
+# regeneration-nudge: 2026-11-05T07:04:19Z

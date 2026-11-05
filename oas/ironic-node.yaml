@@ -280,7 +280,7 @@ components:
             Available since API microversion 1.47.
 
     NodePatch:
-      # Fields KOG/RDC is allowed to PATCH in a Node. The keystone-ironic-proxy translates
+      # Fields KOG/RDC is allowed to PATCH in a Node. (The deleted keystone-ironic-proxy used to translate
       # the plain JSON body into RFC-6902 JSON-Patch before forwarding to Ironic, so this
       # schema only governs which fields KOG considers "updateable", NOT the wire format.
       # Add fields here as we want them to flow back from BaremetalNode CR spec -> Ironic.
@@ -311,3 +311,4 @@ components:
         automated_clean:
           type: boolean
           nullable: true
+# regeneration-nudge: 2026-11-05T07:04:19Z

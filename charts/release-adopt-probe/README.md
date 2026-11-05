@@ -60,6 +60,29 @@ Only the **adoption** path is affected: a fresh CR with no pre-existing release
 installs normally on 2.13.59, and every composition carrying a `release-name`
 label skips the new code entirely.
 
+## v0.1.2: the fixture itself could never converge
+
+`templates/cm.yaml` rendered the release revision into its own output. That
+makes the chart **non-idempotent**: every render differs from the live object,
+so Observe sees drift, the self-heal upgrades, the revision changes, and the
+next render differs again. Forever.
+
+Measured on 2026-11-04 while taking a reading on cdc 2.13.62: the release had
+climbed to **revision 154 and was still rising at about 2 per minute**, with
+every condition reporting healthy — `Synced=True`, `Ready=True`,
+`ChartRenderable=True`, and zero errors in the controller log.
+
+**A composition that never settles while reporting perfectly healthy is
+indistinguishable from a working one unless you check revision STABILITY over
+time.** A conditions check passes it. I was composing a message reporting the
+churn as a cdc defect; reading my own template first is what caught it.
+
+Fixed in 0.1.2 by removing the field. Asserted: the render is byte-identical
+across two invocations, and on the convergent chart the release holds at
+revision 1 over 90 seconds.
+
+Do not add anything to the rendered output that changes per render.
+
 ## Two traps worth inheriting
 
 - **`values.schema.json` is mandatory.** Without it the CD fails with

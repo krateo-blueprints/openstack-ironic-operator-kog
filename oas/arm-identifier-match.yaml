@@ -1,0 +1,139 @@
+# OAS for the oasgen-provider identifier-matching arms (oasgen-provider#439).
+#
+# Purpose: measure what `isItemMatch` does when a kind declares TWO identifiers,
+# one of which is a parent reference, under each identifiersMatchPolicy.
+#
+# TWO constraints shaped this document, both measured on 2026-11-04 rather than
+# assumed, and the second one invalidated the first design entirely.
+#
+# 1. Ironic enforces GLOBALLY UNIQUE node names, so "two objects sharing an
+#    identifier value" is impossible on `name`. The collision has to be built
+#    on a NON-UNIQUE field. That makes the hazard stronger than the issue
+#    describes, not weaker: no amount of vendor-side name uniqueness helps.
+#
+# 2. Ironic's node COLLECTION is abridged. `GET /v1/nodes` returns exactly
+#    seven fields per item -- instance_uuid, links, maintenance, name,
+#    power_state, provision_state, uuid -- and NOTHING else, even at
+#    microversion 1.109 with include_children=true. `resource_class` and
+#    `parent_node` are absent from every item, while the per-node DETAIL
+#    endpoint carries both. Verified with that detail call as the control.
+#
+#    findby reads the COLLECTION. `isItemMatch` therefore cannot compare any
+#    identifier outside those seven, whatever the CR carries -- so the first
+#    version of this fixture (identifiers resource_class + parent_node)
+#    measured nothing at all, in every arm, and looked like "AND is unusable".
+#
+#    CONSEQUENCE FOR oasgen#439, and it is stronger than the issue's framing:
+#    on Ironic, per-parent uniqueness via AND is not merely strict -- it is
+#    IMPOSSIBLE, because `parent_node` never reaches the matcher.
+#
+# So the collision field here is `maintenance` (non-unique, settable on create,
+# and genuinely present in the collection) and the unique one is `name`.
+#
+# Both identifiers are declared in the request BODY on purpose. A path-param or
+# mapping-only declaration SUPPRESSES the generated spec property
+# (oasgen-provider#419), and `isInResource` compares a response value against
+# spec.<path> then status.<path> -- so a suppressed property makes the
+# comparison unevaluable, which is the OTHER way to measure nothing.
+
+openapi: 3.0.3
+info:
+  title: Ironic node subset for identifier-match arms
+  version: 1.0.0
+
+servers:
+  - url: http://ironic.openstack.svc.cluster.local:6385
+
+paths:
+  /v1/nodes:
+    get:
+      summary: List nodes
+      operationId: listNodes
+      parameters:
+        - $ref: '#/components/parameters/X-OpenStack-Ironic-API-Version'
+      responses:
+        '200':
+          description: List of nodes
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  nodes:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Node'
+    post:
+      summary: Create node
+      operationId: createNode
+      parameters:
+        - $ref: '#/components/parameters/X-OpenStack-Ironic-API-Version'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NodeCreate'
+      responses:
+        '201':
+          description: Created node
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Node'
+
+  # Added 2026-11-04 for the DELETE-path arm (oasgen#444 candidate). Without a
+  # `delete` verb declared, deleting the CR fires no external call at all and
+  # the test is vacuous -- it would "pass" by doing nothing.
+  /v1/nodes/{uuid}:
+    delete:
+      summary: Delete node
+      operationId: deleteNode
+      parameters:
+        - $ref: '#/components/parameters/X-OpenStack-Ironic-API-Version'
+        - name: uuid
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Deleted
+
+components:
+  parameters:
+    # Without this Ironic negotiates its MINIMUM microversion (1.1), and both
+    # `parent_node` (>= 1.83) and `include_children` (>= 1.83) silently stop
+    # working -- a 406 on every Observe. Measured on this project 2026-11-04.
+    X-OpenStack-Ironic-API-Version:
+      name: X-OpenStack-Ironic-API-Version
+      in: header
+      required: true
+      schema:
+        type: string
+        default: '1.109'
+  schemas:
+    # Only fields the COLLECTION actually returns. Declaring more would create
+    # spec properties the matcher can never evaluate.
+    Node:
+      type: object
+      properties:
+        uuid:
+          type: string
+        name:
+          type: string
+        maintenance:
+          type: boolean
+        provision_state:
+          type: string
+        power_state:
+          type: string
+    NodeCreate:
+      type: object
+      properties:
+        name:
+          type: string
+        driver:
+          type: string
+        maintenance:
+          type: boolean

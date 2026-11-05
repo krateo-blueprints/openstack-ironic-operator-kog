@@ -12,7 +12,9 @@ into the Node CR's spec.extra, so this sidecar does it.
 
 Loop:
   - List Node CRs (KOG primitives) in our namespace
-  - For each, GET /v1/nodes/<uuid> from the local keystone-ironic-proxy
+  - For each, GET /v1/nodes/<uuid> from the in-cluster `ironic` Service (whatever
+    backs it: local Ironic, a remote one across a VPN, or a proxy -- this script
+    does not know and must not care)
     (the existing container in the same pod, no extra auth needed)
   - If Ironic's `extra.kubeadm_join` differs from the CR's
     spec.extra.kubeadm_join: PATCH the CR with the new extra
@@ -83,7 +85,13 @@ INTERVAL = int(os.environ.get("BRIDGE_INTERVAL", "10"))
 # rather than a content hash. Mirroring it would arm a re-image of every
 # blade on every chart bump. Make it a real content hash first; until then
 # leaving it unmirrored is what keeps the gate shut.
-EXTRA_KEYS = ("kubeadm_join", "cert_key", "etcd_ip", "cp_endpoint", "cp_stage")
+# v2026-11-04: drain_kubeconfig added. The bridge mirrors an EXPLICIT
+# allow-list because a whole-map replay once deleted the control-plane VIP --
+# so a new node.extra key that is not listed here is published by the blade and
+# then never reaches the CR, which is exactly how cp_endpoint and etcd_ip were
+# silently lost for hours.
+EXTRA_KEYS = ("kubeadm_join", "cert_key", "etcd_ip", "cp_endpoint", "cp_stage",
+              "drain_kubeconfig")
 
 HELM_RELEASE_SECRET_PREFIX = "sh.helm.release.v1."
 # Don't reap a KOG primitive whose helm-release-name doesn't match a

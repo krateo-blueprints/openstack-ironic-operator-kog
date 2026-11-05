@@ -1,6 +1,6 @@
 # One drain Job per worker in spec.workers.removed[]. Each Job mounts
-# the workload-kubeconfig Secret (published by the CP's
-# publish-workload-kubeconfig.sh) and runs `kubectl drain` against the
+# the drain-scoped kubeconfig Secret (published by the CP's
+# publish-drain-kubeconfig.sh, via Ironic's node.extra) and runs `kubectl drain` against the
 # workload apiserver.
 #
 # Gates:

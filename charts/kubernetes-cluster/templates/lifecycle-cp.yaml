@@ -116,7 +116,7 @@ spec:
       {{- $nd | nindent 6 }}
     {{- end }}
   {{- end }}
-  deployedConfigDriveHash: {{ include "kubernetes-cluster.deployedConfigDriveHash" . | quote }}
+  deployedConfigDriveHash: {{ include "kubernetes-cluster.deployedConfigDriveHash" (dict "ctx" . "builder" "kubernetes-cluster.cpUserData") | quote }}
   configurationRef:
     {{- toYaml .Values.configurationRef | nindent 4 }}
 {{- end }}

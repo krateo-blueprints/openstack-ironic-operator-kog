@@ -96,7 +96,7 @@ spec:
     networkData:
       {{- $nd | nindent 6 }}
     {{- end }}
-  deployedConfigDriveHash: {{ include "kubernetes-cluster.deployedConfigDriveHash" $ | quote }}
+  deployedConfigDriveHash: {{ include "kubernetes-cluster.deployedConfigDriveHash" (dict "ctx" $ "builder" "kubernetes-cluster.cpReplicaUserData") | quote }}
   {{- end }}
   configurationRef:
     {{- toYaml $.Values.configurationRef | nindent 4 }}

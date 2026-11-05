@@ -1,0 +1,102 @@
+{
+    "apiVersion": "v1",
+    "items": [
+        {
+            "apiVersion": "v1",
+            "count": 1,
+            "eventTime": null,
+            "firstTimestamp": "2026-11-05T06:08:21Z",
+            "involvedObject": {
+                "apiVersion": "ogen.krateo.io/v1alpha1",
+                "kind": "RestDefinition",
+                "name": "ironic-node-power",
+                "namespace": "openstack",
+                "resourceVersion": "1048011",
+                "uid": "c5320928-a464-4136-8551-25d59e40b8e6"
+            },
+            "kind": "Event",
+            "lastTimestamp": "2026-11-05T06:08:21Z",
+            "message": "2 schema warning(s) while generating this CRD; the CRD was still generated, but a field named here may never resolve at runtime: generation error at identifiers.node_id: status field 'node_id' not found in response, defaulting to string; validation error at : could not extract schema for action 'create' to compare: no suitable response schema found for action 'create'",
+            "metadata": {
+                "creationTimestamp": "2026-11-05T06:08:21Z",
+                "name": "ironic-node-power.18e5112aa676b772",
+                "namespace": "openstack",
+                "resourceVersion": "1163064",
+                "uid": "866d30e9-7149-4ca3-b161-1dff7665cf9d"
+            },
+            "reason": "SchemaWarnings",
+            "reportingComponent": "managed/restdefinition.ogen.krateo.io",
+            "reportingInstance": "",
+            "source": {
+                "component": "managed/restdefinition.ogen.krateo.io"
+            },
+            "type": "Warning"
+        },
+        {
+            "apiVersion": "v1",
+            "count": 1,
+            "eventTime": null,
+            "firstTimestamp": "2026-11-05T06:08:21Z",
+            "involvedObject": {
+                "apiVersion": "ogen.krateo.io/v1alpha1",
+                "kind": "RestDefinition",
+                "name": "ironic-node-provision",
+                "namespace": "openstack",
+                "resourceVersion": "1047129",
+                "uid": "adef8d41-b55b-4a25-bbbf-74cf5a7eb813"
+            },
+            "kind": "Event",
+            "lastTimestamp": "2026-11-05T06:08:21Z",
+            "message": "2 schema warning(s) while generating this CRD; the CRD was still generated, but a field named here may never resolve at runtime: generation error at identifiers.node_id: status field 'node_id' not found in response, defaulting to string; validation error at : could not extract schema for action 'create' to compare: no suitable response schema found for action 'create'",
+            "metadata": {
+                "creationTimestamp": "2026-11-05T06:08:21Z",
+                "name": "ironic-node-provision.18e5112aafd95cc1",
+                "namespace": "openstack",
+                "resourceVersion": "1163083",
+                "uid": "600849b4-0372-4b65-93a2-c1f5b79d6a96"
+            },
+            "reason": "SchemaWarnings",
+            "reportingComponent": "managed/restdefinition.ogen.krateo.io",
+            "reportingInstance": "",
+            "source": {
+                "component": "managed/restdefinition.ogen.krateo.io"
+            },
+            "type": "Warning"
+        },
+        {
+            "apiVersion": "v1",
+            "count": 1,
+            "eventTime": null,
+            "firstTimestamp": "2026-11-05T06:08:21Z",
+            "involvedObject": {
+                "apiVersion": "ogen.krateo.io/v1alpha1",
+                "kind": "RestDefinition",
+                "name": "ironic-port",
+                "namespace": "openstack",
+                "resourceVersion": "1047147",
+                "uid": "e61098a7-2a82-4b77-a8c6-a6f4163869d3"
+            },
+            "kind": "Event",
+            "lastTimestamp": "2026-11-05T06:08:21Z",
+            "message": "2 schema warning(s) while generating this CRD; the CRD was still generated, but a field named here may never resolve at runtime: generation error: field 'X-Ironic-Endpoint' set in configurationFields not found in schema; generation error: field 'uuid' set in excludedSpecFields not found in schema",
+            "metadata": {
+                "creationTimestamp": "2026-11-05T06:08:21Z",
+                "name": "ironic-port.18e5112a9c202f3c",
+                "namespace": "openstack",
+                "resourceVersion": "1163045",
+                "uid": "b4229c5f-20d6-4644-98fa-fa2ca77a6cef"
+            },
+            "reason": "SchemaWarnings",
+            "reportingComponent": "managed/restdefinition.ogen.krateo.io",
+            "reportingInstance": "",
+            "source": {
+                "component": "managed/restdefinition.ogen.krateo.io"
+            },
+            "type": "Warning"
+        }
+    ],
+    "kind": "List",
+    "metadata": {
+        "resourceVersion": ""
+    }
+}

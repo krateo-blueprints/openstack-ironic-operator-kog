@@ -54,7 +54,7 @@ $KCTL -n openstack get node.baremetal.ogen.krateo.io metal-a -o jsonpath='{.stat
 
 # node state in Ironic (walks enroll -> manageable -> available -> active):
 $KCTL -n openstack exec deploy/ironic -c ironic -- \
-  curl -s -H "X-OpenStack-Ironic-API-Version: 1.81" http://127.0.0.1:6385/v1/nodes/metal-a \
+  curl -s -H "X-OpenStack-Ironic-API-Version: 1.109" http://127.0.0.1:6385/v1/nodes/metal-a \
   | jq -r .provision_state
 # -> active
 ```

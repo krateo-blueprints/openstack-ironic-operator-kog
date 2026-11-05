@@ -1,0 +1,141 @@
+# Identifier-matching arms for oasgen-provider#439.
+#
+# THREE kinds, so the arms cannot contaminate each other through shared
+# generated state, and so the pipeline is proven before any OR/AND claim:
+#
+#   ArmBase -- ONE identifier (name). POSITIVE CONTROL: proves the whole path
+#              works -- microversion stamped, include_children sent, collection
+#              parsed, comparison evaluated, status populated. Without this, a
+#              no-match in the OR/AND arms is indistinguishable from a broken
+#              fixture, which is exactly how the first version of this fixture
+#              wasted an hour reporting "AND is unusable".
+#   ArmOr   -- identifiersMatchPolicy OMITTED -> the OR default
+#   ArmAnd  -- identifiersMatchPolicy: AND
+#
+# Omission, not an invalid string: identifiersMatchPolicy carries a
+# +kubebuilder:validation:Enum=AND;OR, so a typo is rejected by the apiserver
+# and can never reach the matcher. An arm feeding it a bad value would measure
+# an input that cannot occur.
+#
+# `maintenance` is the non-unique collision field and `name` the unique one.
+# Both are among the seven fields Ironic's node COLLECTION actually returns;
+# anything outside those seven can never be compared by findby at all.
+---
+apiVersion: ogen.krateo.io/v1alpha1
+kind: RestDefinition
+metadata:
+  name: arm-base
+  namespace: openstack
+spec:
+  oasPath: configmap://openstack/arm-identifier-oas/arm.yaml
+  resourceGroup: arms.ogen.krateo.io
+  resource:
+    kind: ArmBase
+    identifiers:
+      - name
+    additionalStatusFields:
+      - uuid
+      - name
+      - provision_state
+    verbsDescription:
+      - action: findby
+        method: GET
+        path: /v1/nodes
+        queries:
+          - name: include_children
+            value: "true"
+      - action: create
+        method: POST
+        path: /v1/nodes
+      # uuid comes from STATUS, which holds the ADOPTED object's identifier.
+      # That is the whole question: does a wrong adoption delete the wrong node?
+      - action: delete
+        method: DELETE
+        path: /v1/nodes/{uuid}
+        # Without this mapping, oasgen makes the path parameter a REQUIRED spec
+        # property and every CR is rejected with `spec.uuid: Required value` --
+        # measured 2026-11-04. A kind whose identity is DISCOVERED by findby
+        # cannot state its uuid up front, so declaring a delete verb by uuid
+        # makes the kind uncreatable.
+        #
+        # The mapping also SUPPRESSES that spec property (oasgen#419), which is
+        # exactly what is wanted here, and resolves the path value from STATUS
+        # -- i.e. from the object findby ADOPTED. That is the whole question.
+        requestFieldMapping:
+          - inPath: uuid
+            inCustomResource: status.uuid
+---
+apiVersion: ogen.krateo.io/v1alpha1
+kind: RestDefinition
+metadata:
+  name: arm-or
+  namespace: openstack
+spec:
+  oasPath: configmap://openstack/arm-identifier-oas/arm.yaml
+  resourceGroup: arms.ogen.krateo.io
+  resource:
+    kind: ArmOr
+    identifiers:
+      - maintenance
+      - name
+    additionalStatusFields:
+      - uuid
+      - name
+      - provision_state
+    verbsDescription:
+      - action: findby
+        method: GET
+        path: /v1/nodes
+        queries:
+          - name: include_children
+            value: "true"
+        # identifiersMatchPolicy DELIBERATELY OMITTED -> OR
+      - action: create
+        method: POST
+        path: /v1/nodes
+      # uuid comes from STATUS, which holds the ADOPTED object's identifier.
+      # That is the whole question: does a wrong adoption delete the wrong node?
+      - action: delete
+        method: DELETE
+        path: /v1/nodes/{uuid}
+        # Without this mapping, oasgen makes the path parameter a REQUIRED spec
+        # property and every CR is rejected with `spec.uuid: Required value` --
+        # measured 2026-11-04. A kind whose identity is DISCOVERED by findby
+        # cannot state its uuid up front, so declaring a delete verb by uuid
+        # makes the kind uncreatable.
+        #
+        # The mapping also SUPPRESSES that spec property (oasgen#419), which is
+        # exactly what is wanted here, and resolves the path value from STATUS
+        # -- i.e. from the object findby ADOPTED. That is the whole question.
+        requestFieldMapping:
+          - inPath: uuid
+            inCustomResource: status.uuid
+---
+apiVersion: ogen.krateo.io/v1alpha1
+kind: RestDefinition
+metadata:
+  name: arm-and
+  namespace: openstack
+spec:
+  oasPath: configmap://openstack/arm-identifier-oas/arm.yaml
+  resourceGroup: arms.ogen.krateo.io
+  resource:
+    kind: ArmAnd
+    identifiers:
+      - maintenance
+      - name
+    additionalStatusFields:
+      - uuid
+      - name
+      - provision_state
+    verbsDescription:
+      - action: findby
+        method: GET
+        path: /v1/nodes
+        queries:
+          - name: include_children
+            value: "true"
+        identifiersMatchPolicy: AND
+      - action: create
+        method: POST
+        path: /v1/nodes
