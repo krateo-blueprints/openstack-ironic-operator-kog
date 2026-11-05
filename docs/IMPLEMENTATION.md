@@ -1399,3 +1399,78 @@ would not have needed to exist. Captured in `evidence/` before expiry.
 `scripts/render-diff-oasgen.py` performs the comparison. The eight errors are
 real and unfixed: removing the dead `excludedSpecFields` and `configurationFields`
 entries is correct but changes generated output, so it is a separate change.
+
+### §9.14 — the blade06 NodePower wedge, measured end to end
+
+My regeneration (§9.12) restarted the four rdc controllers, which re-entered the
+create path for `lab-ha-worker-blade06-vzx5x9vd-power` and wedged it. The chain
+is fully measured, and every step of it is a known defect behaving correctly.
+
+**1. `spec.node_id` is absent from all six NodePower CRs.** The chart renders it
+(`transition-power.yaml:44`), but the generated CRD has no such property, so the
+apiserver **prunes it on write**. That is oasgen #419's real operational cost in
+this fleet: not a cosmetic schema gap, a silently dropped field.
+
+**2. rdc refused to send the request — 54 times, 06:14:26 → 06:29:32:**
+
+```
+refusing to request /v1/nodes/{node_id}/states/power: unresolved path
+parameter(s) [node_id] -- the value is absent, so this request would address
+the literal template rather than a resource
+```
+
+The 0.48+ path-param guard working exactly as designed. **No request reached
+Ironic, so the blade was never touched.**
+
+**3. The existence check then could not prove absence — 12 times, 06:24:39 →
+06:56:47:**
+
+```
+existence check: findby listed successfully but no item matched the resource's
+identifiers, which is not proof of absence: unexpected status: 404: item not found
+```
+
+rdc refusing to decide, on purpose, because deciding wrongly duplicates a live
+resource.
+
+**4. Ironic, asked directly:**
+
+```
+blade06  uuid=2f05176e-...  provision_state=active  power_state=power on
+         target_power_state=None  last_error=None
+```
+
+**The resource reported as `404: item not found` exists and is in the desired
+state.** The 404 is not Ironic's answer about blade06 — no request was made to
+its power endpoint at all — and it is wrong about the world.
+
+That is the dangerous part, and it is a message defect rather than a logic one.
+The prose says *"not proof of absence"*; the most legible token in the same
+string says *"404: item not found"*. The message gates a hard-to-reverse manual
+intervention — clearing `krateo.io/external-create-pending` — and its most
+quotable fragment argues for the opposite of its own prose. An operator who
+trusts it duplicates a live resource on physical hardware.
+
+**Why only blade06.** All six CRs carry `external-create-pending`. The five
+healthy ones *also* carry `external-create-succeeded` from an earlier create;
+blade06 carries `external-create-failed` instead. So the differentiator is not
+the pending annotation — it is whether a create was ever confirmed. The pruned
+`node_id` is universal; needing the create path again is what blade06 had and
+the others did not. **This falsified my first hypothesis**, which was that the
+pruned identifier caused the wedge directly: five CRs with the identical pruned
+spec are fine.
+
+So #419 does not cause the wedge. It makes the wedge **unrecoverable**, which is
+worse: the retry path can never succeed, because the value it needs was pruned
+before it ever reached the CR.
+
+**Prediction, recorded before the upgrade so it can be wrong.** Restoring
+`spec.node_id` via #421 should let the chart's value land, the guard resolve, the
+create proceed, and the wedge clear — with exactly one PUT of `target: power on`
+against a blade already powered on. If it clears, that is attributable to #421,
+**not** #442: `findItemInList` propagating a comparison error would change the
+message, not unblock a request that was never sent.
+
+Evidence captured in `evidence/` first, because the upgrade destroys the
+pre-state: the wedged CR, the 69 rdc log lines, and the three `SchemaWarnings`
+events.
