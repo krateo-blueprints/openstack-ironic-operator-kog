@@ -1474,3 +1474,66 @@ message, not unblock a request that was never sent.
 Evidence captured in `evidence/` first, because the upgrade destroys the
 pre-state: the wedged CR, the 69 rdc log lines, and the three `SchemaWarnings`
 events.
+
+### §9.15 — #421 confirmed, the serving window is sub-quarter-second, and my prediction was wrong
+
+Upgraded oasgen to a locally built `main@57573a5` image (Deployment image swap,
+`--debug` preserved, rollback `:0.50.0` recorded), then ran `make regenerate-crds`.
+
+**#421 is confirmed.** Stored side, before and after, same nudge:
+
+| CRD | field | 0.50.0 | main@57573a5 |
+|---|---|---|---|
+| `nodepowers` | `spec.node_id` | ABSENT | **PRESENT, required=True** |
+| `nodeprovisions` | `spec.node_id` | ABSENT | **PRESENT, required=True** |
+| `ports` | `spec.uuid` | ABSENT | ABSENT (unchanged) |
+
+Attributable, because §9.12 ran the identical nudge against 0.50.0 and `node_id`
+stayed ABSENT. The flip is the generator and nothing else. `ports.uuid`
+unchanged is the #456 arm — though per §9.13 that arm is vacuous here anyway.
+
+**Serving window (oasgen #446): 0.0s, meaning below resolution.** `SCHEMA` (the
+CRD says so) and `HONOURED` (a server-side dry-run apply is accepted) flipped in
+the **same sample**, at t+176.28s after the nudge. 786 samples over 176s is
+~0.22s per sample, so on this cluster the gap between a generated CRD being
+updated and the apiserver honouring the new schema is **under a quarter second**.
+The 176s is time-to-regenerate, not the window.
+
+#### The prediction, and why it failed
+
+Recorded in §9.14: #421 restores `spec.node_id`, the guard resolves, the create
+proceeds, blade06 clears. **It did not clear.** All six NodePower CRs still read
+`node_id=None`, and blade06 still holds `external-create-failed` with
+`Synced=False/ReconcileError`.
+
+The schema now accepts the field. The CRs do not carry it:
+
+```
+helm get manifest lab-ha-worker-blade06-vzx5x9vd  ->  node_id: "blade06"
+live CR spec.node_id                              ->  None
+```
+
+**The value was pruned at write time, and fixing the schema does not retroactively
+repopulate it.** Helm's stored manifest was always correct; the apiserver dropped
+the field on the way in, and nothing has rewritten the CR since. The schema fix
+makes a *future* write succeed; it does nothing for a write that already
+happened.
+
+This is [[rendered-vs-stored]] for the third time in a day — the renderer is
+fixed and the store disagrees — and I walked into it hours after writing that
+note. The note says "read the far side before arming a comparison". I read the
+far side for the blades' configdrive hash and then failed to ask the same
+question of the CR I was predicting about. **Knowing the shape of an error does
+not make you check for it; only checking does.**
+
+It also corrects something I would otherwise have let a peer publish: a CR wedged
+before #421 does **not** become recoverable merely by upgrading the generator and
+re-rendering the kind. The schema becomes correct and the CR stays empty. Recovery
+needs something to rewrite the CR.
+
+Which is cdc's job, not mine — the release manifest already holds the right
+content, so a re-apply fixes it. A monitor is watching for `node_id` to land
+rather than choreographing it by hand, because reconciliation arriving on its own
+is the property worth observing; if it never arrives, that absence is the finding
+and the next question is why cdc does not re-apply a release whose rendered
+manifest differs from the live object.

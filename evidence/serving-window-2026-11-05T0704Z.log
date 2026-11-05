@@ -1,0 +1,11 @@
+  watching nodepowers.baremetal.ogen.krateo.io for spec.node_id
+  SCHEMA = the CRD says so | HONOURED = a dry-run apply keeps the field
+
+  t+   0.99s  version=v1-0-0  SCHEMA=False  HONOURED=False  rv=1034978
+  t+ 176.28s  version=v1-0-0  SCHEMA=True  HONOURED=True  rv=1167981
+
+  samples: 786
+  SCHEMA at t+176.28s | HONOURED at t+176.28s
+  SERVING WINDOW: 0.0s
+  (sampled every 0.0s, so a gap below that is reported as 0.0
+   and means 'smaller than the resolution', not 'absent')
