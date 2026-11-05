@@ -1537,3 +1537,89 @@ rather than choreographing it by hand, because reconciliation arriving on its ow
 is the property worth observing; if it never arrives, that absence is the finding
 and the next question is why cdc does not re-apply a release whose rendered
 manifest differs from the live object.
+
+### §9.16 — the disk incident, and the NodePower non-movement result
+
+#### An incident I caused, and nearly misdiagnosed as a regression
+
+Minutes after putting all four rdc controllers on `main@57573a5`, every one of
+the six NodePower CRs went `Synced=ReconcileError` — five of which had been
+`ReconcileSuccess`. The obvious reading was a regression in the build I had just
+deployed.
+
+It was not. The condition message said:
+
+```
+observe failed: building the client for action "dispatch" against
+"configmap://openstack/ironic-power-oas/power.yaml": failed to create
+directory: mkdir /tmp/rest-dynamic-controller-2102883379:
+no space left on device
+```
+
+**The node disk was at 100%, 0 bytes free.** `docker system df`:
+
+```
+Images         13.92GB   ( 9.46GB reclaimable)
+Local Volumes  32.34GB   ( 7.13GB reclaimable)
+Build Cache     8.14GB   ( 7.35GB reclaimable, 0 ACTIVE)
+```
+
+Two `go build -a` Docker builds — mine, for the oasgen and rdc images — left
+8.14GB of build cache with nothing referencing it. `docker builder prune` freed
+7.35GB without touching a tagged image or a volume, and the node went to 85%
+with 8.9G free. etcd recovered (`readyz check passed`), all six blades stayed
+`active/power on` throughout, and the five healthy CRs returned to
+`ReconcileSuccess` on their own.
+
+**The near-miss is the lesson.** A fleet-wide error appearing minutes after a
+fleet-wide change reads as caused by it, and the reading is cheap, available and
+wrong. What saved it was opening the condition *message* rather than acting on
+the condition *state* — the state said "everything I just touched is broken", the
+message said "the disk is full". A symptom's timing is not evidence about its
+cause, and the more plausible the coincidence, the less it is examined.
+
+Also worth recording: the thing I filled was shared. The kind node's own tree is
+only ~7.5G; the 58G was the Docker VM disk, which every kind cluster and
+container on this machine shares. A build in one workspace can take out a
+cluster in another.
+
+#### The NodePower non-movement check (#442's measurement)
+
+With the disk healthy and rdc on `main@57573a5`, blade06's existence-check
+message was **unchanged**, word for word. That does not falsify #442: the create
+path and the existence-check path are different code, and #442 touches the
+matcher.
+
+Then, with the user's explicit approval and on measured grounds — Ironic
+reporting `active / power on / target_power_state=None / last_error=None`, and
+the CR's `target` already `power on`, so a retried create is idempotent —
+`krateo.io/external-create-pending` was cleared.
+
+**Result, within 20 seconds:**
+
+```
+external-create-pending   = 2026-11-05T07:54:53Z   (re-set by the retry)
+external-create-succeeded = 2026-11-05T07:54:55Z   (2s later)
+Ready  = False / Pending          at 07:54:54Z
+Synced = True  / ReconcileSuccess at 07:55:25Z
+```
+
+And the hardware, against blade01 as control:
+
+```
+blade01  provision=active  power=power on  target=None  last_error=None
+blade06  provision=active  power=power on  target=None  last_error=None
+```
+
+**No movement.** No power transition, no target power state, no error, on either.
+blade06 now matches the other five exactly, including the `Ready=False/Pending`
+steady state all six share.
+
+**Attribution, stated narrowly.** The wedge cleared because the annotation was
+cleared. That was only *safe to clear* because #421 had restored `spec.node_id`
+and cdc had rewritten the CRs — without it the retried create would have hit the
+path-param guard and re-failed, re-wedging immediately. So #421 made the retry
+able to succeed; the manual clear was still required, because the annotation gate
+is deliberate. **#442's contribution is not observable in this result** and I am
+not claiming it: the message it governs did not change, and the create that
+succeeded is not the code path it touches.
