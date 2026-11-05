@@ -1955,3 +1955,141 @@ For this fleet that means the exposure would arrive with a **new Ironic OAS
 document**, at the next re-render, and could not be undone by pinning. A one-off
 reading cannot catch that; `make check-oas-defaults` can, and `make check` now
 runs all three standing screens together.
+
+### §9.22 — two Marketplace blueprints, and the defaulting predicate found on our own side
+
+The ask was a proper blueprint for Kubernetes and for bare metal, fit for the
+Krateo Marketplace. `charts/kubernetes-cluster` → **0.14.0**,
+`charts/baremetal-host` → **0.6.3**, published to the `blueprints` channel by
+`release-chart.yaml` on the next tag. `docs/MARKETPLACE.md` is the runbook.
+
+#### The gate was read, not guessed
+
+`krateo-blueprints/charts/.github/workflows/publish-chart.yaml` is the authority,
+so it was read rather than inferred. Three hard requirements, all on the
+**packaged** `.tgz`: `values.schema.json`, `compositiondefinition.yaml`, and an
+`icon` beginning `https://`. Both charts were packaged and the archives listed to
+confirm the two files are in them — a chart-root file is packaged, but
+`.helmignore` is invisible to a source-tree check, so the archive is what the
+screen reads too.
+
+The gate's own comments were worth the read for a second reason: they record that
+`tar tzf … | grep -q` made a PRESENT file fail the test, because `grep -q` exits
+on its first match, `tar` dies of SIGPIPE, and under `pipefail` the pipeline
+status becomes 141. It bit only the largest charts, in a run where 196 smaller
+ones passed. `check-blueprint-metadata.py` reads the listing whole for the same
+reason.
+
+#### What the gate passes, and the Marketplace then shows
+
+Six failures live on the far side of a green gate. The one that is not guessable:
+
+**`krateo.io/source-repo` decides whether a card appears at all.** The portal's
+live-index selector is literally
+`(.value[0].annotations["krateo.io/source-repo"] // "") != ""`. I first wrote
+this up as "without it the blueprint publishes and is never shown", citing our
+own `baremetal-lifecycle` 0.3.1 as the worked example — **and that was wrong.**
+`krateo-blueprints/marketplace`'s `hack/build-index.py` builds the curated
+ConfigMap *from this same live index*, removing only 18 named platform charts. So
+the annotation buys **immediacy, not existence**: without it the card waits for a
+`krateo-marketplace-catalog` release that is not ours to cut. Corrected in five
+places before the commit.
+
+Checked against the real index: **no entry carries that annotation yet** —
+`baremetal-lifecycle` included, and the `aws-*-stack` blueprints too. portal#292's
+own validation table says it in its third row. These two blueprints would be the
+first to use that route, which is a caveat worth carrying rather than hiding.
+
+Also measured, because the icon is the one field whose failure is purely visual:
+the gate tests only the *scheme*, so a `github.com/.../blob/...` URL passes it and
+renders a blank card — that URL serves an HTML page. Ours is the Akmon mark
+pinned to a commit SHA, verified HTTP 200 `image/svg+xml`.
+
+#### The form is the only interface a Marketplace user has
+
+Between them the two schemas had **119 property paths and not one `title`**, and
+most had no `description` either — a form of bare keys like `driver_info` and
+`undeployMode` with no help text. plumbing's `crdgen` carries both into the CRD
+(`transpile.go`: Description at :243, Title at :348), so both were authored, 119
+of them, through an injector that asserts the structural schema is unchanged once
+`title`/`description` are stripped from both sides. A typo in the mapping could
+otherwise have moved a type, a default or a `required` — and the chart version is
+the served apiVersion, so that is not a cosmetic risk.
+
+`title` is propagated by the generator but is **unverified on this cluster**: no
+CRD here was generated from a schema that had one. So every description was
+written to stand on its own, and the screen requires both rather than either.
+
+#### Two inputs the templates read and no Composition could set
+
+Found by reading the served CRDs rather than the chart:
+
+- **`conformance` was absent from the served `KubernetesCluster` CRD entirely.**
+  The templates read `.Values.conformance.install`; the schema never declared it.
+  So the conformance runner was reachable by `helm install` and unreachable
+  through a Composition — which is the only way a Marketplace user installs
+  anything.
+- **`cni.kubeProxyReplacement` was silently PRUNED.** `cni` declares properties,
+  so it is a structural schema with no `x-kubernetes-preserve-unknown-fields`, and
+  the API server drops an undeclared key without complaint. The chart default
+  (`true`) therefore always won, and the knob that `values.yaml` documents as
+  *required for conformance* could not be turned off.
+
+Both are now in the contract. Neither got a schema `default`, for the reason
+below.
+
+#### `ironicApiUrl` / `ironicApiVersion` are gone
+
+`values.yaml` had scheduled this since 2026-11-04 — *"Delete both at the next
+parent chart bump, manifests included"* — and this is that bump. Re-verified
+first: zero reads in either chart's templates. Removed from the schema,
+`values.yaml`, four manifests and two docs tables.
+
+`ironicApiVersion` is the one that had to go rather than being left alone. It
+reads exactly like the knob that sets Ironic's microversion, it was pinned to
+`1.81` — below the `1.83` floor the node look-up needs — and it was inert, so
+anyone "fixing" the apparent disconnect by wiring it through would reintroduce a
+`406` on every transition. In `values.yaml` that is a trap for a maintainer. In a
+Marketplace form it is a labelled, editable field that does nothing.
+
+#### The aruba predicate, on our own side of the house
+
+§9.21 screened the **OAS** documents for the plumbing defaulting shape and found
+zero. `values.schema.json` was never screened — and it has the shape.
+
+Measured 2026-11-05 on the live cluster. `debug` is an optional object whose child
+`connectorVerbose` carried `default: false`, so `crdgen` gave the parent
+`default: {}`, and **all six live `BaremetalHost` resources carried a
+`spec.debug: {connectorVerbose: false}` that no manifest ever wrote.** Exactly the
+irreversible materialisation aruba measured at 2 of 35, found here by looking at
+the one document class the earlier screen did not cover.
+
+The harm is small — the value it asserts is the one the chart would have used —
+but the mechanism is not: one unrelated write persists it, pinning the CRD back
+does not remove it, and `kubectl apply` will not prune it because the field is
+unowned in `managedFields`. The default now lives only in `values.yaml`, where
+Helm applies it at render time and nothing is persisted. **The six existing hosts
+keep the stanza, and nothing can remove it.** That is the finding, not a
+side-note.
+
+A top-level default is deliberately still allowed: it pre-fills the form and
+invents no stanza. The screen has three arms that must NOT fire, so it
+discriminates the shape with the consequence rather than the word "default".
+
+#### The screen, and the silence that hid my own defect
+
+`make check-blueprints` — 9 checks, 13 self-test cases, 3 of which must not fire.
+`make check` now runs four standing screens.
+
+While wiring it up, `check-examples` was extended to read ```yaml fences in
+`charts/*/README.md` as well as `docs/`, because a blueprint's chart README is the
+first thing a new user copies and its examples pin an apiVersion. The file count
+went 19 → 20 for **two** new READMEs, which is how I found that the
+`kubernetes-cluster` example used `…` elisions, parsed nowhere, and was therefore
+**skipped in silence** — unchecked, uncopyable, and the run still said OK. The
+example is now a complete manifest that parses, and the collector **counts** the
+fences it could not parse, with a self-test arm proving the count fires. 30 fences
+today: 7 screened, 23 carry no `kind`, 0 unparseable.
+
+A screen that skips what it cannot read, without saying so, is the failure mode
+this suite exists to catch — one level up, again.

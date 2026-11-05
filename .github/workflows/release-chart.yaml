@@ -3,6 +3,18 @@ name: release-chart
 # Publishes all four ironic-KOG charts (each at its own Chart.yaml version) to
 # oci://ghcr.io/<owner>/charts/<name> on any SemVer tag or manual dispatch. No
 # single tag-version guard (the four charts version independently).
+#
+# It then mirrors the TWO MARKETPLACE BLUEPRINTS -- kubernetes-cluster and
+# baremetal-host -- into the Krateo Marketplace's `blueprints` channel, by
+# calling krateo-blueprints/charts' reusable publisher with the same bytes the
+# OCI job produced. OCI stays the source of truth; the channel republishes it.
+#
+# The other two charts are deliberately NOT mirrored. baremetal-discovery and
+# baremetal-lifecycle are the superseded split that baremetal-host absorbed, and
+# they carry no in-chart compositiondefinition.yaml, so the blueprints gate would
+# reject them -- correctly. That gate loops over EVERY .tgz in the artifact it is
+# given, so the artifact below holds the two blueprints and nothing else: adding
+# a fifth chart to `dist` without adding it here is safe, the reverse is not.
 
 on:
   push:
@@ -76,3 +88,60 @@ jobs:
             done
             [ "$ok" = 1 ] || { echo "::error::push of $tgz failed after 5 attempts"; exit 1; }
           done
+
+      - name: Collect the blueprint tarballs (and only those)
+        run: |
+          set -euo pipefail
+          mkdir -p blueprints-dist
+          for name in kubernetes-cluster baremetal-host; do
+            # One glob per name, resolved explicitly, so a chart that failed to
+            # package is a hard error here rather than a silently thinner upload.
+            found=0
+            for tgz in dist/"$name"-*.tgz; do
+              [ -e "$tgz" ] || continue
+              cp "$tgz" blueprints-dist/
+              found=1
+            done
+            [ "$found" = 1 ] || { echo "::error::no packaged chart for blueprint '$name'"; exit 1; }
+          done
+          ls -1 blueprints-dist/
+
+      - name: Upload the blueprint tarballs for the channel publisher
+        uses: actions/upload-artifact@v4
+        with:
+          name: charts-dist-blueprints
+          path: blueprints-dist/*.tgz
+          if-no-files-found: error
+
+  # A missing token otherwise surfaces from inside the reusable workflow, where
+  # the message is about an unauthenticated git push rather than about the one
+  # thing that needs doing. This says it here, and does not run until the OCI
+  # push -- the source of truth -- has succeeded.
+  blueprints-token-preflight:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: CHARTS_PUBLISH_TOKEN must be set on this repository
+        run: |
+          if [ -z "${{ secrets.CHARTS_PUBLISH_TOKEN }}" ]; then
+            echo "::error::CHARTS_PUBLISH_TOKEN is not set, so the blueprints cannot be published to the Marketplace channel. It is a CLASSIC PAT with the 'repo' scope (classic tokens have no granular contents:write), set per repository -- this is a user account, so there are no org-level secrets. See docs/MARKETPLACE.md."
+            exit 1
+          fi
+          echo "token present"
+
+  # Republishes the same bytes into the Marketplace's blueprints channel. The
+  # publisher stamps nothing: `krateo.io/source-repo` has to be committed in each
+  # Chart.yaml, and without it the chart lands in the index and never gets a card.
+  # `make check-blueprints` fails the build if it goes missing.
+  publish-blueprints-channel:
+    needs:
+      - publish
+      - blueprints-token-preflight
+    uses: krateo-blueprints/charts/.github/workflows/publish-chart.yaml@main
+    with:
+      source_repo: ${{ github.repository }}
+      git_tag: ${{ github.ref_name }}
+      channel: blueprints
+      artifact: charts-dist-blueprints
+    secrets:
+      PUBLISH_TOKEN: ${{ secrets.CHARTS_PUBLISH_TOKEN }}

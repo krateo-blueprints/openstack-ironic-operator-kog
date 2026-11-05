@@ -345,11 +345,6 @@ spec:
 
 ```yaml
 spec:
-  # Both INERT -- read by no template. Still accepted, still ignored; removed
-  # from charts/kubernetes-cluster's own values.yaml in 0.13.25. 1.81 is below
-  # the 1.83 floor, so wiring it through would reintroduce a 406.
-  ironicApiUrl: http://ironic.openstack.svc.cluster.local:6385
-  ironicApiVersion: "1.81"
   ironicAuth:
     authUrl:    http://172.19.74.1:5000
     ironicUrl:  http://172.19.74.1:6385
@@ -361,7 +356,9 @@ spec:
     namespace: openstack
 ```
 
-`ironicApiUrl` + `configurationRef` are what the KOG primitives use to talk to Ironic. `ironicAuth` is what the CP's `publish-join.sh` uses to PATCH Ironic from the blade itself (Keystone auth, system_scope).
+`configurationRef` is what the KOG primitives use to talk to Ironic. `ironicAuth` is what the CP's `publish-join.sh` uses to PATCH Ironic from the blade itself (Keystone auth, system_scope).
+
+The two inert inputs that used to sit in this block, `ironicApiUrl` and `ironicApiVersion`, were **removed from the input contract in 0.14.0** -- schema, `values.yaml` and manifests. They are no longer accepted: a CR that sets either is rejected by the API server with `unknown field`, rather than accepted and ignored.
 
 ### Management-cluster ingress
 

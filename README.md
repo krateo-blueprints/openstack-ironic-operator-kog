@@ -113,6 +113,24 @@ version lacks field X; switch to a newer one (see [docs/api.md](docs/api.md)).
   (`baremetalhost-blade*.yaml`), `BaremetalDiscovery` (`baremetaldiscovery-blade03.yaml`),
   `KubernetesCluster` (`kubernetescluster-*.yaml`).
 
+## Marketplace blueprints
+
+Two of the charts here are Krateo Marketplace blueprints, published to the
+[`blueprints` channel](https://krateo-blueprints.github.io/charts/blueprints):
+
+| Chart | Card | What it does |
+|---|---|---|
+| [`kubernetes-cluster`](charts/kubernetes-cluster/README.md) | Kubernetes on Bare Metal (Ironic) | turns a set of blades into a conformant upstream Kubernetes cluster |
+| [`baremetal-host`](charts/baremetal-host/README.md) | Bare-Metal Host (Ironic) | manages one physical server through Ironic as a single resource |
+
+Register `baremetal-host` **first** — `kubernetes-cluster` renders its resources.
+`baremetal-discovery` and `baremetal-lifecycle` are the superseded split that
+`baremetal-host` absorbed and are not published as blueprints.
+
+See [docs/MARKETPLACE.md](docs/MARKETPLACE.md) for how a chart becomes a card,
+what the channel gate checks, and the one-time token setup the publish needs.
+`make check-blueprints` reproduces the gate locally.
+
 ## Docs
 
 - [docs/index.md](docs/index.md) — the map of the whole bundle.
@@ -122,6 +140,7 @@ version lacks field X; switch to a newer one (see [docs/api.md](docs/api.md)).
 - [docs/api.md](docs/api.md) — the CompositionDefinition CRD and the generated CRDs.
 - [docs/examples.md](docs/examples.md) — the runnable examples.
 - [docs/release.md](docs/release.md) — how the four charts are published.
+- [docs/MARKETPLACE.md](docs/MARKETPLACE.md) — the two Marketplace blueprints.
 - [docs/log.md](docs/log.md) — curated history.
 
 Deep-dive references: [KUBERNETES-CLUSTER.md](docs/KUBERNETES-CLUSTER.md),

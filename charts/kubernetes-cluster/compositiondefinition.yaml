@@ -1,0 +1,35 @@
+# Registers this blueprint with Krateo.
+#
+# core-provider reads the chart's values.schema.json, generates the
+# KubernetesCluster CRD from it, and runs a composition-dynamic-controller for
+# THIS chart version. Each registered version gets its own controller Deployment,
+# so registering a new one does not disturb clusters managed by the old.
+#
+# This file must ship INSIDE the chart. The Marketplace publisher inspects the
+# packaged .tgz and refuses a blueprint without it (publish-chart.yaml, blueprints
+# channel gate); a copy sitting beside the chart does not count. It is not a
+# template -- nothing here is rendered, and Helm ignores it at install time.
+#
+# `version` must equal the chart version, because it IS the served apiVersion:
+# 0.14.0 -> composition.krateo.io/v0-14-0. `make check-blueprints` fails if the
+# two drift.
+#
+# ORDER MATTERS. Register baremetal-host FIRST. This blueprint renders
+# BaremetalHost resources at the apiVersion in its `lifecycleApiVersion` input,
+# which defaults to the baremetal-host version this chart was released against
+# (v0-6-3). Registering this one first leaves every render failing against an
+# apiVersion nothing serves yet.
+---
+apiVersion: core.krateo.io/v1alpha1
+kind: CompositionDefinition
+metadata:
+  name: kubernetes-cluster
+  namespace: krateo-system
+spec:
+  chart:
+    url: oci://ghcr.io/krateo-blueprints/charts/kubernetes-cluster
+    version: "0.14.0"
+    # Served from the Marketplace's classic Helm channel instead of OCI:
+    #   url: https://krateo-blueprints.github.io/charts/blueprints
+    #   repo: kubernetes-cluster
+    #   version: "0.14.0"

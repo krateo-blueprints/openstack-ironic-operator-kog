@@ -1,5 +1,11 @@
 # CompositionDefinition for the unified baremetal-host chart. Replaces the discovery +
 # lifecycle split with a single BaremetalHost CRD (metal3-equivalent surface).
+# NOTE. This manifest is the LOCAL development path: it points at the in-cluster
+# chart server that `make composition-up` packages into. The Marketplace path is
+# the copy of this resource that ships INSIDE the chart
+# (charts/<name>/compositiondefinition.yaml), which points at the published OCI
+# artifact. The two are deliberately separate -- a lab iterating on an unpublished
+# chart must not be made to publish it first.
 ---
 apiVersion: core.krateo.io/v1alpha1
 kind: CompositionDefinition
@@ -8,5 +14,5 @@ metadata:
   namespace: krateo-system
 spec:
   chart:
-    url: http://chartrepo.openstack.svc.cluster.local/baremetal-host-0.6.2.tgz
-    version: "0.6.2"
+    url: http://chartrepo.openstack.svc.cluster.local/baremetal-host-0.6.3.tgz
+    version: "0.6.3"

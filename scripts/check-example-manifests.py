@@ -109,9 +109,9 @@ def check(files, charts, valid_config_kinds, root, resource_kinds_map=None):
     problems, seen = [], 0
     for f in files:
         base = os.path.basename(f)
-        if base.startswith("docs__"):
-            md, fence = base[len("docs__"):-len(".yaml")].split("__fence")
-            rel = f"docs/{md} (```yaml fence {fence})"
+        if base.startswith("md__"):
+            md, fence = base[len("md__"):-len(".yaml")].split("__fence")
+            rel = f"{md.replace('~', '/')} (```yaml fence {fence})"
         else:
             rel = os.path.relpath(f, root)
         with open(f) as fh:
@@ -187,30 +187,46 @@ def check(files, charts, valid_config_kinds, root, resource_kinds_map=None):
 FENCE = re.compile(r"```ya?ml\n(.*?)```", re.S)
 
 
-def doc_snippets(tmpdir):
-    """Write each ```yaml fence in docs/ to a file so the same rules screen it.
+def doc_snippets(tmpdir, root=None):
+    """Write each ```yaml fence in the prose to a file so the same rules screen it.
 
     Embedded YAML is the one place readers copy from that nothing checked. The
     quickstart shipped `kind: Node` at an unserved apiVersion for months because
     it lives in a fence and no screen reads fences.
+
+    charts/*/README.md is in scope as well as docs/. A blueprint's chart README
+    is what the Marketplace ships next to the chart, so its examples are the
+    FIRST thing a new user copies -- and they pin an apiVersion derived from the
+    chart version, which is exactly the string that goes stale on a bump.
     """
-    out = []
-    for md in sorted(glob.glob(os.path.join(REPO, "docs/*.md"))):
+    root = root or REPO
+    out, unparseable = [], []
+    markdown = (sorted(glob.glob(os.path.join(root, "docs/*.md")))
+                + sorted(glob.glob(os.path.join(root, "charts/*/README.md"))))
+    for md in markdown:
         with open(md) as fh:
             body = fh.read()
         for i, block in enumerate(FENCE.findall(body)):
             try:
                 docs = list(yaml.safe_load_all(block))
             except yaml.YAMLError:
-                continue  # prose or templated YAML; not ours to judge
+                # Prose or Helm-templated YAML, which is not ours to judge -- but
+                # COUNT it. A fence that cannot be parsed is also a fence nobody
+                # can paste, and silence here hid exactly that: the first version
+                # of charts/kubernetes-cluster/README.md's example used `…`
+                # elisions, so it parsed nowhere, was skipped without a word, and
+                # its apiVersion went unchecked while the run still said OK.
+                unparseable.append((os.path.relpath(md, root), i + 1))
+                continue
             if not any(isinstance(d, dict) and d.get("kind") for d in docs):
                 continue
-            name = f"docs__{os.path.basename(md)}__fence{i + 1}.yaml"
+            rel_md = os.path.relpath(md, root).replace("/", "~")
+            name = f"md__{rel_md}__fence{i + 1}.yaml"
             path = os.path.join(tmpdir, name)
             with open(path, "w") as fh:
                 fh.write(block)
             out.append(path)
-    return out
+    return out, unparseable
 
 
 def targets():
@@ -381,6 +397,36 @@ def self_test():
                 failures.append(
                     "the deliberately-exposed ArmOr fixture no longer trips the "
                     "multi-identifier rule -- either the fixture or the rule changed")
+
+    # Arm: the fence collector must report a fence it could not parse, and must
+    # still screen the ones it can. The silent skip is what hid a broken example:
+    # charts/kubernetes-cluster/README.md shipped `…` elisions, parsed nowhere,
+    # was skipped without a word, and the run said OK with its apiVersion
+    # unchecked. A count is the difference between "nothing wrong" and "nothing
+    # looked at".
+    with tempfile.TemporaryDirectory() as td:
+        os.makedirs(os.path.join(td, "charts/probe"))
+        with open(os.path.join(td, "charts/probe/README.md"), "w") as fh:
+            fh.write(
+                "# probe\n\n"
+                "```yaml\napiVersion: composition.krateo.io/v0-1-0\nkind: BaremetalHost\n"
+                "metadata:\n  name: a\n```\n\n"
+                "```yaml\nspec:\n  key: value\n```\n\n"          # parses, no kind
+                "```yaml\nnodes:\n  - nodeName: a\n   bad: indent\n```\n")  # does not parse
+        with tempfile.TemporaryDirectory() as out:
+            snips, unparsed = doc_snippets(out, root=td)
+        cases += 1
+        if len(snips) != 1:
+            failures.append(f"the fence collector screened {len(snips)} fence(s), expected 1")
+        cases += 1
+        if len(unparsed) != 1:
+            failures.append(
+                f"the fence collector reported {len(unparsed)} unparseable fence(s), "
+                f"expected 1 -- a fence nobody can paste must not pass in silence")
+        cases += 1
+        if unparsed and unparsed[0][0] != "charts/probe/README.md":
+            failures.append(f"the unparseable fence was reported as {unparsed[0][0]!r}, "
+                            f"expected the path relative to the root")
 
     # Arm: the child-apiVersion fallback check must fire on a stale fallback, and
     # must also fire when the define it reads has been reshaped away -- a check
@@ -635,7 +681,7 @@ def main():
 
     rmap = resource_kinds()
     with tempfile.TemporaryDirectory() as td:
-        snippets = doc_snippets(td)
+        snippets, unparseable = doc_snippets(td)
         files = targets() + snippets
         charts = chart_versions()
         problems, seen = check(files, charts, config_kinds(), REPO, rmap)
@@ -643,7 +689,8 @@ def main():
     problems += check_configdrive_hash_interlock()
     problems += check_kubeconfig_isolation()
     print(f"  checked {seen} resources across {len(files)} files "
-          f"({len(snippets)} of them ```yaml fences in docs/) "
+          f"({len(snippets)} of them ```yaml fences in docs/ and charts/*/README.md"
+          f"{f'; {len(unparseable)} further fence(s) do not parse and were NOT checked' if unparseable else ''}) "
           f"+ the parent's child-apiVersion fallback "
           f"+ the configdrive-hash interlock "
           f"+ Makefile kubeconfig isolation")

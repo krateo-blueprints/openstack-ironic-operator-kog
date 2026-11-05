@@ -8,13 +8,19 @@
   ],
   "properties": {
     "nodeName": {
-      "type": "string"
+      "type": "string",
+      "title": "Host name",
+      "description": "Name of the bare-metal host. Becomes the Ironic node's name and the name of every Kubernetes resource this composition renders, so it must be a valid DNS-1123 label and unique within the namespace."
     },
     "nodeUuid": {
-      "type": "string"
+      "type": "string",
+      "title": "Ironic node UUID",
+      "description": "Pin the host to an Ironic node that already exists, by UUID. Leave empty to have Ironic allocate a UUID on first registration -- the normal case. Set this only to adopt a node that was enrolled outside Krateo."
     },
     "parentNode": {
-      "type": "string"
+      "type": "string",
+      "title": "Parent node",
+      "description": "UUID or name of a parent Ironic node, for hardware that Ironic models as a child of an enclosure or chassis. Leave empty for a standalone server."
     },
     "driver": {
       "type": "string",
@@ -22,67 +28,91 @@
         "ipmi",
         "redfish",
         "fake-hardware"
-      ]
+      ],
+      "title": "BMC driver",
+      "description": "Ironic hardware driver used to talk to the host's management controller. `ipmi` for IPMI 2.0 BMCs, `redfish` for a Redfish service (preferred where available), `fake-hardware` for a driver that performs no real power or deploy action -- test environments only."
     },
     "driver_info": {
       "type": [
         "object",
         "null"
-      ]
+      ],
+      "title": "BMC connection details",
+      "description": "Driver-specific connection parameters, passed to Ironic verbatim. Redfish needs `redfish_address`, `redfish_username`, `redfish_password` and usually `redfish_system_id`; IPMI needs `ipmi_address`, `ipmi_username`, `ipmi_password`. Required for every driver except `fake-hardware`. Keys are not validated here -- Ironic rejects an unusable set when the host is registered."
     },
     "nodeNamespace": {
-      "type": "string"
+      "type": "string",
+      "title": "Resource namespace",
+      "description": "Namespace for the Ironic node and port resources this composition renders. Defaults to the namespace of the composition itself."
     },
     "ports": {
       "type": [
         "array",
         "null"
-      ]
+      ],
+      "title": "Network ports",
+      "description": "The host's NICs, as a list of objects with an `address` (MAC) and optional `pxe_enabled`. Ironic requires at least one port before it will inspect or deploy, and it writes the per-MAC PXE config only for ports that exist -- so a host whose ports are declared late PXE-boot-loops. Declare every NIC that can boot."
     },
     "enableInspection": {
       "type": "boolean",
-      "default": false
+      "default": false,
+      "title": "Run hardware inspection",
+      "description": "Run Ironic's inspection pass after the host becomes manageable. Inspection boots the agent ramdisk and reports CPU, memory, disk and NIC inventory into the host's status. Adds several minutes to first registration; skip it if you already know the hardware."
     },
     "image": {
       "type": [
         "object",
         "null"
-      ]
+      ],
+      "title": "Operating system image",
+      "description": "The OS image to deploy. Set `source` (a URL Ironic's conductor can reach) and `checksum` to provision the host; add `checksum_type`, `format` or a `root_device` hint for disk selection when needed. Leave the whole block unset to register the host and stop at `available` without writing anything to its disks."
     },
     "configDrive": {
       "type": [
         "object",
         "null"
-      ]
+      ],
+      "title": "Config drive (cloud-init)",
+      "description": "First-boot configuration handed to the deployed OS as an OpenStack config drive. Accepts `metaData`, `userData` and `networkData`, which become `meta_data.json`, `user_data` and `network_data.json` on the generated ISO. At least one must be set for a config drive to be emitted at all."
     },
     "online": {
-      "type": "boolean"
+      "type": "boolean",
+      "title": "Desired power state",
+      "description": "Power the host on (`true`) or off (`false`). Leave unset to let Ironic's own power state stand -- the composition then performs no power action, which is what you want for a host whose power is managed elsewhere."
     },
     "maintenance": {
       "type": "boolean",
-      "default": false
+      "default": false,
+      "title": "Maintenance mode",
+      "description": "Put the Ironic node in maintenance, which suspends power-state polling and the periodic agent checks. Set this while servicing the hardware so Ironic's automatic recovery does not fight work being done at the BMC."
     },
     "detached": {
       "type": "boolean",
-      "default": false
+      "default": false,
+      "title": "Detach from the state machine",
+      "description": "Stop driving Ironic entirely while keeping the host registered in Kubernetes. No transition is rendered -- no manage, inspect, provide, deploy, undeploy or power action. Use it to hand control to another tool without unregistering the host."
     },
     "networkData": {
       "type": [
         "object",
         "null"
-      ]
+      ],
+      "title": "Network configuration for the deployed OS",
+      "description": "Static network configuration (`links`, `networks`, `services`) merged into the host's instance info, which Ironic exposes to the provisioned OS. This is what the deployed system sees; `configDrive.networkData` is what the installer's cloud-init sees during the deploy itself."
     },
     "cleanSteps": {
       "type": [
         "array",
         "null"
       ],
-      "description": "Ironic clean steps to run while manageable. Each item: interface, step, args."
+      "description": "Ironic clean steps to run while the host is manageable, in order -- RAID configuration, BIOS settings, firmware, queue clearing. Each item takes `interface`, `step` and `args`. Editing the list re-runs it. To clean a host that is already provisioned, set this and also clear `image.source`, so the host undeploys first.",
+      "title": "Clean steps"
     },
     "undeploy": {
       "type": "boolean",
       "default": false,
-      "description": "When true, drives the blade from `active` back to `available` via transition-undeploy. Hold-at-available signal."
+      "description": "Drive a provisioned host back to `available`: Ironic tears down the deployment and, unless `undeployMode` says otherwise, wipes the disks. This is the only way to release the hardware -- deleting the host resource removes it from Kubernetes and deliberately leaves Ironic untouched.",
+      "title": "Release the host"
     },
     "undeployMode": {
       "type": "string",
@@ -91,28 +121,33 @@
         "none"
       ],
       "default": "full",
-      "description": "Ironic cleanup pass between deleted and available. full=standard clean_steps, none=skip (fast, dirty)."
+      "description": "What Ironic does between `deleted` and `available`. `full` runs the standard clean steps, including the disk erase, and is the only safe choice where the disks held data that must not reach the next tenant. `none` skips cleaning entirely -- seconds instead of hours, with the previous tenant's data still on disk. Private labs only.",
+      "title": "Cleaning on release"
     },
     "configurationRef": {
-      "type": "object"
+      "type": "object",
+      "title": "Ironic endpoint reference",
+      "description": "Name (and optionally namespace) of the resource holding the Ironic API endpoint and credentials this host is managed through. Points at a single shared configuration -- it is not per-host."
     },
     "deployedConfigDriveHash": {
       "type": [
         "string",
         "null"
       ],
-      "description": "v0.4.2 (Task #91): chart-rendered desired hash; cloud-init publishes the running OS hash to Ironic.node.extra. shouldAutoRedeploy compares both. Mismatch fires transition-undeploy."
+      "description": "Managed by the composition; do not set this by hand. It carries the hash of the config drive this host was last rendered with, so a change to `configDrive` can be detected and the host redeployed to pick it up.",
+      "title": "Deployed config-drive hash"
     },
     "debug": {
       "type": "object",
-      "description": "v0.5.1: debugging aids. Off by default.",
+      "description": "Diagnostic switches. All off by default.",
       "properties": {
         "connectorVerbose": {
           "type": "boolean",
-          "default": false,
-          "description": "Stamps krateo.io/connector-verbose on the BaremetalNode CR so rest-dynamic-controller logs the full HTTP exchange with Ironic, body included. RDC otherwise reports a bare status code and discards Ironic's faultstring. Requires RDC >= 0.26.1, which redacts credential headers."
+          "description": "Log every request and response exchanged with the Ironic API, bodies included. Without it a rejected call surfaces as a bare status code with Ironic's own explanation discarded, which makes a misconfigured BMC very hard to diagnose. Credential headers are redacted. Leave off in normal operation -- it is verbose.",
+          "title": "Log the Ironic HTTP exchange"
         }
-      }
+      },
+      "title": "Debugging"
     }
   }
 }

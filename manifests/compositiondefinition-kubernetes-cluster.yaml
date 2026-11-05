@@ -2,9 +2,12 @@
 # KubernetesCluster CRD from the chart's values.schema.json and runs a
 # composition-dynamic-controller that helm-installs the chart per instance.
 #
-# The url below points at the in-cluster chart server used by the local env
-# (`make composition-up` packages the chart and serves it). For a real cluster,
-# publish the .tgz (HTTP/OCI/Helm repo) and set spec.chart.url accordingly.
+# NOTE. This manifest is the LOCAL development path: it points at the in-cluster
+# chart server that `make composition-up` packages into. The Marketplace path is
+# the copy of this resource that ships INSIDE the chart
+# (charts/<name>/compositiondefinition.yaml), which points at the published OCI
+# artifact. The two are deliberately separate -- a lab iterating on an unpublished
+# chart must not be made to publish it first.
 ---
 apiVersion: core.krateo.io/v1alpha1
 kind: CompositionDefinition
@@ -13,5 +16,5 @@ metadata:
   namespace: krateo-system
 spec:
   chart:
-    url: http://chartrepo.openstack.svc.cluster.local/kubernetes-cluster-0.13.26.tgz
-    version: "0.13.26"
+    url: http://chartrepo.openstack.svc.cluster.local/kubernetes-cluster-0.14.0.tgz
+    version: "0.14.0"

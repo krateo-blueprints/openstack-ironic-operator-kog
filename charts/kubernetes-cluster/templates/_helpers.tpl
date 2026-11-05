@@ -30,7 +30,7 @@ Chart.yaml version, so bumping the child without bumping this fails the build
 instead of waiting for a fresh cluster CR to discover it.
 */}}
 {{- define "kubernetes-cluster.lifecycleApiVersion" -}}
-{{- default "composition.krateo.io/v0-6-2" .Values.lifecycleApiVersion -}}
+{{- default "composition.krateo.io/v0-6-3" .Values.lifecycleApiVersion -}}
 {{- end -}}
 {{- define "kubernetes-cluster.lifecycleKind" -}}BaremetalHost{{- end -}}
 
