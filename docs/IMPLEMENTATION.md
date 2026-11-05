@@ -1623,3 +1623,57 @@ able to succeed; the manual clear was still required, because the annotation gat
 is deliberate. **#442's contribution is not observable in this result** and I am
 not claiming it: the message it governs did not change, and the create that
 succeeded is not the code path it touches.
+
+### §9.17 — core-provider #303/#329 adoption probe on 2.13.62: PASS, plus two unreachable preconditions
+
+Run for core-provider and openstack-as-a-service, who both had this gap open.
+Throwaway `release-adopt-probe` 0.1.2 — one ConfigMap, nothing cluster-scoped —
+on core-provider **2.13.62**, against the live `ironic-kog` cluster. cdc runs one
+Deployment per CompositionDefinition version, so the probe could not disturb the
+four live compositions, and it did not.
+
+#### The headline: adoption works and completes
+
+| | |
+|---|---|
+| (a) releases before | `adopt-probe-5v6764b8` rev **1**, deployed |
+| (a) releases after | `adopt-probe-5v6764b8` rev **2**, deployed — **one release throughout** |
+| (b) adopted revision | **2**, description **"Upgrade complete"** (not "Install complete") |
+| (c) reconcile completed | **yes** — `Ready=True/Available`, `Synced=True/ReconcileSuccess` |
+
+Timing: spec applied 08:58:39Z, helm upgrade recorded 08:58:41Z, CR fully
+reconciled by 08:58:54Z. The label was re-stamped to the **existing** release
+name rather than a new one, and the ConfigMap content updated to the new marker,
+so the release was genuinely adopted and upgraded — not reinstalled, and not
+duplicated. That is materially different from 2.13.59, where a recreated
+composition CR wedged on a chart-inspector 500.
+
+#### Two preconditions that make the stated repro unreachable
+
+Core-provider's recipe was *"a recreated CR with no `krateo.io/release-name`
+label"*. **Recreation does not produce that state**, for two measured reasons:
+
+**1. Deleting the CR uninstalls the release cleanly.** The finalizer
+`composition.krateo.io/finalizer` fires, cdc uninstalls, and within 10s there is
+no release left to adopt.
+
+**2. The release name is not deterministic.** Baseline run produced
+`adopt-probe-5dw9xx5f`; deleting and recreating the identical CR produced
+`adopt-probe-5v6764b8`. A random suffix, so even an orphaned release could not
+be matched by a recreated CR — it would compute a different name.
+
+So the reachable entry is a **stripped label on a live CR**, not a recreate. And
+there is a third precondition:
+
+**3. Removing the label does not trigger a reconcile.** Four minutes after
+stripping it, `generation` was still 1 and nothing had happened — a label change
+does not bump generation. Adoption was only entered after a subsequent **spec**
+change, which is what the probe chart's `marker` field exists to supply.
+
+An e2e that deletes and recreates a CR, or that strips the label and waits, will
+observe nothing and may read that as a pass. The sequence that actually exercises
+adoption is: **strip the label, then change the spec.**
+
+Teardown was finalizer-safe — CR first so cdc could still uninstall, then the
+CompositionDefinition. The generated CRD deleted cleanly with no `Terminating`
+hang, which is the hazard in [[krateo-cd-stuck-crd-finalizer]].
