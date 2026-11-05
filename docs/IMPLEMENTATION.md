@@ -1255,3 +1255,73 @@ with, or it cannot attribute what it sees.
 side and changes nothing. The script refuses to start if any definition's OAS
 file cannot be resolved, because regenerating some and leaving others on the old
 generator is worse than not starting.
+
+### §9.13 — the #456 arm is VACUOUS on this fleet, and why that is the finding
+
+oasgen asked for the #456 over-eagerness arm against real documents: `uuid` must
+stay absent from `properties` and `required`, because the narrowing must not
+*change* a case the pre-existing mapping exemption already handled. They pointed
+at `oasgen-render`, which generates CRDs with the same `render.CRDs` the
+controller calls, so all four `uuid`-excluding definitions could be rendered
+under both versions with no cluster touched.
+
+Ran it. **0 of 4 kinds differ** between 0.50.0 and `main@57573a5`:
+
+```
+Allocation@v1-0-0      uuid in props 0.50.0=False main=False  required False/False  IDENTICAL
+DeployTemplate@v1-0-0  uuid in props 0.50.0=False main=False  required False/False  IDENTICAL
+Port@v1-0-0            uuid in props 0.50.0=False main=False  required False/False  IDENTICAL
+PortGroup@v1-0-0       uuid in props 0.50.0=False main=False  required False/False  IDENTICAL
+```
+
+**That is not evidence the narrowing is safe. It is evidence these definitions
+cannot test it.** The render output carried eight errors, identical on both
+versions, and they are the actual result:
+
+```
+generation error: field 'uuid' set in excludedSpecFields not found in schema
+generation error: field 'X-Ironic-Endpoint' set in configurationFields not found in schema
+```
+
+Every one of the four OAS documents has two schemas — a full one and a create
+one — and oasgen builds the spec from the **create** body:
+
+```
+ironic-allocation.yaml       Allocation:uuid=True      AllocationCreate:uuid=False
+ironic-deploy-template.yaml  DeployTemplate:uuid=True   DeployTemplateCreate:uuid=False
+ironic-portgroup.yaml        Portgroup:uuid=True        PortgroupCreate:uuid=False
+ironic-port.yaml             Port:uuid=True             PortCreate:uuid=False
+```
+
+So `excludedSpecFields: [uuid]` excludes a field that was **never in the spec**.
+All four exclusions are no-ops, all four `configurationFields: [X-Ironic-Endpoint]`
+likewise. `uuid` is absent because nothing put it there — not because an
+exclusion removed it and not because a mapping exempted it. An arm asking "does
+the narrowing expose `uuid`" cannot discriminate when there is no `uuid` to
+expose.
+
+**This is the fourth explanation I have given for the same observation.** The
+first three — the guard refuses it, the mapping exempts it, the exemption is an
+accident of a mapping on a different verb — all fit the data and all were wrong
+about the mechanism. The operative fact is one line of OAS. Each previous
+explanation was more sophisticated than the last, which is the warning sign I
+keep not reading: when the explanation gets more intricate and the observation
+does not change, the explanation is probably decoration on an unexamined
+assumption. See [[reference_calibrate-before-trusting-a-zero]].
+
+**And the errors ship silently.** `ironic-port` is live, and its RestDefinition
+reports:
+
+```
+Ready=True   reason=Available
+Synced=True  reason=ReconcileSuccess
+```
+
+with no mention of either generation error. The generator produced them; the
+status does not carry them; nothing in the cluster can be asked about them. They
+are only visible by rendering the definition yourself, which is why eight dead
+declarations survived in this repo until a tool existed that printed them.
+
+`scripts/render-diff-oasgen.py` performs the comparison. The eight errors are
+real and unfixed: removing the dead `excludedSpecFields` and `configurationFields`
+entries is correct but changes generated output, so it is a separate change.
