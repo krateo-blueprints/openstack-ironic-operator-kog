@@ -1723,3 +1723,45 @@ So drift detection now has an honest input and remains deliberately disarmed.
 The remaining step is unchanged and is not a code change: every blade must
 republish under 0.13.26+ before the key can be mirrored, which happens on each
 blade's next deploy. [[rendered-vs-stored]].
+
+### §9.19 — `observedGeneration` is absent on every KOG-generated resource
+
+Noticed while trying to tell "reconciled, this is the steady state" from "not
+looked at yet", and initially reported with the wrong controller attached. The
+split is by **generator**:
+
+| | declares it | populated |
+|---|---|---|
+| `kubernetesclusters` (core-provider) | yes | 1/1 |
+| `baremetalhosts` (core-provider) | yes | 6/6 |
+| `baremetalnodes` (oasgen) | **no** | 0/6 |
+| `nodepowers` (oasgen) | **no** | 0/6 |
+| `ports` (oasgen) | **no** | 0/12 |
+
+**Nothing removes it — it is never declared.** The oasgen-generated status schema
+carries `conditions` plus the OAS response fields (`nodepowers`:
+`conditions, node_id, power_state, target_power_state, uuid`) and no synthetic
+ones. core-provider had just filed a lost-update mechanism where a stale
+concurrent status write wipes fields, which would have been a good explanation for
+a field a stale write never carried; it is impossible here.
+
+**Why it matters operationally.** `observedGeneration` is the standard answer to
+"has the controller caught up with my spec change?", and on KOG resources there
+is none — so there is no generic way to separate *reconciled-and-steady* from
+*not-yet-seen*. All six NodePower CRs sit permanently at `Ready=False/Pending`
+with `Synced=True/ReconcileSuccess`, so the conditions do not answer it either. It
+compounds with a second gap: a **label** change does not bump `generation`, so a
+consumer watching for convergence after a metadata-only edit has neither a
+generation delta nor an `observedGeneration`. That pair is exactly why §9.17's
+strip-then-wait observed nothing for four minutes and could not distinguish
+"nothing happened" from "happened, changed nothing".
+
+**The reporting error is the part to keep.** I said "absent on all six" having
+looked only at NodePower, then answered a peer's "which cdc version?" without
+noticing those resources are not cdc-managed at all. They went looking in their
+own code for a fact that was never about them. What caught it was their asking
+*which resources* — the question I should have answered before offering the
+observation. **A measurement with the wrong subject attached is worse than no
+measurement, because it is actionable.** Same family as
+[[reference_setup-cannot-produce-the-state]]: the finding was real and the frame
+around it was not.
