@@ -89,27 +89,48 @@ def nudge(paths):
 
 
 def crd_has(kubectl, crd, field):
+    """(in_properties, in_required) for the served version, or (None, None)."""
     out = sh(f"{kubectl} get crd {crd} -o json", check=False)
     if not out:
-        return None
+        return None, None
     d = json.loads(out)
     for v in d["spec"]["versions"]:
         if v.get("served"):
-            props = (v["schema"]["openAPIV3Schema"]["properties"]["spec"]
-                     .get("properties") or {})
-            return field in props
-    return None
+            sp = v["schema"]["openAPIV3Schema"]["properties"]["spec"]
+            props = sp.get("properties") or {}
+            req = sp.get("required") or []
+            return field in props, field in req
+    return None, None
+
+
+# (crd, field, want_present, why) -- `want_present` is what a CORRECT generator
+# produces, so a row that disagrees is the finding.
+STORED_CHECKS = (
+    ("nodepowers.baremetal.ogen.krateo.io", "node_id", True,
+     "#421: a fieldMapping must not delete the spec property it reads from"),
+    ("nodeprovisions.baremetal.ogen.krateo.io", "node_id", True,
+     "#421: same, on the provision verb"),
+    ("ports.baremetal.ogen.krateo.io", "uuid", False,
+     "#456: uuid is excluded AND mapped, so the narrowing must NOT expose it"),
+)
 
 
 def report_stored(kubectl):
     print("\n  STORED SIDE -- what the generated CRDs actually carry:")
-    for crd, field in (("nodepowers.baremetal.ogen.krateo.io", "node_id"),
-                       ("nodeprovisions.baremetal.ogen.krateo.io", "node_id")):
-        got = crd_has(kubectl, crd, field)
-        state = {True: "PRESENT", False: "ABSENT", None: "CRD not found"}[got]
-        print(f"    {crd.split('.')[0]:16} spec.{field}: {state}")
-    print("  `node_id` PRESENT on both means oasgen #421 has actually reached these")
-    print("  CRDs. ABSENT means it has not, whatever version is installed.")
+    verdicts = []
+    for crd, field, want, why in STORED_CHECKS:
+        inprops, inreq = crd_has(kubectl, crd, field)
+        if inprops is None:
+            print(f"    {crd.split('.')[0]:16} spec.{field:8} CRD NOT FOUND -- not checked")
+            verdicts.append((crd, field, None))
+            continue
+        state = "PRESENT" if inprops else "ABSENT"
+        agree = (inprops == want)
+        print(f"    {crd.split('.')[0]:16} spec.{field:8} {state:8} "
+              f"required={inreq}  {'as expected' if agree else '*** UNEXPECTED ***'}")
+        print(f"        {why}")
+        verdicts.append((crd, field, agree))
+    return verdicts
 
 
 def main():
