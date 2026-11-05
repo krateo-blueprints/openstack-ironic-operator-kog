@@ -1211,3 +1211,47 @@ NodePower definition is live in the cluster — so the target left it at whateve
 an earlier apply had put there. Added, with a note that allocation,
 deploy-template and portgroup exist in `manifests/` but are not installed. Only
 four of the seven RestDefinitions are live: node, port, provision, power.
+
+### §9.12 — the regeneration nudge, validated as a positive control before it was needed
+
+§9's regeneration procedure was prose. The one thing it asserted and nothing had
+tested is that changing the referenced OAS ConfigMap moves `status.oasHash` and
+makes oasgen re-read. If a comment-only edit did not reach the hash, the whole
+procedure was void — and I would have found that out at the moment I needed it,
+with the measurement blocked and a freshly-upgraded provider as a second
+variable.
+
+So I ran it on the **current** generator, 0.50.0, which is the safest possible
+moment: the same generator in means the regenerated schema should come out
+byte-identical, so a successful run is a no-op and a failed one is still
+diagnostic.
+
+Run 2026-11-05T06:06:28Z. All four live definitions re-read their OAS:
+
+```
+ironic-node            8c19ee6b58ec46c6 -> 7921236d3d55d2f7
+ironic-node-power      aaa9ae89d35b1202 -> e3c6b4f35c5a9c7b
+ironic-node-provision  1f3bec857df432e8 -> 8976e271d3b3d62e
+ironic-port            7a61f5fa80e184c4 -> 48f47cc0996df35d
+```
+
+**Collateral: none.** All four generated CRD schemas byte-identical before and
+after; CR counts unchanged (6 BaremetalNode, 6 NodePower, 0 NodeProvision, 12
+Port); all six blades still `active`.
+
+**And the result that makes the measurement worth taking.** After a genuine
+regeneration, `node_id` is **still ABSENT** from both `nodepowers` and
+`nodeprovisions`. That is correct — 0.50.0 does not contain #421 — and it is the
+part that matters: the readout did *not* move when only the nudge happened. So
+when it flips to PRESENT it will be attributable to the generator and to nothing
+else. A measurement that could have been moved by the nudge alone would not have
+distinguished "#421 works" from "regeneration happened".
+
+That is the positive control inverted: usually you plant the defect and check the
+screen fires. Here the screen must **not** fire on the intervention it is paired
+with, or it cannot attribute what it sees.
+
+`make regenerate-crds` performs it; `make regenerate-crds-check` reads the stored
+side and changes nothing. The script refuses to start if any definition's OAS
+file cannot be resolved, because regenerating some and leaving others on the old
+generator is worse than not starting.
