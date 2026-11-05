@@ -2093,3 +2093,54 @@ today: 7 screened, 23 carry no `kind`, 0 unparseable.
 
 A screen that skips what it cannot read, without saying so, is the failure mode
 this suite exists to catch — one level up, again.
+
+#### §9.22 addendum — oasgen's one authored default runs on every document we have
+
+The generalisation above ("any document that crdgen or oasgen turns into a CRD")
+came back with a result, on an axis I had not considered: not a file class, but a
+**scheme type** inside files already in scope.
+
+oasgen authors exactly one schema default of its own —
+`configuration_builder.go:258`, the `header` property of the **apiKey**
+authentication shape, defaulted from the scheme's `ParamName`. In oasgen's repo
+that branch is unrendered: 12 documents declare `bearer`, **zero** declare
+`apiKey`. Here it is the only branch there is. Keystone's `X-Auth-Token` *is* an
+apiKey-in-header scheme, and all seven Ironic documents declare it.
+
+Measured on the served Configuration CRDs:
+
+```
+authentication.apiKey.header   default: "X-Auth-Token"   present on 4 of 5
+default: {} stamped on authentication or apiKey           0
+apiKey.required                                           ['header', 'tokenRef']
+```
+
+**No stanza is invented**, and for the documented reason: the parent declares
+required properties, so plumbing #45's clause suppresses `default: {}`. The
+irreversible hazard does not arise here.
+
+Two things the measurement adds that the structural argument does not:
+
+- **The default is reachable, and it does real work.** CRD defaulting runs
+  *before* validation, so omitting the required `header` yields `X-Auth-Token`
+  rather than a rejection — it turns a required field into an effectively
+  optional one.
+- **On this fleet it never fires.** `manifests/nodeconfiguration-ironic.yaml`
+  supplies the value explicitly, so the live CR's `header` is **authored, not
+  defaulted**. "No materialisation observed" is therefore a property of our
+  manifest, not of oasgen's code — a distinction that matters if the manifest
+  ever stops setting it.
+
+**A loose end, recorded as one rather than dressed up.** `nodeconfigurations`
+carries no such default while the other four do. I proposed "generated before the
+feature shipped and never regenerated under #453" and **falsified it
+immediately**: `portconfigurations` is the oldest of the five (19:09 against
+19:23) and does carry it. The odd one out is an orphaned kind from the `Node` →
+`BaremetalNode` rename with zero live resources, so the cause is most likely the
+document it was generated from at the time. Unused, so not a hazard — but it is a
+case of one document class producing two different auth shapes, and I do not know
+why.
+
+The transferable part is about **scope, not mechanism**: my screen's blind spot
+was a file class, oasgen's was a scheme type, and neither of us could see our own
+from inside our own code.
