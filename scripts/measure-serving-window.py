@@ -100,10 +100,15 @@ def main():
                     help="JSON of other required spec fields, so the probe validates")
     ap.add_argument("--seconds", type=float, default=300)
     # Default 0: the two kubectl calls already cost ~1.4-2.1s per sample pair
-    # against a local kind cluster with a WARM discovery cache (measured
-    # 2026-11-05), so that is the instrument's resolution and an added sleep
-    # only makes it coarser. A cold cache costs ~28s for the first sample, which
-    # is worth knowing because it looks exactly like a long serving window.
+    # against a local kind cluster (measured 2026-11-05), so that is the
+    # instrument's resolution and an added sleep only makes it coarser.
+    #
+    # The first sample can cost ~28s, and the cause is narrower than I first
+    # wrote: it is the `apply --dry-run=server` leg fetching OpenAPI v3 schemas,
+    # NOT the discovery cache in general. Re-measured: a `get crd -o jsonpath`
+    # costs 1.25-2.51s on a first call, so a polling-only probe never pays it.
+    # It matters because a one-off ~28s first sample looks exactly like a long
+    # serving window, and because it is the leg that only THIS probe uses.
     ap.add_argument("--interval", type=float, default=0.0)
     args = ap.parse_args()
 
