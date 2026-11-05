@@ -274,6 +274,12 @@ regenerate-crds:   # force oasgen to re-read the OAS and rewrite the generated C
 	# The script VERIFIES the nudge took rather than reporting success because the
 	# commands ran: if oasHash does not move, it says the procedure failed and
 	# refuses to let you read the stored side as a verdict on the generator.
+	#
+	# SCOPE: oasgen is implementing #453, which makes an upgrade regenerate by
+	# itself. From whatever release carries that, this stops being the mechanism
+	# and becomes the pre-#453 procedure, the opt-out path, and the recovery path
+	# for anyone already sitting on a stale schema. Check whether your build
+	# regenerates on its own first.
 	python3 -I scripts/regenerate-restdefinition-crds.py --kubectl "$(KUBECTL)"
 
 regenerate-crds-check:   # read the stored side only; change nothing

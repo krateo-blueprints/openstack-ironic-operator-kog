@@ -8,6 +8,21 @@ covers the GENERATOR VERSION (oasgen #453). So installing a version that fixes a
 schema defect leaves every already-generated CRD exactly as the broken version
 wrote it. Upgrading is not the procedure; upgrading and then regenerating is.
 
+SCOPE, as of 2026-11-05: oasgen is implementing #453 -- a status field recording
+which build generated the CRD, so a mismatch triggers one regeneration per
+definition on upgrade. From whatever release carries that, an upgrade re-renders
+by itself and THIS IS NO LONGER THE MECHANISM. It remains:
+
+  * the procedure for every version BEFORE that release (0.50.0 here);
+  * the opt-out path when automatic regeneration is disabled;
+  * the recovery path for anyone who already upgraded and is sitting on a stale
+    schema, where the automatic trigger has nothing left to notice.
+
+Deliberately not naming a version: #453 was in build, not released, when this
+was written, and asserting a number I had not seen is the error this repo has
+made twice. Check whether the installed build regenerates on its own before
+reaching for this.
+
 `oasHash` IS hashed, so changing the referenced OAS ConfigMap is the supported
 nudge. This edits the OAS files in oas/ (a marker comment -- semantically inert,
 it does not touch the parsed schema), reapplies the ConfigMaps through the normal
