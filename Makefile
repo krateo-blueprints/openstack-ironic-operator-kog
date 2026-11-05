@@ -249,8 +249,10 @@ check-mapping-sources:   # every request-direction fieldMapping reads from a fie
 	#
 	# This reads the DOCUMENTS, so it answers before a single API call, and it is
 	# calibrated the hard way: it must find the two known-broken mappings and will
-	# exit NON-ZERO if it finds zero, because #421 is still an unmerged draft and a
-	# clean run therefore means the screen broke, not that the repo healed.
+	# exit NON-ZERO if it finds zero. #421 fixes those two rows and is merged to
+	# oasgen main (8461460), but no released tag contains it and the generator
+	# deployed here is 0.50.0 -- so a clean run means the screen broke, not that
+	# the repo healed. The gate is the DEPLOYED generator, not the merge.
 	python3 -I scripts/check-mapping-sources.py
 
 chart-host-pinned:   # restore the chart versions the LIVE CompositionDefinitions pin

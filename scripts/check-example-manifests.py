@@ -382,6 +382,32 @@ def self_test():
                     "the deliberately-exposed ArmOr fixture no longer trips the "
                     "multi-identifier rule -- either the fixture or the rule changed")
 
+    # Arm: the child-apiVersion fallback check must fire on a stale fallback, and
+    # must also fire when the define it reads has been reshaped away -- a check
+    # that silently verifies nothing is the failure mode this suite exists for.
+    with tempfile.TemporaryDirectory() as td:
+        hp = os.path.join(td, "charts/kubernetes-cluster/templates")
+        os.makedirs(hp)
+        stale = ('{{- define "kubernetes-cluster.lifecycleApiVersion" -}}\n'
+                 '{{- default "composition.krateo.io/v0-5-6" .Values.lifecycleApiVersion -}}\n'
+                 '{{- end -}}\n')
+        with open(os.path.join(hp, "_helpers.tpl"), "w") as fh:
+            fh.write(stale)
+        cases += 1
+        if not check_lifecycle_fallback({"baremetal-host": "composition.krateo.io/v0-6-2"}, td):
+            failures.append("a fallback of v0-5-6 against a child shipping v0-6-2 "
+                            "did not trip check_lifecycle_fallback")
+        cases += 1
+        if check_lifecycle_fallback({"baremetal-host": "composition.krateo.io/v0-5-6"}, td):
+            failures.append("a fallback MATCHING the child version tripped "
+                            "check_lifecycle_fallback -- it fires on agreement")
+        with open(os.path.join(hp, "_helpers.tpl"), "w") as fh:
+            fh.write('{{- define "something.else" -}}x{{- end -}}\n')
+        cases += 1
+        if not check_lifecycle_fallback({"baremetal-host": "composition.krateo.io/v0-6-2"}, td):
+            failures.append("the define being gone did not trip "
+                            "check_lifecycle_fallback -- it would verify nothing silently")
+
     print(f"  self-test: {cases} cases")
     for f in failures:
         print(f"    FAIL {f}")
@@ -390,6 +416,53 @@ def self_test():
         return False
     print("  self-test: OK (the check demonstrably still fails on bad input)")
     return True
+
+
+def lifecycle_fallback(root=None):
+    """The literal apiVersion `kubernetes-cluster.lifecycleApiVersion` falls back to.
+
+    Returns (fallback_string, source_path) or (None, path) if the define is gone.
+    """
+    root = root or REPO
+    path = os.path.join(root, "charts/kubernetes-cluster/templates/_helpers.tpl")
+    with open(path) as fh:
+        body = fh.read()
+    m = re.search(
+        r'define\s+"kubernetes-cluster\.lifecycleApiVersion".*?'
+        r'default\s+"([^"]+)"\s+\.Values\.lifecycleApiVersion',
+        body, re.S)
+    return (m.group(1) if m else None), path
+
+
+def check_lifecycle_fallback(charts, root=None):
+    """The parent's child-apiVersion fallback must name the child it ships against.
+
+    `lifecycleApiVersion` is OPTIONAL in the generated KubernetesCluster CRD and
+    has no schema default, so the chart's fallback is REACHABLE: a cluster CR that
+    omits the field renders BaremetalHosts at whatever this string says. It was
+    stale at v0-5-6 while the served child version was v0-6-2, which would have
+    wedged any fresh cluster CR -- invisibly, because the one live CR sets the
+    field explicitly and never took the fallback path.
+
+    Nothing else catches this. `helm lint` sees a valid string; `helm template`
+    renders no BaremetalHost at all offline (they gate on a live lookup), so even
+    a full render is silent on it.
+    """
+    want = charts.get("baremetal-host")
+    got, path = lifecycle_fallback(root)
+    rel = os.path.relpath(path, root or REPO)
+    if got is None:
+        return [f"{rel}: the lifecycleApiVersion define is gone or reshaped -- "
+                f"this check now verifies nothing and must be updated, not deleted"]
+    if want is None:
+        return [f"charts/baremetal-host/Chart.yaml: no version found, so {rel}'s "
+                f"fallback {got} cannot be checked against anything"]
+    if got != want:
+        return [f"{rel}: lifecycleApiVersion falls back to {got}, but "
+                f"charts/baremetal-host ships {want}. A KubernetesCluster CR that "
+                f"omits the field would render BaremetalHosts at an apiVersion the "
+                f"apiserver does not serve. Bump the fallback with the child chart."]
+    return []
 
 
 def main():
@@ -405,9 +478,12 @@ def main():
     with tempfile.TemporaryDirectory() as td:
         snippets = doc_snippets(td)
         files = targets() + snippets
-        problems, seen = check(files, chart_versions(), config_kinds(), REPO, rmap)
+        charts = chart_versions()
+        problems, seen = check(files, charts, config_kinds(), REPO, rmap)
+    problems += check_lifecycle_fallback(charts)
     print(f"  checked {seen} resources across {len(files)} files "
-          f"({len(snippets)} of them ```yaml fences in docs/)")
+          f"({len(snippets)} of them ```yaml fences in docs/) "
+          f"+ the parent's child-apiVersion fallback")
     if problems:
         print(f"  {len(problems)} problem(s):")
         for p in problems:

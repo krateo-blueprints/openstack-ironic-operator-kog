@@ -12,8 +12,19 @@ the document-level form of the check oasgen is building as a generation warning
 instead of after a 406 went unnoticed for five days.
 
 Calibration: it must report the TWO KNOWN cases below and nothing else. A run
-reporting zero problems means the screen broke, not that the repo is clean --
-#421 is still an unmerged draft, so the defect is necessarily present.
+reporting zero problems means the screen broke, not that the repo is clean.
+
+That holds because of what is DEPLOYED, not what is merged. oasgen #421 fixes
+these two rows and was merged to main as 8461460 on 2026-11-04, but no released
+tag contains it yet -- every tag from 0.46.0 to 0.51.0 compares `behind` that
+commit -- and the provider running here is 0.50.0. The rows clear when a tag
+containing 8461460 is DEPLOYED, which is checkable in one call:
+
+    gh api repos/krateo-platformops/oasgen-provider/compare/8461460...<tag> \
+      --jq .status      # "identical" or "ahead" => the fix is in that tag
+
+Until then a clean run is an instrument failure. "Merged upstream" is not the
+gate; the generator that reads these documents is.
 """
 import glob
 import os
@@ -22,7 +33,8 @@ import sys
 
 import yaml
 
-# The two mappings that ARE broken, by upstream defect #419, pending #421.
+# The two mappings that ARE broken by upstream defect #419. #421 fixes them and
+# is merged to main (8461460) but UNRELEASED; the deployed generator is 0.50.0.
 # Listed so a clean run is recognised as a BROKEN SCREEN rather than good news.
 KNOWN_BROKEN = {
     ("restdefinition-power.yaml", "node_id", "spec.node_id"),
@@ -87,7 +99,8 @@ def main():
 
     if missing:
         print(f"\n  SCREEN BROKEN: expected to find {sorted(missing)} and did not.")
-        print("  #421 is an unmerged draft, so these cannot legitimately be clean.")
+        print("  #421 (8461460) is merged upstream but in no released tag, and the")
+        print("  deployed generator is 0.50.0 -- so these cannot legitimately be clean.")
         print("  A zero here means the audit stopped working, not that the repo did.")
         return 2
     if new:
@@ -95,7 +108,7 @@ def main():
         print("  resolves to nothing at request time and the call goes out malformed.")
         return 1
     print(f"\n  OK: exactly the {len(KNOWN_BROKEN)} known #419 mappings, nothing new.")
-    print("  When #421 ships and the spec property returns, this should reach zero")
+    print("  When a tag containing 8461460 is DEPLOYED, this should reach zero")
     print("  and KNOWN_BROKEN should be emptied in the same commit.")
     return 0
 

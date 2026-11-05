@@ -14,8 +14,23 @@
      reconciles -- the parent and child charts are in lockstep through a
      string neither declares. Overridable now, so the next bump is a value
      change rather than a chart release. */}}
+{{/*
+The BaremetalHost apiVersion this parent renders. `lifecycleApiVersion` is
+OPTIONAL in the generated CRD and carries no schema default, so this fallback is
+REACHABLE: any KubernetesCluster CR that omits the field renders with it.
+
+It therefore has to name the child version this parent is released against, and
+it was stale at v0-5-6 while the served child version was v0-6-2 -- so a cluster
+CR created without the field would have rendered BaremetalHosts at an apiVersion
+the apiserver no longer serves, and wedged with a confusing error. The existing
+lab CR sets the field explicitly, which is the only reason this never fired.
+
+`make check-examples` now asserts this string equals charts/baremetal-host's own
+Chart.yaml version, so bumping the child without bumping this fails the build
+instead of waiting for a fresh cluster CR to discover it.
+*/}}
 {{- define "kubernetes-cluster.lifecycleApiVersion" -}}
-{{- default "composition.krateo.io/v0-5-6" .Values.lifecycleApiVersion -}}
+{{- default "composition.krateo.io/v0-6-2" .Values.lifecycleApiVersion -}}
 {{- end -}}
 {{- define "kubernetes-cluster.lifecycleKind" -}}BaremetalHost{{- end -}}
 
