@@ -1359,10 +1359,42 @@ Ready=True   reason=Available
 Synced=True  reason=ReconcileSuccess
 ```
 
-with no mention of either generation error. The generator produced them; the
-status does not carry them; nothing in the cluster can be asked about them. They
-are only visible by rendering the definition yourself, which is why eight dead
-declarations survived in this repo until a tool existed that printed them.
+with no mention of either generation error.
+
+**Correction: they ARE reported, and the true version is worse.** oasgen emits
+them as a Kubernetes Warning Event (`reason=SchemaWarnings`,
+`restdefinition.go:1031`) and nowhere else. No condition carries them, so the
+status reading above is right -- but "nothing in the cluster can be asked about
+them" was wrong. I checked conditions and never checked events.
+
+The defect is a channel-lifetime mismatch, not silence. The facts are permanent;
+`--event-ttl` defaults to one hour (confirmed unset on this apiserver), and the
+emitting path runs only on create or on an OAS/spec change. So for `ironic-port`
+they fired once at install and were collected an hour later.
+
+Confirmed by accident: the §9.12 regeneration re-emitted all three at
+06:08:21Z, which is the only reason a definition I had called silent had events
+when I finally looked. `ironic-node` has none, consistent with it being the one
+installed definition declaring no `excludedSpecFields`.
+
+And the events carry **more** than my render diff found. `ironic-node-power` and
+`ironic-node-provision` each hold two warnings I had never seen, because my
+render covered only the four `uuid`-excluding definitions:
+
+```
+generation error at identifiers.node_id: status field 'node_id' not found in
+    response, defaulting to string
+validation error: could not extract schema for action 'create' to compare:
+    no suitable response
+```
+
+The first is the same `node_id` that `check-mapping-sources` found statically,
+approached from the other end: my screen reasoned from the documents that
+`spec.node_id` is mapping-suppressed, while the generator observed that
+`node_id` is not in the response either. **That warning had been sitting in a
+one-hour event since the day the definition was installed, while I derived half
+of it from first principles over two days.** Had it been a condition, that screen
+would not have needed to exist. Captured in `evidence/` before expiry.
 
 `scripts/render-diff-oasgen.py` performs the comparison. The eight errors are
 real and unfixed: removing the dead `excludedSpecFields` and `configurationFields`
