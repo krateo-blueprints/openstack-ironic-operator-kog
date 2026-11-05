@@ -996,11 +996,35 @@ NodePower, 2 Ports), no `NodeProvision` rendered, and the BaremetalNode body
 unchanged but for the hash annotation. The new configdrive reaches Ironic only
 through a deploy transition, which an already-active node does not render.
 
-Worth being explicit that this safety is **accidental**: these blades are in the
-state the chart's own comment calls "will never auto-redeploy", because the
-publish step never populated the observed hash. Drift detection is inert on this
-fleet. A fleet where it worked would have been reimaged by this promotion, and
-nothing in the chart would have asked first.
+**Correction to the first version of this section: that safety is NOT accidental,
+it is an interlock.** I wrote that the publish step had failed and the fleet got
+lucky. It had not. `deployed_configdrive_hash` is absent from the CR because
+`scripts/ironic-node-extra-bridge.py` mirrors an explicit allow-list and that key
+is **deliberately excluded**, with the reason stated where it is excluded:
+
+> DELIBERATELY ABSENT: deployed_configdrive_hash. [...] that rendered value is
+> .Chart.Version rather than a content hash. Mirroring it would arm a re-image of
+> every blade on every chart bump. Make it a real content hash first; until then
+> leaving it unmirrored is what keeps the gate shut.
+
+So the blade does publish the hash to Ironic; the bridge declines to carry it to
+Kubernetes, and `observedConfigDriveHash` reads the CR. One deliberately omitted
+tuple entry is the only thing standing between a chart bump and a six-blade
+reimage — and it is load-bearing exactly as designed.
+
+Two things follow that the "accidental" reading got backwards. The promotion was
+never one interlock away from disaster by luck; it was held by a control someone
+put there on purpose. And the real defect is not the inert detection — it is that
+**the hash is a chart version rather than a hash of the configdrive**, which is
+why the interlock has to exist at all. Fix that and drift detection can be armed
+as designed: a bump that changes nothing in the configdrive would stop looking
+like drift, and a genuine content change would redeploy. Until then the feature
+ships inert, deliberately, and the comment is the only thing that says so —
+nothing in the chart or the test suite asserts the exclusion is still there.
+
+The way I got this wrong is worth keeping: I read an absent field, found a code
+path that explains absence as failure, and stopped. The file that owns the field
+explains it as policy, in a comment addressed to exactly the person I was being.
 
 **The version-stripping window is real but short.** Both `v0-13-23` and
 `v0-13-25` were served at t+12s; by the next read `v0-13-23` was pruned and only

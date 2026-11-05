@@ -408,6 +408,36 @@ def self_test():
             failures.append("the define being gone did not trip "
                             "check_lifecycle_fallback -- it would verify nothing silently")
 
+    # Arm: the configdrive-hash interlock guard must fire when the key is added
+    # (the obvious "fix" that arms a fleet reimage), stay quiet when it is absent,
+    # and fire when EXTRA_KEYS has been reshaped so it can no longer check.
+    with tempfile.TemporaryDirectory() as td:
+        sp = os.path.join(td, "scripts")
+        os.makedirs(sp)
+        bp = os.path.join(sp, "ironic-node-extra-bridge.py")
+        safe = 'EXTRA_KEYS = ("kubeadm_join", "cert_key", "drain_kubeconfig")\n'
+        armed = ('EXTRA_KEYS = ("kubeadm_join", "cert_key",\n'
+                 '              "deployed_configdrive_hash")\n')
+        with open(bp, "w") as fh:
+            fh.write(safe)
+        cases += 1
+        if check_configdrive_hash_interlock(td):
+            failures.append("the interlock guard fired on a bridge that correctly "
+                            "EXCLUDES deployed_configdrive_hash")
+        with open(bp, "w") as fh:
+            fh.write(armed)
+        cases += 1
+        if not check_configdrive_hash_interlock(td):
+            failures.append("deployed_configdrive_hash present in EXTRA_KEYS did "
+                            "NOT trip the interlock guard -- a fleet reimage would "
+                            "be armed with nothing objecting")
+        with open(bp, "w") as fh:
+            fh.write("EXTRA_KEY_SET = {'kubeadm_join'}\n")
+        cases += 1
+        if not check_configdrive_hash_interlock(td):
+            failures.append("EXTRA_KEYS being reshaped away did not trip the "
+                            "interlock guard -- it would verify nothing silently")
+
     print(f"  self-test: {cases} cases")
     for f in failures:
         print(f"    FAIL {f}")
@@ -465,6 +495,47 @@ def check_lifecycle_fallback(charts, root=None):
     return []
 
 
+def check_configdrive_hash_interlock(root=None):
+    """`deployed_configdrive_hash` must stay OUT of the bridge's EXTRA_KEYS.
+
+    baremetal-host auto-fires transition-undeploy -- Ironic wipes the blade --
+    when the observed configdrive hash is non-empty and differs from the rendered
+    one. The rendered one is the PARENT CHART VERSION, not a hash of the
+    configdrive. So the moment this key is mirrored into the CR, every chart bump
+    looks like drift and reimages all six blades.
+
+    The blade does publish the hash to Ironic. The bridge declining to carry it is
+    the whole interlock, and until this commit a comment was its only protection:
+    adding one tuple entry -- the obvious way to "fix" drift detection not working
+    -- arms a fleet reimage with nothing objecting.
+
+    This guard is the one place where a PASS is not the goal of the feature. It
+    should be deleted when the rendered hash becomes a content hash, in the same
+    commit that makes it one, and not before.
+    """
+    root = root or REPO
+    path = os.path.join(root, "scripts/ironic-node-extra-bridge.py")
+    rel = os.path.relpath(path, root)
+    with open(path) as fh:
+        body = fh.read()
+    m = re.search(r"^EXTRA_KEYS\s*=\s*\((.*?)\)", body, re.S | re.M)
+    if not m:
+        return [f"{rel}: EXTRA_KEYS not found or reshaped -- this guard now "
+                f"verifies nothing and must be updated, not deleted"]
+    keys = set(re.findall(r'"([^"]+)"', m.group(1)))
+    if not keys:
+        return [f"{rel}: EXTRA_KEYS parsed as empty -- the guard cannot confirm "
+                f"the exclusion, so treat it as unverified"]
+    if "deployed_configdrive_hash" in keys:
+        return [f"{rel}: deployed_configdrive_hash is in EXTRA_KEYS. Mirroring it "
+                f"arms baremetal-host's auto-undeploy on every chart bump, because "
+                f"the rendered hash is the parent CHART VERSION, not a content "
+                f"hash -- a bump that changes nothing would reimage every blade. "
+                f"Make the rendered value a real content hash first, and delete "
+                f"this guard in that same commit."]
+    return []
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--self-test", action="store_true",
@@ -481,9 +552,11 @@ def main():
         charts = chart_versions()
         problems, seen = check(files, charts, config_kinds(), REPO, rmap)
     problems += check_lifecycle_fallback(charts)
+    problems += check_configdrive_hash_interlock()
     print(f"  checked {seen} resources across {len(files)} files "
           f"({len(snippets)} of them ```yaml fences in docs/) "
-          f"+ the parent's child-apiVersion fallback")
+          f"+ the parent's child-apiVersion fallback "
+          f"+ the configdrive-hash interlock")
     if problems:
         print(f"  {len(problems)} problem(s):")
         for p in problems:
