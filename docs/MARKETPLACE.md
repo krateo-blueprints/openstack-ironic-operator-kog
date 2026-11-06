@@ -329,3 +329,52 @@ and should be done in the same step:
   materialised `spec.debug: {connectorVerbose: false}`. Removing the schema
   default stops it being added to *new* hosts; it does not remove it from
   existing ones, and nothing can — see `make check-blueprints` for the mechanism.
+
+### What the migration does to the two removed fields — measured
+
+`0.14.0` drops `ironicApiUrl` and `ironicApiVersion`. **The migration deletes
+them from storage.** It is not a read-time effect and the values do not survive
+in etcd.
+
+Measured by the core-provider session on **2.13.71**, GKE, k8s 1.36.4, three
+instances, with the witness that makes the result trustworthy: it waited until
+`krateo.io/composition-version` had moved to the new version on all three
+(24s after the bump) and only then read the after-state.
+
+The read that settles it is through the **old** endpoint, which still declares
+the field — so absence there cannot be explained by pruning on the way out:
+
+| | `spec` read through `v0-1-0` |
+|---|---|
+| before the bump | `{keptField, opt, removedField: "..."}` |
+| after migration | `{keptField, opt}` |
+
+**It is not silent.** Two detectors fire, and both are worth watching for during
+convergence:
+
+- `krateo.io/pruned-fields` on each object, carrying the lost subtree —
+  `{"spec":{"removedField":"SHOULD-IT-SURVIVE-MIGRATION"}}`
+- a `CompositionFieldsPruned` **Warning** event per object
+
+So expect seven such annotations and seven warnings on this fleet, and treat
+their *absence* as the surprising outcome.
+
+Mechanism, which rules out the obvious wrong explanation: the storage version
+`vacuum` is `{type: object, x-kubernetes-preserve-unknown-fields: true}` with
+conversion `None`, so **storage cannot prune**. The loss is the migration's own
+write through the narrower endpoint. `uid` is stable and `generation` moves
+1 → 2, so it is a spec write, not a recreate.
+
+Also measured, and it corrects "unserves `v0-13-26`" above: the old version
+stays **served** while any helm release still names it, and was pruned 20s after
+that last reference went. `prunableServedVersions` needs *no reference*, not
+merely zero instances — all three instances had moved 40s earlier and the
+version stayed.
+
+**Two limits, stated because they bound what the above licenses.** The lab runs
+core-provider **2.13.59**, and this is 2.13.71; a probe on 2.13.59 was built for
+exactly this and did not produce a valid result, because the new controller was
+unschedulable and the migration never ran, so the version this lab actually runs
+is **unmeasured**. And the recovery annotation degrades to paths-only above a
+size cap that was not tested — for these two fields it does not matter, since
+nothing reads them, but it would for a field whose value you needed back.
