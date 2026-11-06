@@ -1792,3 +1792,459 @@ works alone.** Declaring the field alone adds a permanently empty one; calling
 the setter alone gets pruned by the schema. **Shipping either half reproduces
 today's symptom while looking fixed** — which is the failure mode most likely to
 close the issue.
+
+### §9.20 — core-provider 2.13.65: both adoption variants pass, with the grace measured
+
+Upgraded `core-provider` + `chart-inspector` 2.13.62 → 2.13.65 after the image
+became pullable. Verified on the four axes: compositions 4× `ReconcileSuccess`,
+per-CR conditions 6× `ReconcileSuccess`, controller restarts 0, helm revisions
+unchanged (63/72/76/82/53/63/32), six blades `active/power on`.
+
+The per-version cdc pods were **replaced** (new names, 0 restarts, ready). That
+is 2.13.65 adding a `readinessProbe` on `/readyz` to each generated cdc
+Deployment, which core-provider flagged as expected — so the restart-count axis
+reading zero *and* new pod names is the correct signature, not a crash.
+
+#### Probe 1 — recreated CR, empty status (the 2.13.62 defect)
+
+The case my earlier route structurally could not reach: a recreated CR has no
+`status.digest`, and `plumbing`'s `maps.NestedString` reported the missing key as
+an error, so Observe failed every pass.
+
+```
+t+0s   label=None  digest=NO   (the defective precondition, captured)
+t+10s  label=adopt-probe-cwv9c7v6  digest=yes  Ready=Available  Synced=ReconcileSuccess
+       release rev1 -> rev2 "Upgrade complete"
+```
+
+**Completed in 10s.** The orphan was adopted and upgraded, not reinstalled, and
+one release existed throughout. The `digest=NO` sample matters: it shows the
+precondition was genuinely present rather than assumed.
+
+#### Probe 2 — `pending-install` orphan, and a void first attempt
+
+**My first attempt was void and I nearly reported it as a pass.** I constructed
+`pending-install` by setting the Secret's `status` **label**, then ran the probe
+and saw it complete in 15s. Two faults: helm reads `info.status` from the release
+**data** (base64 of base64 of gzipped JSON), so the label is only a query index;
+and I had labelled revision `.v2` while an adoption had already created `.v3`. So
+the probe tested a *deployed* orphan twice. That is
+[[reference_setup-cannot-produce-the-state]] — a fourth instance, committed hours
+after writing the note, in a script whose own header warns about constructed
+state.
+
+`scripts/helm-set-release-status.py` does it properly — patches the release data
+**and** the label, on the current revision, and optionally stamps
+`info.last_deployed` to now, because the grace is measured from `last_deployed`
+and a stale one is already past its grace. **Verified with `helm list` before
+proceeding**, which is the step the first attempt skipped.
+
+Against a real `pending-install` orphan:
+
+```
+t+0s     label=None                        release rev3 pending-install
+t+15s    Ready=PendingHelmOperation        "pending for 26s"
+t+61s    Ready=PendingHelmOperation        "pending for 1m13s"
+t+123s   Ready=PendingHelmOperation        "pending for 2m13s"
+t+170s   Ready=PendingHelmOperation        "pending for 3m13s"
+t+234s   Ready=PendingHelmOperation        "pending for 4m14s"
+t+297s   label=adopt-probe-cwv9c7v6  Ready=Available  rev5 deployed
+```
+
+```
+rev3  12:07:51  pending-install  Upgrade complete   <- constructed
+rev4  12:13:05  superseded       Rollback to 3      <- grace expired, rollback
+rev5  12:13:06  deployed         Upgrade complete   <- then the upgrade
+```
+
+**Adopt → helm lock → grace → rollback → upgrade, exactly as predicted.**
+`Synced` stayed `True/ReconcileSuccess` throughout, so `PendingHelmOperation`
+on `Ready` is the only waiting signal — and it carries `pendingFor`, so it is
+self-describing.
+
+**Grace, measured:** `last_deployed` 12:07:51 → rollback 12:13:05 = **5m14s**,
+against a derived 5m default plus reconcile timing. Total to completion
+**4m57s**, inside the ~7m expected ceiling and well inside the 10m threshold at
+which core-provider says to call it wedged.
+
+So the derived figures hold against a live cluster with external state behind the
+compositions. The six blades were untouched throughout both probes.
+
+### §9.21 — the plumbing v1.26.x defaulting predicate: zero, and a nearly vacuous zero
+
+oasgen is holding a `plumbing` v1.14.2 → v1.26.x bump and asked both available
+fleets to screen for its predicate: an **optional** object property (not in its
+parent's `required`) with a **reachable defaulted descendant** and **no required
+properties of its own**. At v1.26.1 such a parent gains `default: {}`; the
+apiserver applies defaults on *read* from etcd, and rdc sends top-level spec
+values whole — so after a re-render an existing CR could put a stanza on the wire
+that nobody authored, separated from the upgrade by the #453 regeneration gap.
+
+`scripts/check-defaulted-optional-objects.py`, 6-case control (3 must trip, 3
+must not), refuses to scan if the control fails. Result: **0 hits across all 8
+OAS documents.**
+
+**Then the question that mattered more: is the zero informative?**
+
+| document | defaults | nested objects | optional objects |
+|---|---|---|---|
+| all 8 combined | **4** | **26** | **26** |
+
+The optional-object half is satisfied **26 times over** — every nested object in
+this fleet is optional, so the zero is not "our objects are required". And all
+four `default:` occurrences turn out to be **the same thing**:
+
+```
+components.parameters.X-OpenStack-Ironic-API-Version.schema.default = '1.109'
+```
+
+A **header parameter** default, in four documents. **There is not one default in
+any request-body schema anywhere in this fleet.**
+
+**So the zero is real for us and nearly worthless as evidence.** The predicate
+needs two ingredients and one of them is entirely absent from our documents — we
+could not trip it whatever our object nesting looked like. We are clear by a
+general property rather than by an accident of shape, which is stronger than the
+other fleet's reason, but it also means **neither available fleet is a witness**:
+theirs is clear because its nested defaults sit under a required parent, ours
+because it has no body defaults at all.
+
+That is worth more to the person holding the bump than a clean report would be:
+it says the change is **untested in the field**, not screened safe.
+
+Secondary checks, both 0 across all 8 documents: `maxProperties` (the bound
+silently dropped at v1.14.2 and kept at v1.26.1) and `type: [integer, string]`
+nodes (which become `x-kubernetes-int-or-string`). Same as the other fleet.
+
+**Addendum — a real witness was found, and the caveat on my own screen was the
+useful part.** I had reported that my walker does not follow
+`allOf`/`anyOf`/`oneOf`. oasgen checked theirs against that and found it walked
+only `properties`, `items` and `additionalProperties` — so it reported **0 on the
+only shape anyone has found in the field**. Their two controls had both passed,
+and both used inline `properties`, because both came from their own model of the
+shape. *A control drawn from your own model tests the implementation against the
+model, not against the world.*
+
+The field instance, from the aruba fleet — **2 of 35** — is
+`allOf: [{$ref: .../PropertiesDto}]` with `nullable: true`, and the defaulted
+payload is a property literally named `default`, documented *"Only one default vpc
+for region is admissible."* So the injection would make every Vpc CR whose author
+omitted `properties` assert a region-unique role.
+
+**So the bump is no longer untested — the field evidence exists and is positive**,
+which supersedes my "neither fleet is a witness" conclusion. It was right when
+written and is not now.
+
+I closed the same hole here: the screen resolves local `$ref` with cycle
+detection and merges composition members for **both** `properties` and
+`required`. Three new controls are drawn from the field shape rather than my
+model, and **one of them immediately caught a bug in my own fix** — `own_req`
+was still reading the node's own `required`, so a parent whose `required` arrives
+through `allOf` would have tripped falsely. 6 controls → 9, all passing, and the
+0 survives the stricter walker.
+
+**And the risk is not reversible, which is why this is now a standing check
+rather than a reading.** aruba measured that once a default is materialised, one
+unrelated write — an annotation, a label, any controller touch — persists it to
+etcd; **pinning the CRD back does not remove it**, and the field is unowned in
+`managedFields`, so `kubectl apply` will not prune it. An object created fresh at
+the same moment comes back clean while one that lived through the window keeps
+the value.
+
+For this fleet that means the exposure would arrive with a **new Ironic OAS
+document**, at the next re-render, and could not be undone by pinning. A one-off
+reading cannot catch that; `make check-oas-defaults` can, and `make check` now
+runs all three standing screens together.
+
+### §9.22 — two Marketplace blueprints, and the defaulting predicate found on our own side
+
+The ask was a proper blueprint for Kubernetes and for bare metal, fit for the
+Krateo Marketplace. `charts/kubernetes-cluster` → **0.14.0**,
+`charts/baremetal-host` → **0.6.3**, published to the `blueprints` channel by
+`release-chart.yaml` on the next tag. `docs/MARKETPLACE.md` is the runbook.
+
+#### The gate was read, not guessed
+
+`krateo-blueprints/charts/.github/workflows/publish-chart.yaml` is the authority,
+so it was read rather than inferred. Three hard requirements, all on the
+**packaged** `.tgz`: `values.schema.json`, `compositiondefinition.yaml`, and an
+`icon` beginning `https://`. Both charts were packaged and the archives listed to
+confirm the two files are in them — a chart-root file is packaged, but
+`.helmignore` is invisible to a source-tree check, so the archive is what the
+screen reads too.
+
+The gate's own comments were worth the read for a second reason: they record that
+`tar tzf … | grep -q` made a PRESENT file fail the test, because `grep -q` exits
+on its first match, `tar` dies of SIGPIPE, and under `pipefail` the pipeline
+status becomes 141. It bit only the largest charts, in a run where 196 smaller
+ones passed. `check-blueprint-metadata.py` reads the listing whole for the same
+reason.
+
+#### What the gate passes, and the Marketplace then shows
+
+Six failures live on the far side of a green gate. The one that is not guessable:
+
+**`krateo.io/source-repo` decides whether a card appears at all.** The portal's
+live-index selector is literally
+`(.value[0].annotations["krateo.io/source-repo"] // "") != ""`. I first wrote
+this up as "without it the blueprint publishes and is never shown", citing our
+own `baremetal-lifecycle` 0.3.1 as the worked example — **and that was wrong.**
+`krateo-blueprints/marketplace`'s `hack/build-index.py` builds the curated
+ConfigMap *from this same live index*, removing only 18 named platform charts. So
+the annotation buys **immediacy, not existence**: without it the card waits for a
+`krateo-marketplace-catalog` release that is not ours to cut. Corrected in five
+places before the commit.
+
+Checked against the real index: **no entry carries that annotation yet** —
+`baremetal-lifecycle` included, and the `aws-*-stack` blueprints too. portal#292's
+own validation table says it in its third row. These two blueprints would be the
+first to use that route, which is a caveat worth carrying rather than hiding.
+
+Also measured, because the icon is the one field whose failure is purely visual:
+the gate tests only the *scheme*, so a `github.com/.../blob/...` URL passes it and
+renders a blank card — that URL serves an HTML page. Ours is the Akmon mark
+pinned to a commit SHA, verified HTTP 200 `image/svg+xml`.
+
+#### The form is the only interface a Marketplace user has
+
+Between them the two schemas had **119 property paths and not one `title`**, and
+most had no `description` either — a form of bare keys like `driver_info` and
+`undeployMode` with no help text. plumbing's `crdgen` carries both into the CRD
+(`transpile.go`: Description at :243, Title at :348), so both were authored, 119
+of them, through an injector that asserts the structural schema is unchanged once
+`title`/`description` are stripped from both sides. A typo in the mapping could
+otherwise have moved a type, a default or a `required` — and the chart version is
+the served apiVersion, so that is not a cosmetic risk.
+
+`title` is propagated by the generator but is **unverified on this cluster**: no
+CRD here was generated from a schema that had one. So every description was
+written to stand on its own, and the screen requires both rather than either.
+
+#### Two inputs the templates read and no Composition could set
+
+Found by reading the served CRDs rather than the chart:
+
+- **`conformance` was absent from the served `KubernetesCluster` CRD entirely.**
+  The templates read `.Values.conformance.install`; the schema never declared it.
+  So the conformance runner was reachable by `helm install` and unreachable
+  through a Composition — which is the only way a Marketplace user installs
+  anything.
+- **`cni.kubeProxyReplacement` was silently PRUNED.** `cni` declares properties,
+  so it is a structural schema with no `x-kubernetes-preserve-unknown-fields`, and
+  the API server drops an undeclared key without complaint. The chart default
+  (`true`) therefore always won, and the knob that `values.yaml` documents as
+  *required for conformance* could not be turned off.
+
+Both are now in the contract. Neither got a schema `default`, for the reason
+below.
+
+#### `ironicApiUrl` / `ironicApiVersion` are gone
+
+`values.yaml` had scheduled this since 2026-11-04 — *"Delete both at the next
+parent chart bump, manifests included"* — and this is that bump. Re-verified
+first: zero reads in either chart's templates. Removed from the schema,
+`values.yaml`, four manifests and two docs tables.
+
+`ironicApiVersion` is the one that had to go rather than being left alone. It
+reads exactly like the knob that sets Ironic's microversion, it was pinned to
+`1.81` — below the `1.83` floor the node look-up needs — and it was inert, so
+anyone "fixing" the apparent disconnect by wiring it through would reintroduce a
+`406` on every transition. In `values.yaml` that is a trap for a maintainer. In a
+Marketplace form it is a labelled, editable field that does nothing.
+
+#### The aruba predicate, on our own side of the house
+
+§9.21 screened the **OAS** documents for the plumbing defaulting shape and found
+zero. `values.schema.json` was never screened — and it has the shape.
+
+Measured 2026-11-05 on the live cluster. `debug` is an optional object whose child
+`connectorVerbose` carried `default: false`, so `crdgen` gave the parent
+`default: {}`, and **all six live `BaremetalHost` resources carried a
+`spec.debug: {connectorVerbose: false}` that no manifest ever wrote.** Exactly the
+irreversible materialisation aruba measured at 2 of 35, found here by looking at
+the one document class the earlier screen did not cover.
+
+The harm is small — the value it asserts is the one the chart would have used —
+but the mechanism is not: one unrelated write persists it, pinning the CRD back
+does not remove it, and `kubectl apply` will not prune it because the field is
+unowned in `managedFields`. The default now lives only in `values.yaml`, where
+Helm applies it at render time and nothing is persisted. **The six existing hosts
+keep the stanza, and nothing can remove it.** That is the finding, not a
+side-note.
+
+A top-level default is deliberately still allowed: it pre-fills the form and
+invents no stanza. The screen has three arms that must NOT fire, so it
+discriminates the shape with the consequence rather than the word "default".
+
+#### The screen, and the silence that hid my own defect
+
+`make check-blueprints` — 9 checks, 13 self-test cases, 3 of which must not fire.
+`make check` now runs four standing screens.
+
+While wiring it up, `check-examples` was extended to read ```yaml fences in
+`charts/*/README.md` as well as `docs/`, because a blueprint's chart README is the
+first thing a new user copies and its examples pin an apiVersion. The file count
+went 19 → 20 for **two** new READMEs, which is how I found that the
+`kubernetes-cluster` example used `…` elisions, parsed nowhere, and was therefore
+**skipped in silence** — unchecked, uncopyable, and the run still said OK. The
+example is now a complete manifest that parses, and the collector **counts** the
+fences it could not parse, with a self-test arm proving the count fires. 30 fences
+today: 7 screened, 23 carry no `kind`, 0 unparseable.
+
+A screen that skips what it cannot read, without saying so, is the failure mode
+this suite exists to catch — one level up, again.
+
+#### §9.22 addendum — oasgen's one authored default runs on every document we have
+
+The generalisation above ("any document that crdgen or oasgen turns into a CRD")
+came back with a result, on an axis I had not considered: not a file class, but a
+**scheme type** inside files already in scope.
+
+oasgen authors exactly one schema default of its own —
+`configuration_builder.go:258`, the `header` property of the **apiKey**
+authentication shape, defaulted from the scheme's `ParamName`. In oasgen's repo
+that branch is unrendered: 12 documents declare `bearer`, **zero** declare
+`apiKey`. Here it is the only branch there is. Keystone's `X-Auth-Token` *is* an
+apiKey-in-header scheme, and all seven Ironic documents declare it.
+
+Measured on the served Configuration CRDs:
+
+```
+authentication.apiKey.header   default: "X-Auth-Token"   present on 4 of 5
+default: {} stamped on authentication or apiKey           0
+apiKey.required                                           ['header', 'tokenRef']
+```
+
+**No stanza is invented**, and for the documented reason: the parent declares
+required properties, so plumbing #45's clause suppresses `default: {}`. The
+irreversible hazard does not arise here.
+
+Two things the measurement adds that the structural argument does not:
+
+- **The default is reachable, and it does real work.** CRD defaulting runs
+  *before* validation, so omitting the required `header` yields `X-Auth-Token`
+  rather than a rejection — it turns a required field into an effectively
+  optional one.
+- **On this fleet it never fires.** `manifests/nodeconfiguration-ironic.yaml`
+  supplies the value explicitly, so the live CR's `header` is **authored, not
+  defaulted**. "No materialisation observed" is therefore a property of our
+  manifest, not of oasgen's code — a distinction that matters if the manifest
+  ever stops setting it.
+
+**A loose end, recorded as one rather than dressed up.** `nodeconfigurations`
+carries no such default while the other four do. I proposed "generated before the
+feature shipped and never regenerated under #453" and **falsified it
+immediately**: `portconfigurations` is the oldest of the five (19:09 against
+19:23) and does carry it. The odd one out is an orphaned kind from the `Node` →
+`BaremetalNode` rename with zero live resources, so the cause is most likely the
+document it was generated from at the time. Unused, so not a hazard — but it is a
+case of one document class producing two different auth shapes, and I do not know
+why.
+
+The transferable part is about **scope, not mechanism**: my screen's blind spot
+was a file class, oasgen's was a scheme type, and neither of us could see our own
+from inside our own code.
+
+#### §9.22 addendum 2 — the `nodeconfigurations` loose end, closed; and a falsification that was itself unsound
+
+oasgen proposed a falsifiable hypothesis for the odd kind out: its document
+declared **more than one** apiKey scheme at generation time, which suppresses the
+authored default while leaving the shape intact. Cheap to kill, and it is dead —
+the document declared **zero**, not several:
+
+```
+restdefinition-node.yaml @129e84a    resource.kind: Node          -> NodeConfiguration
+restdefinition-node.yaml @HEAD       resource.kind: BaremetalNode -> BaremetalNodeConfiguration
+
+oas/ironic-node.yaml  f09f65a 2026-02-16   apiKey schemes: 0
+                      a24a833 2026-05-29   apiKey schemes: 0
+                      7501fe0 2026-06-10   apiKey schemes: 0   <- in effect at generation
+                      fe9fdfb 2026-10-31   apiKey schemes: 1   <- X-Auth-Token added here
+```
+
+All five Configuration CRDs were created on **2026-10-29**. The document gained
+its single apiKey scheme on **2026-10-31**, two days later. Four of the five
+nevertheless carry `authentication.apiKey.header: "X-Auth-Token"` today — a
+default that can only come from a scheme the document did not have when they were
+created. **So those four must have had their schemas rewritten after 10-31**, which
+is what the regeneration nudges of 11-04 and 11-05 did (an `oasHash` change forces
+the re-read; under #453 an upgrade alone does not).
+
+`nodeconfigurations` is the one kind no RestDefinition has pointed at since the
+`Node` → `BaremetalNode` rename. Nothing would re-read a document for it, so its
+schema still reflects the June document with no security schemes at all. Zero live
+resources. Closed, and not a hazard.
+
+**The part worth keeping is about my own falsification.** I proposed exactly this
+regeneration explanation in the previous addendum and then rejected it, because
+`portconfigurations` is the *oldest* of the five by `creationTimestamp` and does
+carry the default. That falsification was unsound — and unsound in the same way
+the hypothesis was. **A CRD's `creationTimestamp` says nothing about when its
+schema was last written.** Creation time and generation-of-current-content time
+are different quantities, and I compared the wrong one, so the test could not have
+addressed the claim either way. I abandoned a correct explanation on the strength
+of an instrument that was never pointed at the question.
+
+`managedFields` would have been the obvious instrument and it carries no `time` on
+these objects, so it gives nothing. What actually dated the schemas was their
+**content**: a default that can only originate in a scheme the document lacked
+until 10-31 dates the schema to after 10-31, with no clock involved.
+
+This repo has a standing note that a null result is a claim about the instrument
+first. The inverse holds and had not been written down: **a falsification is a
+claim about the instrument too.** Rejecting your own hypothesis feels like rigour,
+which is exactly why it gets less scrutiny than accepting one.
+
+#### §9.22 addendum 3 — three mechanisms for a non-event, and the one rule worth keeping
+
+A thread that ended with nothing to fix, recorded because the *shape* of it cost
+more than any error inside it.
+
+A peer reported a release body asserting `Commits in this tag:` and listing 2 of
+19. Three causes were then proposed in sequence — their time-window mechanism, my
+`creationTimestamp` falsification earlier in the day, and my `--no-merges`
+mechanism. The last was worth something to this repo on its face, because
+`.github/workflows/release-notes.yaml` here delegates to the *same* org-wide
+reusable workflow, so a defect in its fallback body would be ours on the next tag.
+
+I read that workflow rather than guessing, and two suspicions died in it:
+`fetch-depth: 0` is set and commented, and `PREV` is resolved by commit topology
+(`git describe --tags --abbrev=0 --exclude=$TAG $TAG^`) rather than by version
+sort. That left `git log --no-merges` as the only filter between 19 and 2, and I
+sent the one-command kill test rather than the explanation.
+
+**It died, and it died irrelevant. The observation never happened.** The body
+listed all 19. The "2" was an artifact of a sweep step that ended in `| head -6`,
+read as the whole body — six lines being a marker, two blanks, the fallback
+notice, and two bullets.
+
+So: **three sound mechanisms for a number that did not exist.** Also measured
+here, which is why the hypothesis was plausible enough to send and useless anyway:
+
+```
+this repo, 0.1.0..HEAD:   all 126   --no-merges 126   merges 0
+```
+
+Main here is linear, so `--no-merges` drops nothing. It drops nothing in their
+monorepo either. No release body in either repo is affected, and nothing in this
+repo needed changing.
+
+**The rule worth keeping is theirs, and it is about provenance rather than
+quantities: when one row of a table is hand-typed among measured ones, the typed
+row is the finding.** Their comparison table had three rows from
+`grep -cE '^- '` and one typed by hand from the truncated reading — and the typed
+row was the only one that mattered. The measured rows lend the typed one their
+credibility; that is the entire mechanism. It would have caught four of the nine
+instrument errors the two sessions produced today.
+
+A second rule fell out of the sequence: **when a third mechanism arrives for one
+unmoving observation, the thing nobody has checked is whether the observation
+happened.** The countervailing evidence was in the same output that produced the
+artifact — `of which merges: 0` — quoted and unused.
+
+Corollary, narrow and mechanical: `| head -N` and `| tail -N` make a sample look
+like a total. Do not conclude about a whole from a pipeline ending in one.
+
+This repo's standing note says a null result is a claim about the instrument
+first. Two more belong beside it now: so is a falsification, and so is the
+*existence* of the thing being explained.

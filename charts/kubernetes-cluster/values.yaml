@@ -62,30 +62,6 @@ configurationRef:
   name: ironic-endpoint
   namespace: openstack
 
-# VESTIGIAL. Both keys below are read by NOTHING — verified 2026-11-04 by
-# checking every top-level values key against the whole templates/ tree:
-# `ironicApiUrl` and `ironicApiVersion` were the only two with zero mentions.
-# The endpoint that is actually used is `ironicAuth.ironicUrl`
-# (_helpers.tpl:714); the microversion is declared in the OAS documents and
-# defaulted onto every generated CR by the apiserver.
-#
-# `ironicApiVersion: "1.81"` is the dangerous one, and it is dangerous
-# precisely BECAUSE it is inert. It is set here, in four manifests and on the
-# live cluster CR, and it reads exactly like the knob that controls Ironic's
-# microversion. It is below 1.83, which is the floor for the findby's
-# `include_children=true`. So anyone who "fixes" the apparent disconnect by
-# wiring this value through would silently reintroduce
-#
-#   406 "Request not acceptable. The minimal required API version should be 1.83"
-#
-# on every NodeProvision Observe — the exact failure removed on 2026-11-04,
-# which had gone unnoticed for five days because no transition needed to run.
-#
-# Not deleted yet only because removing them from values.schema.json
-# regenerates the CRD and would prune the field from a live, CNCF-conformant
-# cluster's CR. Delete both at the next parent chart bump, manifests included.
-ironicApiUrl: http://ironic.openstack.svc.cluster.local:6385
-ironicApiVersion: "1.81"
 
 # Keystone credentials baked into the CP cloud-init so publish-join.sh
 # can PATCH Ironic's node.extra directly from the blade. This is the

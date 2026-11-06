@@ -10,7 +10,7 @@
 #
 #   kubectl apply -f manifests/kubernetescluster-example.yaml
 ---
-apiVersion: composition.krateo.io/v0-13-26
+apiVersion: composition.krateo.io/v0-14-0
 kind: KubernetesCluster
 metadata:
   name: lab
@@ -34,8 +34,6 @@ spec:
   configurationRef:
     name: ironic-config
     namespace: openstack
-  ironicApiUrl: http://ironic.openstack.svc.cluster.local:6385
-  ironicApiVersion: "1.81"
   managementCluster:
     # Reachable from the bare-metal provisioning network. Pin a stable
     # advertised address (kube-vip, MetalLB, external LB, or

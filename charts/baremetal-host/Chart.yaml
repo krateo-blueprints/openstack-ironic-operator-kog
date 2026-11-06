@@ -1,18 +1,47 @@
 apiVersion: v2
-appVersion: "1.0"
-description: 'Unified single-CRD composition for Ironic bare-metal host lifecycle.
-  Absorbs the baremetal-discovery + baremetal-lifecycle split into one BaremetalHost
-  resource with phase gates, like metal3''s BaremetalHost. State machine:   registering
-  -> (inspecting -> ready)? -> available -> (provisioning -> provisioned) Power is
-  managed via spec.online when set. '
-keywords:
-- ironic
-- bare-metal
-- openstack
-- krateo
-- metal3
-maintainers:
-- name: openstack-ironic-operator
 name: baremetal-host
+description: Register, inspect, provision and release a physical server through OpenStack Ironic, as one Kubernetes resource. Declare the host's BMC, its NICs and the OS image to deploy; the composition drives Ironic's state machine from enrollment to a running machine and back, and holds it there. Needs a reachable Ironic API (standalone or full OpenStack) -- it does not install one.
 type: application
-version: 0.6.2
+
+# The chart version IS the served composition apiVersion: 0.6.3 is served as
+# composition.krateo.io/v0-6-3. Registering a new version stops the previous one
+# being served, so the kubernetes-cluster blueprint's `lifecycleApiVersion` has to
+# move in the same step -- `make check-examples` fails the build if it does not.
+version: 0.6.3
+appVersion: "1.0"
+
+home: https://github.com/krateo-blueprints/openstack-ironic-operator-kog
+sources:
+  - https://github.com/krateo-blueprints/openstack-ironic-operator-kog
+  - https://docs.openstack.org/ironic/latest/
+
+# An absolute https URL serving the image bytes themselves, pinned to a commit.
+# publish-chart.yaml's blueprints gate checks only the scheme, so a github.com
+# /blob/ URL passes the gate and then renders an empty card -- it serves an HTML
+# page, not an SVG. Verified 2026-11-05: 200, content-type image/svg+xml.
+icon: "https://raw.githubusercontent.com/krateo-blueprints/openstack-ironic-operator-kog/1516dd678f3c0760557bd1f142db0a67f81b8abd/branding/krateo-akmon-mark.svg"
+
+keywords:
+  - bare-metal
+  - baremetal
+  - ironic
+  - openstack
+  - provisioning
+  - kog
+  - krateo
+maintainers:
+  - name: openstack-ironic-operator-kog
+    url: https://github.com/krateo-blueprints/openstack-ironic-operator-kog
+
+annotations:
+  krateo.io/category: "compute"
+  krateo.io/display-name: "Bare-Metal Host (Ironic)"
+  krateo.io/maturity: "beta"
+  # Load-bearing. The Marketplace adds a card for a live-index chart only when
+  # the NEWEST version of its entry carries this annotation (portal's
+  # catalogLiveDefs, merged 2026-10-05), so without it the card waits for the
+  # next krateo-marketplace-catalog release -- which is not ours to cut -- rather
+  # than appearing when the publish lands. It is also what the publisher's
+  # collision guard reads to decide who owns the chart name.
+  krateo.io/source-repo: "krateo-blueprints/openstack-ironic-operator-kog"
+  krateoSupportedVersion: ">= 2.5.1"

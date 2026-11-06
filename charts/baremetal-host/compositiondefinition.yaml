@@ -1,0 +1,37 @@
+# Registers this blueprint with Krateo.
+#
+# core-provider reads the chart's values.schema.json, generates the BaremetalHost
+# CRD from it, and runs a composition-dynamic-controller for THIS chart version.
+# Each registered version gets its own controller Deployment, so registering a new
+# one does not disturb hosts already managed by the old.
+#
+# This file must ship INSIDE the chart. The Marketplace publisher inspects the
+# packaged .tgz and refuses a blueprint without it (publish-chart.yaml, blueprints
+# channel gate); a copy sitting beside the chart does not count. It is not a
+# template -- nothing here is rendered, and Helm ignores it at install time.
+#
+# `version` must equal the chart version, because it IS the served apiVersion:
+# 0.6.3 -> composition.krateo.io/v0-6-3. `make check-blueprints` fails if the two
+# drift.
+---
+apiVersion: core.krateo.io/v1alpha1
+kind: CompositionDefinition
+metadata:
+  name: baremetal-host
+  namespace: krateo-system
+spec:
+  chart:
+    url: oci://ghcr.io/krateo-blueprints/charts/baremetal-host
+    version: "0.6.3"
+    # Served from the Marketplace's classic Helm channel instead of OCI:
+    #   url: https://krateo-blueprints.github.io/charts/blueprints
+    #   repo: baremetal-host
+    #   version: "0.6.3"
+    #
+    # For a private OCI package:
+    #   credentials:
+    #     username: krateo
+    #     passwordRef:
+    #       key: token
+    #       name: ghcr-credentials
+    #       namespace: krateo-system

@@ -285,6 +285,58 @@ regenerate-crds:   # force oasgen to re-read the OAS and rewrite the generated C
 regenerate-crds-check:   # read the stored side only; change nothing
 	python3 -I scripts/regenerate-restdefinition-crds.py --kubectl "$(KUBECTL)" --check-only
 
+check-oas-defaults:   # no OAS body schema may acquire the v1.26.x defaulting shape
+	# An OPTIONAL object property with a reachable defaulted descendant and no
+	# required properties of its own gains `default: {}` under plumbing v1.26.x.
+	# The apiserver materialises defaults on READ, and rdc sends top-level spec
+	# values whole, so a re-render would put a stanza on the wire that nobody
+	# authored -- arriving at the next re-render rather than at the upgrade.
+	#
+	# This is a STANDING check, not a one-off reading, because the exposure
+	# arrives with a NEW OAS document and because it is NOT REVERSIBLE: once a
+	# default is materialised, one unrelated write persists it to etcd, pinning
+	# the CRD back does not remove it, and the field is unowned in managedFields
+	# so `kubectl apply` will not prune it. Measured by the aruba fleet, which
+	# found the only field instances anyone has (2 of 35).
+	python3 -I scripts/check-defaulted-optional-objects.py
+
+check-blueprints:   # the two Marketplace blueprints would publish AND render a usable form
+	# Three of the nine checks reproduce the publisher's own channel gate
+	# (krateo-blueprints/charts publish-chart.yaml): values.schema.json and
+	# compositiondefinition.yaml must be in the PACKAGED .tgz, and `icon` must be an
+	# absolute https URL. We package and read the archive rather than the source
+	# tree, because .helmignore is invisible to a source-tree check.
+	#
+	# The other six cover what the gate passes and the Marketplace then shows:
+	#
+	#  - no `krateo.io/source-repo` -> the card waits for the next catalog release
+	#    instead of appearing when the publish lands. Checked 2026-11-05: NO entry
+	#    in the live index carries it yet, this product's own baremetal-lifecycle
+	#    0.3.1 included, so these two would be the first to use that route.
+	#  - a github /blob/ icon -> passes the gate's scheme test, serves an HTML page,
+	#    renders a blank card.
+	#  - a CD version drifting from Chart.yaml -> the chart version IS the served
+	#    apiVersion, so the two cannot differ.
+	#  - an undocumented property -> the form is the only interface a Marketplace
+	#    user has, and it would show a bare key with no help text.
+	#  - a default under an OPTIONAL object -> crdgen gives the parent `default: {}`
+	#    and the apiserver materialises a stanza nobody authored, IRREVERSIBLY.
+	#    Measured here on 2026-11-05: all six live BaremetalHosts carry a
+	#    `spec.debug: {connectorVerbose: false}` no manifest ever wrote.
+	#  - additionalProperties:false -> an opaque chart-inspector 500 (#325).
+	#
+	# The self-test runs first and the && is load-bearing, as everywhere here: 13
+	# cases, three of which must NOT fire, so the screen is shown to discriminate
+	# rather than merely to complain.
+	#
+	# Pass BLUEPRINT_ONLINE=1 to resolve the icon URL as well. Off by default so
+	# the screen stays usable with no network.
+	python3 -I scripts/check-blueprint-metadata.py --self-test && \
+		python3 -I scripts/check-blueprint-metadata.py $(if $(BLUEPRINT_ONLINE),--online,)
+
+check: check-examples check-mapping-sources check-oas-defaults check-blueprints   # every standing screen
+	@echo "all standing screens passed"
+
 chart-host-pinned:   # restore the chart versions the LIVE CompositionDefinitions pin
 	# `chart-host` publishes whatever is in Chart.yaml today. The chartrepo pod has
 	# no volumes, so a cluster restart wipes everything it serves and leaves the

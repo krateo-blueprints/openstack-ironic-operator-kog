@@ -26,7 +26,7 @@
 # the same blade — failure → BH auto-redeploy via v0.4.0 baremetal-host
 # (Task #89) → fresh OS → fresh kubeadm join attempt.
 ---
-apiVersion: composition.krateo.io/v0-13-26
+apiVersion: composition.krateo.io/v0-14-0
 kind: KubernetesCluster
 metadata:
   name: ettore-ha
@@ -47,8 +47,6 @@ spec:
   configurationRef:
     name: ironic-endpoint
     namespace: openstack
-  ironicApiUrl: http://ironic.openstack.svc.cluster.local:6385
-  ironicApiVersion: "1.81"
   ironicAuth:
     authUrl:    http://172.19.74.1:5000
     ironicUrl:  http://172.19.74.1:6385

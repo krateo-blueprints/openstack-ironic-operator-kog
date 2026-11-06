@@ -1,25 +1,48 @@
 apiVersion: v2
 name: kubernetes-cluster
-description: |
-  Krateo blueprint that turns a set of Ironic-managed bare-metal nodes into a
-  vanilla kubeadm-bootstrapped Kubernetes cluster. Renders one BaremetalLifecycle
-  per cluster member (control plane + workers) and gates the join sequence on
-  the control plane having published its `kubeadm join` command into its own
-  BaremetalNode CR's spec.extra.kubeadm_join (rendezvous via the existing Node KOG
-  primitive — no new CRDs, no new tools).
-
-  State machine:
-    cp:      lifecycle(deploy)  -> kubeadm init -> patch own Node.spec.extra
-    workers: gated on cp Node.spec.extra.kubeadm_join present
-             -> lifecycle(deploy) -> kubeadm join
+description: Turn a set of physical servers into a working Kubernetes cluster. Declare the control plane and worker blades and the OS image; the composition provisions each machine through OpenStack Ironic, bootstraps the cluster with kubeadm, joins the rest and installs Cilium. Upstream Kubernetes from pkgs.k8s.io, unmodified -- this is an installer, not a distribution, and the 1.36 build it produces passes the CNCF conformance suite 443/443. Day-two operations (add and drain workers, reimage a node onto a new Kubernetes version, recover a failed control plane, snapshot etcd) are inputs on the same resource. Needs a reachable Ironic API and the baremetal-host blueprint registered alongside it.
 type: application
-version: 0.13.26
+
+# The chart version IS the served composition apiVersion: 0.14.0 is served as
+# composition.krateo.io/v0-14-0. Minor rather than patch because the input
+# contract changed in three ways -- `cni.kubeProxyReplacement` and `conformance`
+# are now reachable, and the two inert `ironicApi*` inputs are gone.
+version: 0.14.0
 appVersion: "1.0"
+
+home: https://github.com/krateo-blueprints/openstack-ironic-operator-kog
+sources:
+  - https://github.com/krateo-blueprints/openstack-ironic-operator-kog
+  - https://kubernetes.io/docs/reference/setup-tools/kubeadm/
+  - https://docs.openstack.org/ironic/latest/
+
+# An absolute https URL serving the image bytes themselves, pinned to a commit.
+# publish-chart.yaml's blueprints gate checks only the scheme, so a github.com
+# /blob/ URL passes the gate and then renders an empty card -- it serves an HTML
+# page, not an SVG. Verified 2026-11-05: 200, content-type image/svg+xml.
+icon: "https://raw.githubusercontent.com/krateo-blueprints/openstack-ironic-operator-kog/1516dd678f3c0760557bd1f142db0a67f81b8abd/branding/krateo-akmon-mark.svg"
+
 keywords:
   - kubernetes
   - kubeadm
+  - cilium
   - bare-metal
-  - krateo
   - ironic
+  - conformance
+  - krateo
 maintainers:
-  - name: openstack-ironic-operator
+  - name: openstack-ironic-operator-kog
+    url: https://github.com/krateo-blueprints/openstack-ironic-operator-kog
+
+annotations:
+  krateo.io/category: "compute"
+  krateo.io/display-name: "Kubernetes on Bare Metal (Ironic)"
+  krateo.io/maturity: "beta"
+  # Load-bearing. The Marketplace adds a card for a live-index chart only when
+  # the NEWEST version of its entry carries this annotation (portal's
+  # catalogLiveDefs, merged 2026-10-05), so without it the card waits for the
+  # next krateo-marketplace-catalog release -- which is not ours to cut -- rather
+  # than appearing when the publish lands. It is also what the publisher's
+  # collision guard reads to decide who owns the chart name.
+  krateo.io/source-repo: "krateo-blueprints/openstack-ironic-operator-kog"
+  krateoSupportedVersion: ">= 2.5.1"
