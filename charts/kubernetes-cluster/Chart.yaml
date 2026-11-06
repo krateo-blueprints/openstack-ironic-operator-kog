@@ -45,4 +45,24 @@ annotations:
   # than appearing when the publish lands. It is also what the publisher's
   # collision guard reads to decide who owns the chart name.
   krateo.io/source-repo: "krateo-blueprints/openstack-ironic-operator-kog"
+  # VERIFIED 2026-11-06, not inherited. core-provider generated a CRD from
+  # `{type: object, x-kubernetes-preserve-unknown-fields: true}` on each of 7
+  # boundary versions, installed it on k8s 1.36.4, created a CR with
+  # --validate=false so the apiserver prunes, and read it back: unknown fields
+  # kept on 2.5.0, 2.7.1, 2.9.2, 2.10.0, 2.10.1, 2.12.0 and 2.13.68, with
+  # pruning under a closed object confirmed as the control on 7 of 7.
+  #
+  # One exposure checked here rather than assumed (plumbing#88): from 2.10.0 on,
+  # a node carrying the marker ALONGSIDE `properties` silently loses it. Scanned
+  # all six charts/*/values.schema.json -- 151 nodes, 0 carrying the marker at
+  # all -- with the scanner calibrated on 8 cases including two that must not
+  # fire. So that case cannot arise for these charts.
+  #
+  # Unmeasured, deliberately recorded: cdc templating from such a field (read
+  # from code, not run), the 2.13.64+ values-schema pre-check, and our real
+  # schema as opposed to the described shape.
+  #
+  # Also measured: nothing ENFORCES this annotation. In marketplace, installer,
+  # frontend, portal and snowplow the only reader is marketplace's README
+  # generator. It is a declaration, not a gate.
   krateoSupportedVersion: ">= 2.5.1"
