@@ -1,3 +1,12 @@
+---
+type: Runbook
+title: Publishing to the Krateo Marketplace
+description: How the two blueprints — kubernetes-cluster and baremetal-host — reach the Krateo Marketplace. The channel gate's three in-package requirements, the curated-index and live-index routes to a card, the one-time publish-token setup, why a chart version IS the served composition apiVersion, and why upgrading the lab stays a separate decision.
+resource: oci://ghcr.io/krateo-blueprints/charts/kubernetes-cluster
+tags: [marketplace, blueprints, krateo, charts, publishing, runbook]
+timestamp: 2026-11-06T00:00:00Z
+---
+
 # Publishing to the Krateo Marketplace
 
 This repo ships **two** Marketplace blueprints:

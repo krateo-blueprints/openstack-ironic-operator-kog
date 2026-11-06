@@ -12,6 +12,7 @@ docs/log.md: curated history
 examples/baremetal-lifecycle/README.md: a BaremetalLifecycle CR that walks a node enroll -> active
 examples/baremetal-lifecycle/composition.yaml: the composition CR itself
 # Deep-dive references (design + runbook):
+docs/MARKETPLACE.md: how the two blueprints reach the Krateo Marketplace — the channel gate, the two routes to a card, and the publish path
 docs/IMPLEMENTATION.md: Krateo Akmon — the complete implementation reference: two-blueprint architecture, the Ironic state machine, the Kubernetes layer and its two conformance-critical settings, operations, the failure modes that report success, and the open upstream issues
 docs/KUBERNETES-CLUSTER.md: the layered kubernetes-cluster composition (kubeadm over Ironic blades)
 docs/KUBERNETES-CLUSTER-PLAN.md: the kubernetes-cluster implementation roadmap
@@ -26,6 +27,8 @@ docs/ORPHAN-RECOVERY.md: recovering a desynced helm release
 docs/RUNBOOK-ETCD-RESTORE.md: restoring HA etcd from a chart snapshot
 docs/quickstart.md: first-time smoke test with the openstack baremetal CLI
 # Source (read at the matching chart version):
+charts/kubernetes-cluster/README.md: the kubernetes-cluster blueprint card — inputs, prerequisites and a worked 3-CP manifest
+charts/baremetal-host/README.md: the baremetal-host blueprint card — inputs and the enroll→active lifecycle
 charts/baremetal-host/values.yaml: the unified BaremetalHost composition values
 charts/baremetal-lifecycle/values.yaml: the provisioning-only composition values
 charts/baremetal-discovery/values.yaml: the discovery-only composition values
