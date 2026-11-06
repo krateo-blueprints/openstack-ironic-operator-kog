@@ -278,6 +278,37 @@ strength of the annotation alone. Presence plus annotation is not a card.
 
 ---
 
+## Wrong card metadata does NOT need a version bump
+
+The section above says the chart version *is* the served composition
+apiVersion, and the natural inference from that is that everything about a
+published chart is frozen at its version. **Annotations are not.**
+
+Measured 2026-11-06 with the publisher's own command, `helm repo index --merge`:
+
+1. index a chart carrying `maturity: beta` and the old display name — the index
+   entry shows `beta`;
+2. republish the **same version** with corrected annotations and merge — the
+   index entry becomes `alpha` with the new display name, and there is still
+   exactly **one** entry for that version.
+
+So if a card ships with wrong copy, the fix is a republish of the same version,
+not a bump. The release workflow carries `workflow_dispatch: {}`, so that
+republish needs no new tag — the tag pattern would refuse a second
+`0.14.0` anyway.
+
+What this does **not** cover: the CRD version, which really is fixed by the
+chart version, and anything a consumer has already pinned. It is specifically
+`Chart.yaml` metadata — category, display name, maturity, icon, source-repo —
+that stays correctable.
+
+Worth stating because the conservative reading costs a version. An earlier
+commit message in this branch asserted that shipping `alpha` "costs a chart
+bump later" to raise; that was an assumption, and measuring it showed it is
+false.
+
+---
+
 ## Upgrading the lab is a separate decision
 
 Publishing a chart version touches no cluster. The live `CompositionDefinition`
