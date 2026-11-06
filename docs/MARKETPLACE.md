@@ -147,25 +147,45 @@ The artifact deliberately holds only the two blueprints: the gate loops over
 **every** `.tgz` it is given, so including the superseded charts would fail the
 whole publish.
 
-### One-time setup — this needs you
+### The publish token — already in place, nothing to do
 
 The reusable publisher pushes into `krateo-blueprints/charts`, so it needs a
-token with write access there, as a secret on **this** repository:
+token with write access there. **This repository needs no setup for that**, and
+the reason is worth recording, because the obvious conclusion is the wrong one.
 
-```sh
-# Create a CLASSIC PAT with the `repo` scope: https://github.com/settings/tokens/new?scopes=repo
-# (classic tokens have no granular contents:write; `repo` is the scope that grants
-#  content and Release writes)
-gh secret set CHARTS_PUBLISH_TOKEN \
-  --repo krateo-blueprints/openstack-ironic-operator-kog --body "$PAT"
+`krateo-blueprints` is an **Organisation**, and it carries an organisation
+secret `RELEASE_FEED_TOKEN` at `visibility=all` — so it is already reachable
+from here. The three sibling blueprint repos resolve the token exactly this way:
+
+```yaml
+# krateo-aws-blueprint, krateo-azure-blueprint, krateo-gcp-blueprint
+# .github/workflows/release-tag.yaml
+PUBLISH_TOKEN: ${{ secrets.CHARTS_PUBLISH_TOKEN || secrets.RELEASE_FEED_TOKEN }}
 ```
 
-It is per repository: this is a user account, so there are no org-level secrets.
+This workflow now resolves it identically. The evidence, measured rather than
+inferred:
 
-**Until that secret exists, a tagged release will go red** — at
-`blueprints-token-preflight`, after the OCI push has already succeeded. That is
-deliberate. A release that silently skipped the Marketplace half would look
-exactly like a release that did it.
+| Check | Result |
+|---|---|
+| Org secrets reachable from this repo | `CLAUDE_CODE_OAUTH_TOKEN`, `RELEASE_FEED_TOKEN` |
+| Same set reachable from `krateo-aws-blueprint` | identical |
+| Repo-level secret on any of the three siblings | **none** — all three listings empty |
+| `krateo-aws-blueprint` run `37742845675` | `publish-blueprints / publish` → **success** |
+
+That last row is the one that matters, and it is deliberately the job's
+conclusion rather than the run's. A skipped job also leaves a green run, so
+"the release passed" would not have shown that the channel publish actually
+happened.
+
+A repository secret `CHARTS_PUBLISH_TOKEN` still takes precedence if one is
+ever set — a CLASSIC PAT with the `repo` scope (classic tokens have no granular
+`contents:write`). It is not needed today.
+
+**An earlier version of this document said the opposite** — that a PAT had to be
+created here because "this is a user account, so there are no org-level
+secrets." `krateo-blueprints` is an Organisation; the claim was simply false,
+and it would have cost someone a pointless credential.
 
 ---
 

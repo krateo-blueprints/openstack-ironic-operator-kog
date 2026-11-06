@@ -114,20 +114,29 @@ jobs:
           if-no-files-found: error
 
   # A missing token otherwise surfaces from inside the reusable workflow, where
-  # the message is about an unauthenticated git push rather than about the one
-  # thing that needs doing. This says it here, and does not run until the OCI
-  # push -- the source of truth -- has succeeded.
+  # the message is about an unauthenticated git push rather than about what is
+  # actually wrong. This says it here, and does not run until the OCI push --
+  # the source of truth -- has succeeded.
+  #
+  # It is expected to PASS with no setup: krateo-blueprints is an Organisation
+  # (not a user account, as an earlier version of this comment wrongly claimed)
+  # and RELEASE_FEED_TOKEN is an org secret at visibility=all. The step now
+  # reports WHICH token it resolved, so a green preflight still says which
+  # credential a release used.
   blueprints-token-preflight:
     needs: publish
     runs-on: ubuntu-latest
     steps:
-      - name: CHARTS_PUBLISH_TOKEN must be set on this repository
+      - name: A publish token must be reachable
         run: |
-          if [ -z "${{ secrets.CHARTS_PUBLISH_TOKEN }}" ]; then
-            echo "::error::CHARTS_PUBLISH_TOKEN is not set, so the blueprints cannot be published to the Marketplace channel. It is a CLASSIC PAT with the 'repo' scope (classic tokens have no granular contents:write), set per repository -- this is a user account, so there are no org-level secrets. See docs/MARKETPLACE.md."
+          if [ -n "${{ secrets.CHARTS_PUBLISH_TOKEN }}" ]; then
+            echo "using CHARTS_PUBLISH_TOKEN (repository secret)"
+          elif [ -n "${{ secrets.RELEASE_FEED_TOKEN }}" ]; then
+            echo "using RELEASE_FEED_TOKEN (organisation secret, visibility=all)"
+          else
+            echo "::error::No publish token is reachable, so the blueprints cannot reach the Marketplace channel. Normally RELEASE_FEED_TOKEN -- an organisation secret at visibility=all -- covers this with no per-repo setup; if this fires, that secret was removed or its visibility narrowed. Either restore it, or set a repository secret CHARTS_PUBLISH_TOKEN (a CLASSIC PAT with the 'repo' scope; classic tokens have no granular contents:write). See docs/MARKETPLACE.md."
             exit 1
           fi
-          echo "token present"
 
   # Republishes the same bytes into the Marketplace's blueprints channel. The
   # publisher stamps nothing: `krateo.io/source-repo` has to be committed in each
@@ -144,4 +153,12 @@ jobs:
       channel: blueprints
       artifact: charts-dist-blueprints
     secrets:
-      PUBLISH_TOKEN: ${{ secrets.CHARTS_PUBLISH_TOKEN }}
+      # Same resolution the three sibling blueprint repos use
+      # (krateo-aws/azure/gcp-blueprint, .github/workflows/release-tag.yaml):
+      # a repository secret if one exists, otherwise the ORGANISATION secret
+      # RELEASE_FEED_TOKEN, which is visibility=all and therefore already
+      # reachable here. Verified 2026-11-06 rather than assumed: none of the
+      # three siblings holds a repo-level secret, and krateo-aws-blueprint run
+      # 37742845675 shows `publish-blueprints / publish` CONCLUDED SUCCESS --
+      # the job itself, not merely a green run with the job skipped.
+      PUBLISH_TOKEN: ${{ secrets.CHARTS_PUBLISH_TOKEN || secrets.RELEASE_FEED_TOKEN }}
