@@ -212,8 +212,28 @@ and it would have cost someone a pointless credential.
 
 ## After publishing, verify
 
+**Check the right population.** Three different index documents all answer
+HTTP 200, with different contents, and a fourth thing decides whether a card
+renders:
+
+| Document | Size | Charts | What it is |
+|---|---|---|---|
+| `krateo-blueprints.github.io/charts/blueprints/index.yaml` | 1,618,360 B | 810 charts / 1558 versions | the **publish** index — what the channel gate writes |
+| `charts.krateo.io/index.yaml` | 687,583 B | — | a third document, not the one above |
+| `marketplace.krateo.io/index.yaml` | 213,553 B | 219 entries | another, smaller still |
+| `blueprints-catalog-index` ConfigMap, key `blueprints-index.json` | 284,927 B | **293** charts, one version each | the **display** population — what the portal actually reads |
+
+Measured 2026-11-06. The curation from 810 to 293 is `build-index.py` minus
+`PLATFORM_LEAVES`, and it is much heavier than "a handful": **517 charts in the
+publish index are not in what the portal reads.**
+
+So the two questions need two checks, and conflating them is how a publish gets
+declared a success that shows nothing.
+
+**Did the publish land?** Read the publish index — this is the population the
+channel gate writes and therefore the one that can fail your release:
+
 ```sh
-# the entry exists, and its NEWEST version carries the annotation
 curl -sL https://krateo-blueprints.github.io/charts/blueprints/index.yaml \
   | python3 -c '
 import sys, yaml
@@ -225,14 +245,36 @@ for n in ("kubernetes-cluster", "baremetal-host"):
         continue
     newest = e[0]
     src = (newest.get("annotations") or {}).get("krateo.io/source-repo", "")
-    verdict = "a card appears" if src else "NO CARD: source-repo annotation missing"
-    print(n, newest["version"], "source-repo=" + repr(src), "->", verdict)
+    print(n, newest["version"], "source-repo=" + repr(src),
+          "-> published" + ("" if src else "; NO source-repo, so no live-index immediacy"))
 '
 ```
 
-Two distinct failures hide here, which is why the check reads the annotation and
-not just the name: a chart can be absent from the index (the publish failed), or
-present and card-less (the annotation is missing). The second is the quiet one.
+**Will a card appear?** That is a question about the display population, and the
+publish index cannot answer it. Read the ConfigMap the portal resolves:
+
+```sh
+kubectl --context <ctx> -n krateo-system get configmap blueprints-catalog-index \
+  -o jsonpath='{.data.blueprints-index\.json}' \
+  | python3 -c 'import sys,json; e=json.load(sys.stdin)["entries"]; print(sorted(e)[:0] or len(e), "charts"); [print(n, "present" if n in e else "ABSENT") for n in ("kubernetes-cluster","baremetal-host")]'
+```
+
+The resolver reads it as
+`filter: '{catalog: (.catalog.data["blueprints-index.json"] | fromjson)} | <postFilter>'`
+— one version per chart.
+
+**Three distinct failures hide here**, which is why there are two checks and why
+neither reads only the name:
+
+1. the chart is absent from the publish index — the publish failed;
+2. it is present but carries no `krateo.io/source-repo` — it still lands, it just
+   waits for the curated rebuild instead of appearing immediately;
+3. it is in the publish index and **not** in the curated ConfigMap — published,
+   annotated, and still showing nothing.
+
+The third is the quiet one, and an earlier version of this document could not
+see it: it checked the publish index and printed "a card appears" on the
+strength of the annotation alone. Presence plus annotation is not a card.
 
 ---
 
