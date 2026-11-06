@@ -120,8 +120,8 @@ Two of the charts here are Krateo Marketplace blueprints, published to the
 
 | Chart | Card | What it does |
 |---|---|---|
-| [`kubernetes-cluster`](charts/kubernetes-cluster/README.md) | Kubernetes on Bare Metal (Ironic) | turns a set of blades into a conformant upstream Kubernetes cluster |
-| [`baremetal-host`](charts/baremetal-host/README.md) | Bare-Metal Host (Ironic) | manages one physical server through Ironic as a single resource |
+| [`kubernetes-cluster`](charts/kubernetes-cluster/README.md) | Kubernetes on Bare Metal | turns a set of blades into a conformant upstream Kubernetes cluster |
+| [`baremetal-host`](charts/baremetal-host/README.md) | Bare-Metal Host (OpenStack Ironic) | manages one physical server through Ironic as a single resource |
 
 Register `baremetal-host` **first** — `kubernetes-cluster` renders its resources.
 `baremetal-discovery` and `baremetal-lifecycle` are the superseded split that

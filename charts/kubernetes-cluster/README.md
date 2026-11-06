@@ -1,4 +1,4 @@
-# Kubernetes on Bare Metal (Ironic)
+# Kubernetes on Bare Metal
 
 A Krateo blueprint that turns a set of physical servers into a working
 Kubernetes cluster. Name the control-plane and worker blades and the OS image;

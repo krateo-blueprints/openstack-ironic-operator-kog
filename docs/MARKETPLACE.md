@@ -13,8 +13,8 @@ This repo ships **two** Marketplace blueprints:
 
 | Chart | Card | Category |
 |---|---|---|
-| `charts/kubernetes-cluster` | Kubernetes on Bare Metal (Ironic) | compute |
-| `charts/baremetal-host` | Bare-Metal Host (Ironic) | compute |
+| `charts/kubernetes-cluster` | Kubernetes on Bare Metal | compute |
+| `charts/baremetal-host` | Bare-Metal Host (OpenStack Ironic) | compute |
 
 `baremetal-discovery` and `baremetal-lifecycle` are **not** blueprints and are
 not published to the channel. They are the superseded discovery/lifecycle split

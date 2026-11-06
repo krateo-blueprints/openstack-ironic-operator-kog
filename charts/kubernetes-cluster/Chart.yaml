@@ -36,8 +36,8 @@ maintainers:
 
 annotations:
   krateo.io/category: "compute"
-  krateo.io/display-name: "Kubernetes on Bare Metal (Ironic)"
-  krateo.io/maturity: "beta"
+  krateo.io/display-name: "Kubernetes on Bare Metal"
+  krateo.io/maturity: "alpha"
   # Load-bearing. The Marketplace adds a card for a live-index chart only when
   # the NEWEST version of its entry carries this annotation (portal's
   # catalogLiveDefs, merged 2026-10-05), so without it the card waits for the

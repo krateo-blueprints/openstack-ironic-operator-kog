@@ -1,4 +1,4 @@
-# Bare-Metal Host (Ironic)
+# Bare-Metal Host (OpenStack Ironic)
 
 A Krateo blueprint that manages one physical server through [OpenStack
 Ironic](https://docs.openstack.org/ironic/latest/) as a single Kubernetes
