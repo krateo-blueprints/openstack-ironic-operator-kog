@@ -371,10 +371,37 @@ that last reference went. `prunableServedVersions` needs *no reference*, not
 merely zero instances — all three instances had moved 40s earlier and the
 version stayed.
 
-**Two limits, stated because they bound what the above licenses.** The lab runs
-core-provider **2.13.59**, and this is 2.13.71; a probe on 2.13.59 was built for
-exactly this and did not produce a valid result, because the new controller was
-unschedulable and the migration never ran, so the version this lab actually runs
-is **unmeasured**. And the recovery annotation degrades to paths-only above a
-size cap that was not tested — for these two fields it does not matter, since
-nothing reads them, but it would for a field whose value you needed back.
+**The limit that bounds all of the above:** the lab runs core-provider
+**2.13.59**, and this was measured on 2.13.71. A probe on 2.13.59 was built for
+exactly this question and did **not** produce a valid result — the new
+controller was unschedulable, so the migration never ran and the field appeared
+to survive because nothing had happened. The version this lab actually runs is
+**unmeasured**.
+
+### The recovery annotation has a cap, and it is not where you would guess
+
+`krateo.io/pruned-fields` holds at most **16 KiB** (`maxPrunedAnnotationBytes`),
+and the limit applies to **the JSON of the removed subtree — not to the size of
+the composition.** So `lab-ha` being the largest composition here is irrelevant:
+`ironicApiUrl` and `ironicApiVersion` are short strings, far under the cap, and
+`0.14.0` is unaffected. The cap would only bite on a future version that removed
+a large object or array.
+
+Above the cap, recovery degrades rather than failing loudly in the ordinary
+sense: the annotation holds **paths only**, plus
+`krateo.io/pruned-fields-truncated: "true"`, and nothing at all if even the paths
+do not fit. A Warn log and a Warning event both fire, so it is not silent.
+
+**And the event is not a backup copy.** `CompositionFieldsPruned` carries only
+paths, in every case. There is a known defect here, reported by the
+core-provider session: above the cap the event directs the operator to the
+controller log, and a code comment and that project's own
+`docs/internals/behavior.md` both state the log "always carries the full
+subtree" — it does not. The Warn log emits paths and a byte count; the payload
+reaches no log at all. So above 16 KiB the values are genuinely gone, while the
+tooling claims otherwise.
+
+*Provenance:* the cap, the degradation behaviour and the defect are **read from
+code at 2.13.71**, not measured. The migration behaviour in the table above
+**was** measured. The distinction is kept because the two carry different
+weight.
