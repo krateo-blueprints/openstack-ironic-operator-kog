@@ -22,30 +22,55 @@ spec:
   resourceGroup: baremetal.ogen.krateo.io
   resource:
     kind: NodePower
-    # MECHANISM CORRECTED 2026-11-04. findby never matches, which is what this
-    # design wants (one PUT, then the 202 Pending condition suppresses re-fire)
-    # -- but the reason written here for two weeks was not the reason operating.
+    # MECHANISM, MEASURED 2026-11-07. findby never matches, which is what this
+    # design wants (one PUT, then the 202 Pending condition suppresses
+    # re-fire). Three different reasons have been written here; this is the
+    # first one that was read off the cluster rather than reasoned about.
     #
-    # Stated reason:  node_id is not a field on Ironic's listed nodes, so the
-    #                 comparison finds no match.
-    # Actual reason:  node_id is absent from the CR entirely. Measured on all
-    #                 six live NodePower CRs: `node_id` is in NEITHER spec NOR
-    #                 status. oasgen's `isInResource` compares a response value
-    #                 against spec.<path> then status.<path>; with both missing
-    #                 it cannot compare at all, and returns the same
-    #                 (false, nil) it returns for "compared and differed".
+    # Measured, served CRD `nodepowers.baremetal.ogen.krateo.io` v1-0-0:
+    #   spec.properties = [X-OpenStack-Ironic-API-Version, configurationRef,
+    #                      node_id, target, timeout]
+    #   spec.required   = [X-OpenStack-Ironic-API-Version, configurationRef,
+    #                      node_id, target]
+    # Measured, all six live NodePower CRs:
+    #   spec.node_id = blade01 .. blade06   (status.node_id absent)
     #
-    # The spec property is suppressed by the `requestFieldMapping` below --
-    # oasgen-provider#419. So the match is impossible one layer earlier than
-    # the comment claimed, and the stated mechanism has never been reached.
+    # So the CR side is fully populated and `node_id` is REQUIRED. The match
+    # fails on the RESPONSE side: `isInResource` compares a value taken from
+    # the response against spec.<path> then status.<path>, and Ironic's
+    # /v1/nodes items carry `name`, never `node_id` -- so there is no response
+    # value to compare.
     #
-    # Why this matters rather than being pedantry: when #419/#421 restores the
-    # spec property, the stated mechanism TAKES OVER from the actual one and
-    # the outcome stays identical (node_id still is not a field on listed
-    # nodes, so the lookup skips it). The comment would become true by
-    # accident, via an unrelated fix, having been causally wrong throughout.
+    # And the reason there is none is an omission, not a property of Ironic.
+    # oas/ironic-power.yaml documents the findby as "matched on node_id,
+    # lifted from `name` by a responseTransform" -- and NEITHER this
+    # RestDefinition nor restdefinition-provision.yaml has a responseTransform
+    # at all (restdefinition-node.yaml has four). The transform the document
+    # specifies was never written. If someone adds it, findby starts matching
+    # and this fire-once design changes behaviour: do not add it without
+    # re-reading the Pending-guard measurement below.
+    #
+    # The two superseded reasons, kept because the error has a shape worth
+    # recognising:
+    #   (a) "node_id is not a field on listed nodes"          -- right about
+    #       the response side, but offered with no measurement of either side.
+    #   (b) "node_id is absent from the CR entirely, the spec property is
+    #       suppressed by requestFieldMapping (oasgen#419)"   -- FALSE. Written
+    #       2026-11-04 as a correction OF (a), and falsified on 2026-11-07 by
+    #       reading the served CRD and the six CRs: the property is present and
+    #       required, and every CR carries a value.
+    #
+    # Note what (b) cost. On 2026-11-07 it was passed to two other teams as
+    # primary evidence, and one of them derived a real hazard from it -- that
+    # oasgen#421 restoring a suppressed path-param property as `required`
+    # would make the next write to all six CRs fail validation. Sound
+    # reasoning, false premise: the property is already there and already
+    # required, so #421 changes nothing here. A wrong mechanism does not stay
+    # local; it becomes someone else's correct deduction.
+    #
     # A claim that is predictively right and causally wrong is the kind nothing
-    # ever falsifies.
+    # ever falsifies -- which is why (a), (b) and this block all predicted the
+    # same observable and only one of them survives measuring it.
     #
     # THE GUARD IS NOW MEASURED, 2026-11-07. Until today "the 202 Pending condition
     # suppresses re-fire" was asserted, not observed -- and oasgen #485 is the same
