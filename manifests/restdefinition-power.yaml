@@ -51,10 +51,15 @@ spec:
     # used to fail and is kept for that reason only; it no longer describes
     # current behaviour.
     #
-    # restdefinition-provision.yaml still has no responseTransform and has NOT
-    # been changed. Its findby still never matches. Do not assume this change
-    # applies there by symmetry -- that file has zero live CRs, so nothing
-    # about it has been measured either way.
+    # restdefinition-provision.yaml has no responseTransform. One was added there
+    # on 2026-11-07 by symmetry with this file and REVERTED the same day, because
+    # both halves were wrong for that kind: the identifier lift would have made
+    # provision's `create` -- its ONLY PUT-performing verb -- unreachable, and
+    # `target` holds VERBS there (manage/provide/active/deleted/inspect/clean)
+    # against `provision_state`'s STATES, so five of the six targets the charts
+    # render could never match. Its findby still never matching is what keeps
+    # that kind working. Do not re-add it by symmetry; read the block in that
+    # file first.
     #
     # The two superseded reasons, kept because the error has a shape worth
     # recognising:
