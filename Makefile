@@ -166,6 +166,16 @@ smoke-test:   # drive a fake node enroll->active against the local Ironic (CLEAN
 # krateo-up would also touch, and checked the installed version first -- which
 # is also how I learned this cluster is 2.13.62 and not the 2.13.59 I had been
 # telling people and had named a branch after.
+#
+# Not just ours: the core-provider session measured that index afterwards and
+# found 71 core-provider versions there, newest 1.0.1-rc1 / 1.0.0, NO 2.x at
+# all, and no core-provider-crds chart -- which is why the CRDs line above also
+# has to come from OCI. Their own README example pinned a stale 2.12.4, the same
+# trap from the right registry. Being fixed upstream in
+# krateo-platformops/core-provider#389 ("install the current release from OCI,
+# and warn off the charts.krateo.io index"), open as of 2026-11-07. Until that
+# lands, assume any core-provider or oasgen version you find in that index is
+# the wrong lineage rather than merely old.
 KRATEO_CORE_VERSION ?= 2.13.62
 # The https://charts.krateo.io index stops at oasgen 0.11.1; the real releases
 # live in the OCI registry, which is where the 0.47.0 install actually came
