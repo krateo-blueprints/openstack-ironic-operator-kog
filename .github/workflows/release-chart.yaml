@@ -165,11 +165,36 @@ jobs:
           # limit is deliberate -- a preflight should not make writes.
           for repo in "${GITHUB_REPOSITORY}" krateo-blueprints/charts; do
             if ! gh api "repos/$repo" --jq .full_name >/dev/null 2>&1; then
-              echo "::error::$which is set but does not authenticate against $repo. The channel publish will fail with 'HTTP 401: Bad credentials' after the OCI push has already succeeded. Rotate it. See docs/MARKETPLACE.md."
+              echo "::error::$which is set but does not authenticate against $repo ('HTTP 401: Bad credentials'). Nothing has been published yet -- this job now runs before the GHCR push. Rotate it. See docs/MARKETPLACE.md."
               exit 1
             fi
           done
-          echo "$which authenticates against both repositories"
+          # AND IT MUST SURVIVE BEING PUT IN A URL. Added 2026-11-07 after tag
+          # 0.3.1: this preflight passed, `publish` pushed both charts to GHCR,
+          # and the publisher then died on
+          #   fatal: unable to access 'https://github.com/krateo-blueprints/charts/':
+          #          URL rejected: Malformed input to a URL function
+          # because it clones with the token in the userinfo of
+          #   https://x-access-token:${GH_TOKEN}@github.com/<index repo>
+          # `gh api` sends the token as an Authorization HEADER, where trailing
+          # whitespace or a newline is tolerated; curl rejects the same bytes
+          # inside a URL. So the token was PRESENT, AUTHENTICATED, and unusable.
+          #
+          # Presence is not validity, and validity in one transport is not
+          # validity in another. This step had already learned the first half the
+          # expensive way; this is the second.
+          case "${GH_TOKEN}" in
+            *[[:space:]]*)
+              echo "::error::$which contains whitespace or a newline. It authenticates as a header but git rejects it inside a clone URL ('Malformed input to a URL function'), which is how the publisher uses it. Recreate the secret with no trailing newline -- printf '%s' instead of echo, and no copy-paste line break."
+              exit 1 ;;
+          esac
+          # Exactly what the publisher does, against the same repository, with
+          # output discarded so the URL never reaches the log.
+          if ! git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/krateo-blueprints/charts" HEAD >/dev/null 2>&1; then
+            echo "::error::$which authenticates as a header but FAILS as git-over-HTTPS credentials against krateo-blueprints/charts. The publisher clones gh-pages with this token in the URL, so the channel publish cannot succeed. Check the secret for whitespace, a newline, or characters that need URL-encoding."
+            exit 1
+          fi
+          echo "$which authenticates against both repositories AND works as git-over-HTTPS credentials"
 
   # Republishes the same bytes into the Marketplace's blueprints channel. The
   # publisher stamps nothing: `krateo.io/source-repo` has to be committed in each
