@@ -206,7 +206,7 @@ Verified 2026-11-05: HTTP 200, `content-type: image/svg+xml`.
 
 ## The publish path
 
-**Pending, and not applied yet (2026-11-07).** When
+**APPLIED AND RELEASED 2026-11-07 — this section is kept as the record of what was planned, and every "pending" below has happened.** See "The first release through the standard" at the end of this document for what actually shipped. The original text read: when
 `krateo-blueprints/charts#6` and `#7` merge and the publisher is released, this
 repo makes exactly two changes, together:
 
@@ -219,8 +219,9 @@ repo makes exactly two changes, together:
 - `PUBLISH_TOKEN` drops the `|| secrets.RELEASE_FEED_TOKEN` fallback and passes
   `secrets.CHARTS_PUBLISH_TOKEN` alone.
 
-Neither can land before then: the publisher has **no tags at all** (the tags API
-404s for the whole namespace), and dropping the fallback today removes the only
+Neither could land before then: the publisher had **no tags at all** (the tags
+API 404d for the whole namespace). It has them now — 1.0.0 `a2d63ba`, 1.0.1
+`36ea357`, and this repo is pinned to 1.0.1, and dropping the fallback today removes the only
 token that exists, converting a legible 401 into an unresolvable-ref error.
 
 `verify-channel-entry` can go once the publisher's own anonymous `helm pull`
@@ -286,7 +287,8 @@ CLASSIC PAT with the `repo` scope (classic tokens have no granular
 
 **The two tokens are not interchangeable in general — only here.** In this repo
 the channel publish resolves `CHARTS_PUBLISH_TOKEN || RELEASE_FEED_TOKEN`
-(`release-chart.yaml:138,183`), so either one unblocks it and the 401 below is a
+(as it did at those lines until 2026-11-07, when rule 7 removed the fallback
+everywhere including the preflight), so either one unblocked it and the 401 below is a
 real verdict on the org token. `krateo-blueprints/krateo-openstack-blueprint`
 has no such fallback: its release pushes only to GHCR and never attempts an
 index publish, its `RELEASE_FEED_TOKEN` is used solely by the release-notes
@@ -431,7 +433,11 @@ part of this that survives.
 Added 2026-11-07, after finding that a successful publish from this repository
 would produce an uninstallable card (see the section above).
 
-**`channel-asset-host-gate`** (before the publish, a real gate). It refuses the
+**`channel-asset-host-gate`** — **DELETED 2026-11-07, and this paragraph is
+history, not the pipeline.** It was built on the retracted "this repo is
+private" premise; with a public caller it could only ever take its pass branch,
+which is the worst kind of check to keep. The surviving check is
+`verify-channel-entry` below. What it did: it refused the
 channel publish when **both** hold: this repository is not public, *and* the
 publisher at the ref we pin still derives the asset URL from the caller
 (`RELEASES_BASE: .../${{ inputs.source_repo }}/releases/download`). It reads
@@ -681,3 +687,59 @@ tooling claims otherwise.
 code at 2.13.71**, not measured. The migration behaviour in the table above
 **was** measured. The distinction is kept because the two carry different
 weight.
+
+---
+
+## The first release through the standard, measured
+
+`0.3.2`, run `42414436517`, 2026-11-07. The first complete end-to-end release
+through the org publishing standard by any repo, and the first time this
+channel moved since 2026-10-09.
+
+| | baseline, before tagging | after |
+|---|---|---|
+| `kubernetes-cluster` 0.14.0 | ABSENT from the served index | present, `http=200` |
+| `baremetal-host` 0.6.3 | ABSENT | present, `http=200` |
+| index `generated` | 2026-10-09T07:23:32.658419512Z | **2026-11-07T21:09:25.307397773Z** |
+| total charts | 810 | 813 |
+
+The baseline was recorded **before** tagging, which is the only thing that makes
+the second column mean anything: `hack/verify-channel-entry.py` reported the
+absence and exited 1, so it was not passing vacuously.
+
+Three things the table shows that no green check does:
+
+- The `urls:` are
+  `github.com/krateo-blueprints/charts/releases/download/<chart>-<ver>/…` —
+  the **publisher's own public store**, not this repo. So `charts#6`'s
+  private-caller property is demonstrated on a real publish.
+- `baremetal-lifecycle` 0.3.1 still carries its old `github.io` URL, untouched.
+  That is `helm repo index --merge` behaving as rule 1 promises: forward-only,
+  nothing in the back catalogue rewritten.
+- The third of the 813 is not ours — `selfservice-krateo` 0.2.58 landed at
+  21:08:04, a minute earlier. The re-saved token worked for two different
+  callers in the same minute, which is a stronger first proof than either
+  release alone.
+
+**It took three tags, and the two failures are the valuable part.**
+
+| tag | outcome | what it found |
+|---|---|---|
+| `0.3.0` | `publish` ✓, channel ✗ 401 | the preflight tested token PRESENCE, not validity |
+| `0.3.1` | preflight ✓, `publish` ✓, channel ✗ | a token can be present, authenticate as a header, and still be **unusable inside a URL** (`URL rejected: Malformed input to a URL function`) — the secret carried whitespace |
+| `0.3.2` | all four jobs ✓ | — |
+
+`0.3.1` is the one worth remembering: **presence is not validity, and validity
+in one transport is not validity in another.** `gh api` sends the token as an
+`Authorization` header, where trailing whitespace is tolerated; the publisher
+embedded it in a clone URL, where curl rejects the same bytes. The fixes were
+both sides — publisher 1.0.1 puts no token in any URL, and this repo's preflight
+now rejects whitespace and runs `git ls-remote` with the token as
+git-over-HTTPS credentials before the GHCR push.
+
+**And an honest limit.** Moving the token check before the push prevents a
+half-publish *the preflight can detect*. `0.3.1` half-published anyway — GHCR
+had the charts, the index did not — because the failure was inside the
+publisher, after the push. Strictly both-or-neither would mean publishing the
+channel before GHCR, which inverts the source of truth. Rule 7's ordering is a
+mitigation, not a guarantee, and the standard now says so.

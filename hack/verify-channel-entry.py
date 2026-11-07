@@ -6,10 +6,24 @@ The consumer of that index is anonymous: the Krateo portal's Marketplace and
 release-chart.yaml authenticates, so none of them can see the failure this one
 is for -- a publish that concludes SUCCESS and leaves a card whose chart 404s.
 
-That was real, not hypothetical. The reusable publisher builds each index
-entry's URL from the CALLER repository, and this repository is private, so its
-release assets are not anonymously fetchable. Measured 2026-11-07: an anonymous
-fetch of a published sibling's asset returns 200; a private repo's cannot.
+WHY THIS EXISTS, with the wrong reason removed. It was written on the premise
+that "this repository is private, so its release assets are not anonymously
+fetchable". THAT WAS FALSE -- `origin` is
+krateo-blueprints/openstack-ironic-operator-kog, which is PUBLIC; `gh` had
+resolved a different repo via an `upstream` remote. The premise is retracted in
+docs/MARKETPLACE.md and the gate built on it was deleted.
+
+The check survives its own justification, and 2026-11-07 proved why. Tag 0.3.1
+had a token that was present AND authenticated as a header, and the publish
+still failed because the token was unusable inside a URL. Tag 0.3.2 then
+succeeded, and this script read the result independently of the job that
+produced it:
+
+    kubernetes-cluster 0.14.0 -> .../charts/releases/download/... http=200
+    baremetal-host     0.6.3  -> .../charts/releases/download/... http=200
+
+The durable point is the one the false premise was reaching for: every other
+check in that pipeline authenticates, and the consumer does not.
 
 This script asserts nothing about WHICH host the index names. It reads the URL
 the index actually advertises and fetches that, so it stays correct across
