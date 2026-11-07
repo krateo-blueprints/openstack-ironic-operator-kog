@@ -328,16 +328,27 @@ check-mapping-sources:   # every request-direction fieldMapping reads from a fie
 	# resolves to nothing on the wire -- oasgen-provider #419, which cost five days
 	# here because the 406 it produced went unread.
 	#
-	# This reads the DOCUMENTS, so it answers before a single API call, and it is
-	# calibrated the hard way: it must find the two known-broken mappings and will
-	# exit NON-ZERO if it finds zero. The chain is merged -> tagged -> published ->
-	# deployed -> REGENERATED, and only the last rung decides what these documents
-	# render to. #421 is merged (8461460), in no released tag, the generator here
-	# is 0.50.0 -- and even once it ships, oasgen does not regenerate an existing
-	# CRD on upgrade (#453), so a deployed fix alone changes nothing. Verified on
-	# the stored side: node_id is ABSENT from both served CRD schemas. A clean run
-	# means the screen broke, not that the repo healed.
-	python3 -I scripts/check-mapping-sources.py
+	# This reads the DOCUMENTS, so it answers before a single API call.
+	#
+	# CORRECTED 2026-11-07. This comment said #421 was "merged (8461460), in no
+	# released tag", that "the generator here is 0.50.0", that node_id was "ABSENT
+	# from both served CRD schemas", and that "a clean run means the screen broke".
+	# All four were true when written; three are now false. #421 shipped in
+	# 0.52.0, this cluster runs 0.54.1, and the served CRDs regenerated -- measured
+	# on both, node_id present AND required. So the suppression the screen looked
+	# for has no remaining case, since every mapping it examines is an `inPath`
+	# mapping and #421 restores exactly those. It now checks what is still real:
+	# excludedSpecFields suppression, and status sources missing from
+	# additionalStatusFields or identifiers.
+	#
+	# A clean run is therefore good news, and `--self-test` is what makes it
+	# meaningful -- which is the honest version of the calibration this comment
+	# used to assert.
+	# Self-test FIRST and the && is load-bearing, as with the other three
+	# screens. This one had no self-test and used a hand-maintained KNOWN_BROKEN
+	# list instead, which rotted into a false alarm -- see the script docstring.
+	python3 -I scripts/check-mapping-sources.py --self-test && \
+		python3 -I scripts/check-mapping-sources.py
 
 regenerate-crds:   # force oasgen to re-read the OAS and rewrite the generated CRDs
 	# oasgen does NOT regenerate an existing CRD when the provider is upgraded --
