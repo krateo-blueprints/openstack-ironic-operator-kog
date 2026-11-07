@@ -158,8 +158,23 @@ KRATEO_CORE_VERSION ?= 1.0.0
 # live in the OCI registry, which is where the 0.47.0 install actually came
 # from. Pinning the stale index version here meant `make krateo-up` would have
 # silently reinstalled a years-old provider over a working one.
-KRATEO_OASGEN_VERSION ?= 0.50.0
-KRATEO_RDC_VERSION    ?= 0.50.0
+# 0.54.1, bumped from 0.50.0 on 2026-11-07. Not 0.52.0 (which is the first with
+# #421) and emphatically not 0.53.0 or 0.54.0: a resource whose Configuration
+# uses an `apiKey` security scheme IN A HEADER cannot read its credential on
+# those two, so nothing reconciles and there is no workaround. This repo's OAS
+# declares exactly that -- `securitySchemes: {apiKey: {type: apiKey, in: header,
+# name: X-Auth-Token}}` with `security: [{apiKey: []}]` -- so 0.53.0 and 0.54.0
+# are both unusable here. Reported by the oasgen-provider session, which
+# corrected its own first answer that scoped the defect to 0.54.0 alone.
+# Safe pins are therefore <= 0.52.0 or >= 0.54.1.
+KRATEO_OASGEN_VERSION ?= 0.54.1
+# Kept explicit and equal rather than letting the chart default it. The 0.54.1
+# chart ships `rdc.image.tag: ""`, the helm idiom for "use appVersion", so the
+# default would resolve to the same thing -- but silently, and a future chart
+# could change what empty means. Both image tags verified present in GHCR
+# before this bump, because a tag that does not exist fails as ImagePullBackOff
+# several minutes into `helm --wait`.
+KRATEO_RDC_VERSION    ?= 0.54.1
 KRATEO_OCI            ?= oci://ghcr.io/krateo-platformops/charts
 
 krateo-up:    # install Krateo KOG (oasgen-provider) + composition engine (core-provider)
