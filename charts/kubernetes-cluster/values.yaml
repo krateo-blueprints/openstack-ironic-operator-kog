@@ -89,8 +89,11 @@ managementCluster:
   # root-ca-cert-publisher disabled.
   caBundle: ""
   # Service account name + namespace used by the CP to patch its own
-  # BaremetalNode CR. The chart creates the SA + Role + RoleBinding + token
-  # Secret (see templates/rbac.yaml) and reads the token at render time.
+  # BaremetalNode CR. The chart creates the SA + ClusterRole +
+  # ClusterRoleBinding + token Secret (in templates/_helpers.tpl, around the
+  # `kubernetes-cluster.managementSaManifests` define -- there is no
+  # templates/rbac.yaml, which this comment claimed until 2026-11-07) and reads
+  # the token at render time.
   serviceAccountNamespace: ""
 
 # Network reachability hint — how the management cluster's API server
