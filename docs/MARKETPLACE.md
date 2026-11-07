@@ -306,6 +306,68 @@ and it would have cost someone a pointless credential.
 
 ---
 
+### The token is not the last blocker: this repo is PRIVATE and the index URL is not
+
+Found 2026-11-07, before the token was replaced, so it has never been exercised.
+A publish from here will go **green and produce an uninstallable card.**
+
+The reusable publisher builds each index entry's download URL from the caller:
+
+```yaml
+# krateo-blueprints/charts/.github/workflows/publish-chart.yaml:44
+RELEASES_BASE: https://github.com/${{ inputs.source_repo }}/releases/download
+```
+
+and the index bears that out — measured over all 1558 versions:
+
+| `urls:` host | versions | fetchable anonymously |
+|---|---|---|
+| `github.com/<source_repo>/releases/download/…` | 1247 | only if that repo is public |
+| `krateo-blueprints.github.io/charts/blueprints/…` | 311 | yes — the 2026-08-19 import |
+
+And the repos:
+
+| repo | visibility |
+|---|---|
+| `krateo-blueprints/openstack-ironic-operator` | **PRIVATE** |
+| `krateo-aws-blueprint`, `-azure-`, `-gcp-`, `krateo-openstack-blueprint` | PUBLIC |
+
+An anonymous `curl` of a published sibling asset returns **200**; a private
+repo's release asset cannot return one. So once a valid `CHARTS_PUBLISH_TOKEN`
+exists, the publish job succeeds, the card appears, and `helm` cannot fetch the
+chart. The job's own conclusion will not show it — the same defect shape as the
+preflight that tested presence instead of validity, one layer further out.
+
+Two ways out, and the second is the clearer one:
+
+1. **Make this repository public**, matching all four siblings. One setting, no
+   code, and it is the user's call — the repo carries lab topology and host
+   details that have never been reviewed for publication.
+2. **Give the publisher a caller-independent asset host.** Its own header
+   comment already describes that design — "uploads the .tgz to *this repo's*
+   Releases (shared blob store)" — while the code uploads to the caller's
+   release instead, so comment and code disagree. The store exists and works:
+   `krateo-blueprints/charts` is PUBLIC and its `gh-pages` branch already serves
+   **316 `.tgz` files** from `blueprints/`, which is exactly what the 311
+   Pages-hosted entries resolve against. Uploading there and setting the entry
+   URL to the Pages host makes the channel independent of caller visibility for
+   everyone, not just for us. That is an upstream change to
+   `krateo-blueprints/charts`, not a change here.
+
+Do not "solve" this by publishing only `baremetal-lifecycle`-style charts, by
+hand-editing an index entry's `urls:`, or by making the release assets public
+some other way. The asset host is the publisher's decision and belongs there.
+
+**Related hazard, not ours but worth knowing:** those 1247 URLs embed the
+*per-chart* release tag — e.g.
+`…/krateo-aws-blueprint/releases/download/aws-wafv2-webacl-0.3.3/aws-wafv2-webacl-0.3.3.tgz`.
+`krateo-blueprints/charts#5` (merged 2026-11-07T14:28Z) stops creating a release
+per chart, which is right, but **deleting the existing per-chart releases as
+cleanup would 404 all 1247 entries.** Resetting "Latest" is safe; deleting is
+not.
+
+---
+
 ## The chart version is the API version
 
 `0.14.0` is served as `composition.krateo.io/v0-14-0`. Three consequences:
