@@ -18,7 +18,8 @@ spec:
     kind: NodeProvision
     # node_id is the human-friendly id the caller sets (node name or uuid). findby never
     # matches -> first Observe -> Create (the PUT). The 202 Pending condition then makes
-    # subsequent Observe report exists -> the PUT fires once.
+    # subsequent Observe report exists -> the PUT fires once. For WHY it never matches, read
+    # the corrected block immediately below and nothing else in this file.
     # MECHANISM CORRECTED 2026-11-04. findby never matches, which is what this
     # design wants (one PUT, then the 202 Pending condition suppresses re-fire)
     # -- but the reason written here for two weeks was not the reason operating.
@@ -51,9 +52,17 @@ spec:
       - target_provision_state
     verbsDescription:
       # No `get` verb: IsResourceKnown can't build a get call -> Observe uses findby. findby
-      # matches on node_id, which is not a field on listed nodes, so it never matches ->
-      # ResourceExists=false on first Observe -> Create (the PUT) fires. The 202 sets a Pending
-      # condition that makes later Observes report exists, so the PUT fires exactly once.
+      # never matches -> ResourceExists=false on first Observe -> Create (the PUT) fires. The
+      # 202 sets a Pending condition that makes later Observes report exists, so the PUT fires
+      # exactly once.
+      #
+      # DO NOT restate the reason here. This comment said "matches on node_id, which is not a
+      # field on listed nodes" -- the reason the block above corrected on 2026-11-04 and which
+      # has never been the one operating. The correction lived 30 lines up and this restatement
+      # survived it, so a reader landing here got the superseded version. On 2026-11-07 that
+      # reader was me, and I passed it to another team as primary evidence for oasgen #485
+      # before catching it. The mechanism is stated once, above; this comment states only the
+      # outcome.
       - action: findby
         method: GET
         path: /v1/nodes

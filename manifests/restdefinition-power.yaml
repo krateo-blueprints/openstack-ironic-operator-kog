@@ -46,6 +46,23 @@ spec:
     # accident, via an unrelated fix, having been causally wrong throughout.
     # A claim that is predictively right and causally wrong is the kind nothing
     # ever falsifies.
+    #
+    # THE GUARD IS NOW MEASURED, 2026-11-07. Until today "the 202 Pending condition
+    # suppresses re-fire" was asserted, not observed -- and oasgen #485 is the same
+    # code path (unmatched findby -> absence -> create), so a failure here would be a
+    # duplicate power PUT. Full rdc log, 335 lines, 6 live NodePower CRs:
+    #
+    #   323 "event":"observe"   318 "External resource is up to date"
+    #     0 create events       -> the PUT has not re-fired, once, ever
+    #     5 "Cannot observe external resource"  -> ALL DNS at pod start:
+    #       lookup ironic.openstack.svc.cluster.local on 10.96.0.10:53:
+    #       read: connection refused
+    #
+    # Those five are not matching failures. Read as such they would have "confirmed"
+    # the never-match story with infrastructure noise. Still unestablished: what makes
+    # steady-state observes report up-to-date. "Performing REST call" appears only 5
+    # times, but that message's emission conditions are unknown, so this does NOT
+    # license "steady-state observes skip the HTTP call".
     identifiers:
       - node_id
     additionalStatusFields:
