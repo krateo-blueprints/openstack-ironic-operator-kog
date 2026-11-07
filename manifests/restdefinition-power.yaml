@@ -107,9 +107,23 @@ spec:
     #   spec.target == status.power_state  =>  no drift  =>  no PUT fired
     #
     # All six matched, including blade01/04/05/06, which are enclosure CHILDREN.
-    # That took the microversion header on findby: without it `include_children`
-    # is inert, four of six are absent from the response, and the transform
-    # would have matched 2 of 6 while looking like it worked.
+    # The microversion header on findby is required for that: `include_children`
+    # needs >= 1.83 and children are absent from the collection without it.
+    #
+    # A CLAIM MADE HERE AND RETRACTED THE SAME DAY: that without the header the
+    # transform "would have matched 2 of 6 while looking like it worked". Not
+    # measured, and not possible. restdefinition-provision.yaml records the
+    # 2026-11-04 measurement: `include_children` without a microversion returns
+    # 406 "The minimal required API version should be 1.83". A 406 returns NO
+    # nodes, so the outcome would have been 0 of 6 WITH AN ERROR. Three things
+    # changed in one edit here -- transform, headers, update verb -- and 6 of 6
+    # is a measurement of the bundle, not of any member.
+    #
+    # What WAS silent is more interesting and is client-side: this findby ran
+    # with `include_children` and no microversion for days while the rdc logged
+    # 318 "External resource is up to date" and 5 errors, all DNS. If a 406 was
+    # on the wire each time, the not-found-plus-`Pending` path folded a hard API
+    # error into a benign state. Ironic was loud; Krateo was not.
     #
     # WHAT IT REPLACED, in one paragraph. findby never matched, because the
     # responseTransform that charts/baremetal-host/templates/transition-power.yaml

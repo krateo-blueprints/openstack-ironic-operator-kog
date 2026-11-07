@@ -94,9 +94,51 @@ spec:
           - name: include_children
             value: "true"
         identifiersMatchPolicy: OR
+        # The microversion, static and per-verb -- the Configuration's is dropped
+        # (oasgen #304: generated as `header`, looked up as `headers`). Required
+        # for `include_children` above, which needs >= 1.83, and for node lookup
+        # by name, which needs >= 1.5. Without it this findby returns
+        # 406 "The minimal required API version should be 1.83" -- measured on a
+        # throwaway CR 2026-11-04 -- and the not-found-plus-`Pending` path then
+        # records that hard error as "External resource is up to date".
+        headers:
+          - name: X-OpenStack-Ironic-API-Version
+            value: "1.109"
+        # OBSERVABLE, DELIBERATELY NOT CONVERGENT. Added 2026-11-07.
+        #
+        # Both lifts, for the same reasons as restdefinition-power.yaml:
+        #   node_id <- name           so findby can match at all; `isInResource`
+        #                             compares a value taken FROM THE RESPONSE,
+        #                             and node objects have no `node_id`.
+        #   target  <- provision_state  so a divergence is VISIBLE;
+        #                             CompareExisting walks the spec's keys and
+        #                             skips any key absent from the response, and
+        #                             `target` is not a field on a node.
+        responseTransform:
+          inline: '(if .name then .node_id = .name else . end) | (if .provision_state then .target = .provision_state else . end)'
+      # NO `update` VERB, ON PURPOSE -- and this is the one asymmetry with
+      # restdefinition-power.yaml that must not be "fixed" for consistency.
+      #
+      # Power is safe to converge: a blade found off when `target` says on gets
+      # powered on, and the worst case is a machine running that someone wanted
+      # off. Provision is not. `target` here takes values like `active`,
+      # `deleted` and `manage`, and driving to `active` from `available` is a
+      # DEPLOY -- it writes an image and WIPES THE DISK. Ironic also drops a
+      # node back to `available` by itself after a failed deploy (which is why
+      # `last_error` is in restdefinition-node.yaml's additionalStatusFields),
+      # so an automatic drift correction here would retry a destructive
+      # operation precisely when it had just failed, in a loop.
+      #
+      # So drift is made VISIBLE and nothing acts on it: status now carries
+      # provision_state, target_provision_state and uuid, and the composition
+      # can report honestly. Decided by the user 2026-11-07 when offered the
+      # convergent option.
       - action: create
         method: PUT
         path: /v1/nodes/{node_id}/states/provision
+        headers:
+          - name: X-OpenStack-Ironic-API-Version
+            value: "1.109"
         requestFieldMapping:
           - inPath: node_id
             inCustomResource: spec.node_id
