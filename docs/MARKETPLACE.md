@@ -412,6 +412,47 @@ not.
 
 ## After publishing, verify
 
+### Two checks the pipeline now runs, because every other one authenticates
+
+Added 2026-11-07, after finding that a successful publish from this repository
+would produce an uninstallable card (see the section above).
+
+**`channel-asset-host-gate`** (before the publish, a real gate). It refuses the
+channel publish when **both** hold: this repository is not public, *and* the
+publisher at the ref we pin still derives the asset URL from the caller
+(`RELEASES_BASE: .../${{ inputs.source_repo }}/releases/download`). It reads
+`krateo-blueprints/charts`'s workflow directly — that repo is public — rather
+than tracking a flag here, so when `#6` merges the gate passes on its own and
+nothing needs editing. Deliberately **not** "refuse while this repo is
+private": that would keep refusing after the fix, because the repo stays
+private. It fails closed if it cannot read the publisher.
+
+**`verify-channel-entry`** (after the publish, a detector). Runs
+`hack/verify-channel-entry.py`, which reads the URL the index *actually
+advertises* and fetches it **with no credentials** — the only check in this
+pipeline that uses the consumer's credentials rather than the publisher's. It
+asserts nothing about which host that is, so it survives `#6` and whatever
+follows. It is a detector, not a gate: by the time it runs the entry exists and
+failing the job does not retract it. Its purpose is to make the failure loud on
+the first release instead of silent until someone tries to install.
+
+Both were exercised before shipping, each branch with a control:
+
+| case | result |
+|---|---|
+| gate regex vs the current publisher | matches → gate fires |
+| gate regex vs a publisher without `RELEASES_BASE` | no match → gate retires by itself |
+| `baremetal-lifecycle=0.3.1` (really published) | `http=200`, exit 0 |
+| version absent / chart absent | named, exit 1 |
+| in the index but the `.tgz` 404s (fixture) | caught, exit 1 — **and the good URL in the same run still passed** |
+
+Run it by hand against the live channel at any time:
+
+```bash
+python3 hack/verify-channel-entry.py kubernetes-cluster=0.14.0 baremetal-host=0.6.3
+```
+
+
 **Check the right population.** Three different index documents all answer
 HTTP 200, with different contents, and a fourth thing decides whether a card
 renders:

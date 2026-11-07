@@ -157,6 +157,52 @@ jobs:
           done
           echo "$which authenticates against both repositories"
 
+  # THE CONSUMER IS ANONYMOUS, AND NOTHING ELSE IN THIS PIPELINE CHECKS THAT.
+  #
+  # Found 2026-11-07, before it had a chance to bite. The reusable publisher
+  # builds each index entry's download URL from the CALLER
+  # (`publish-chart.yaml`: `RELEASES_BASE: .../${{ inputs.source_repo }}/releases/download`)
+  # and THIS REPOSITORY IS PRIVATE. A private repo's release asset never
+  # returns 200 anonymously, so the publish would conclude SUCCESS, the card
+  # would appear, and `helm` could not fetch the chart. Every job above would
+  # be green -- the same shape as the preflight that tested presence instead of
+  # validity, one layer further out.
+  #
+  # This gate is deliberately NOT "refuse while the repo is private". That
+  # would keep refusing after the fix lands, because the repo stays private.
+  # It tests the actual condition instead: private caller AND a publisher that
+  # still resolves assets from the caller. `krateo-blueprints/charts` is
+  # public, so its workflow at the ref we pin can simply be read. When #6
+  # ("store tarballs in this repo's Releases") merges to main, RELEASES_BASE
+  # disappears, this gate passes on its own and nothing here needs editing.
+  #
+  # It fails CLOSED: a gate that cannot determine the answer must not wave the
+  # release through.
+  channel-asset-host-gate:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: A private caller must not publish while the index points at its own releases
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          vis="$(gh api "repos/${{ github.repository }}" --jq .visibility)"
+          echo "this repository: $vis"
+          if [ "$vis" = "public" ]; then
+            echo "Caller is public; its release assets are anonymously fetchable."
+            exit 0
+          fi
+          # Read the publisher we actually pin (`uses: ...@main`), anonymously.
+          pub="$(curl -fsSL --max-time 60 \
+            https://raw.githubusercontent.com/krateo-blueprints/charts/main/.github/workflows/publish-chart.yaml)" \
+            || { echo "::error::cannot read the publisher at @main to determine where it stores assets; refusing to publish blind"; exit 1; }
+          if printf '%s' "$pub" | grep -qE '^\s*RELEASES_BASE:.*inputs\.source_repo'; then
+            echo "::error::The publisher still builds index URLs from the caller, and ${{ github.repository }} is $vis. Publishing now would write an index entry whose .tgz 404s for anonymous helm, and the entry persists until the chart version is bumped. Wait for krateo-blueprints/charts#6 (moves the store to that repo's own public Releases), or make this repository public. See docs/MARKETPLACE.md."
+            exit 1
+          fi
+          echo "Publisher no longer resolves assets from the caller; a private caller is fine."
+
   # Republishes the same bytes into the Marketplace's blueprints channel. The
   # publisher stamps nothing: `krateo.io/source-repo` has to be committed in each
   # Chart.yaml, and without it the chart lands in the index and never gets a card.
@@ -165,6 +211,7 @@ jobs:
     needs:
       - publish
       - blueprints-token-preflight
+      - channel-asset-host-gate
     uses: krateo-blueprints/charts/.github/workflows/publish-chart.yaml@main
     with:
       source_repo: ${{ github.repository }}
@@ -181,3 +228,34 @@ jobs:
       # 37742845675 shows `publish-blueprints / publish` CONCLUDED SUCCESS --
       # the job itself, not merely a green run with the job skipped.
       PUBLISH_TOKEN: ${{ secrets.CHARTS_PUBLISH_TOKEN || secrets.RELEASE_FEED_TOKEN }}
+
+  # The counterpart to the gate above, on the far side of the publish: fetch
+  # whatever URL the index ACTUALLY advertises, with no credentials. It asserts
+  # nothing about which host that is, so it stays correct across #6 and
+  # anything after it.
+  #
+  # It is a DETECTOR, not a gate -- by the time it runs the entry is written,
+  # and failing this job does not retract it. Its job is to make the failure
+  # loud on the first release instead of silent until a user tries to install.
+  verify-channel-entry:
+    needs: publish-blueprints-channel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: The URL the index advertises must be fetchable with no credentials
+        run: |
+          set -euo pipefail
+          # PyYAML is normally present on the runner; do not assume it.
+          python3 -c "import yaml" 2>/dev/null || pip install --quiet pyyaml
+          # An ARRAY, expanded quoted. An unquoted "$pairs" string happens to
+          # work in bash and silently does not in zsh, where the whole string
+          # arrives as one argv entry -- and this script's argparse ACCEPTED
+          # that, because the mangled blob still contains an "=". Caught while
+          # testing this step by hand on 2026-11-07. Nothing here should depend
+          # on which shell splits what.
+          pairs=()
+          for chart in kubernetes-cluster baremetal-host; do
+            ver="$(python3 -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))['version'])" "charts/$chart/Chart.yaml")"
+            pairs+=("$chart=$ver")
+          done
+          python3 hack/verify-channel-entry.py "${pairs[@]}"
