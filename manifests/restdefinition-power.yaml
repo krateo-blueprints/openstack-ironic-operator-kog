@@ -119,11 +119,30 @@ spec:
     # changed in one edit here -- transform, headers, update verb -- and 6 of 6
     # is a measurement of the bundle, not of any member.
     #
-    # What WAS silent is more interesting and is client-side: this findby ran
-    # with `include_children` and no microversion for days while the rdc logged
-    # 318 "External resource is up to date" and 5 errors, all DNS. If a 406 was
-    # on the wire each time, the not-found-plus-`Pending` path folded a hard API
-    # error into a benign state. Ironic was loud; Krateo was not.
+    # A SECOND MECHANISM WAS WRITTEN HERE AND IS ALSO WRONG. It said: this findby
+    # ran with `include_children` and no microversion for days while the rdc
+    # logged 318 "External resource is up to date" and 5 errors (all DNS), so a
+    # 406 must have been on the wire each time and the not-found-plus-`Pending`
+    # path folded it into a benign state.
+    #
+    # Refuted by the oasgen-provider session, from code: `IsNotFoundError` is
+    # STRICTLY 404, so a 406 cannot reach the `Pending` guard at all -- it falls
+    # through to the error path, is logged at Error and returned to the runtime.
+    # Two declarations WOULD produce that folding -- `notFoundCodes` (remaps a
+    # declared status to a 404) and `tolerateCodes` (turns a declared status into
+    # a success with no body, which reads as up-to-date, no `Pending` needed) --
+    # and NEITHER IS DECLARED ANYWHERE in this repo's manifests, oas or charts.
+    # Grepped 2026-11-07 with a positive control.
+    #
+    # So the 406 was not on that path, and THE 318 ARE STILL UNEXPLAINED. Do not
+    # write a third mechanism here without measuring it. The surviving lead is in
+    # the Pending-guard block below: "Performing REST call" appears 5 times in a
+    # 335-line log covering 323 observes, which would mean the findby HTTP call
+    # was not being issued on most reconciles -- but that message's emission
+    # conditions are unknown, so it licenses nothing yet. The measurement that
+    # will settle it is on `provision`, which has zero live CRs: apply the
+    # transform WITHOUT the microversion header, create one throwaway CR,
+    # observe; then add the header and observe again. One variable, two numbers.
     #
     # WHAT IT REPLACED, in one paragraph. findby never matched, because the
     # responseTransform that charts/baremetal-host/templates/transition-power.yaml
