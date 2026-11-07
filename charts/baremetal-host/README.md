@@ -65,17 +65,17 @@ spec:
   nodeName: blade03
   driver: redfish
   driver_info:
-    redfish_address: https://172.19.74.103
+    redfish_address: https://192.0.2.103
     redfish_username: admin
     redfish_password: <…>
     redfish_system_id: /redfish/v1/Systems/1
   ports:
-    - address: "00:60:2f:33:81:01"
+    - address: "00:00:5e:00:53:01"
       pxe_enabled: true
   enableInspection: true
   image:
-    source: http://172.19.74.1:8089/debian-13-genericcloud-amd64.qcow2
-    checksum: http://172.19.74.1:8089/CHECKSUM
+    source: http://192.0.2.1:8089/debian-13-genericcloud-amd64.qcow2
+    checksum: http://192.0.2.1:8089/CHECKSUM
     checksum_type: sha256
   configDrive:
     metaData:

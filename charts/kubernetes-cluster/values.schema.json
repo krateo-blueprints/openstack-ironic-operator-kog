@@ -157,7 +157,7 @@
             "null"
           ],
           "title": "Keystone URL",
-          "description": "Keystone identity endpoint, as reachable from the blades -- for example http://172.19.74.1:5000."
+          "description": "Keystone identity endpoint, as reachable from the blades -- for example http://192.0.2.1:5000."
         },
         "ironicUrl": {
           "type": [
@@ -165,7 +165,7 @@
             "null"
           ],
           "title": "Ironic API URL",
-          "description": "Ironic bare-metal API endpoint, as reachable from the blades -- for example http://172.19.74.1:6385. This is the endpoint the blades actually use."
+          "description": "Ironic bare-metal API endpoint, as reachable from the blades -- for example http://192.0.2.1:6385. This is the endpoint the blades actually use."
         },
         "username": {
           "type": [

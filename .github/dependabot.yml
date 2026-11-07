@@ -1,0 +1,31 @@
+# Keeps pinned GitHub Actions current.
+#
+# Needed because of how this repo will pin the Krateo channel publisher. The org
+# publishing standard (krateo-blueprints/charts, PUBLISHING.md) requires callers
+# to pin the reusable workflow by FULL COMMIT SHA with its version in a trailing
+# comment, rather than by a moving major tag such as `@1`: whoever can move that
+# tag could run code with CHARTS_PUBLISH_TOKEN in every caller at once.
+#
+# A SHA pin with nothing to advance it is worse than `@main`, because it looks
+# deliberate while going quietly stale. Dependabot is the thing that advances
+# it, so the config has to exist before the pin does -- this repo had none.
+#
+# `package-ecosystem: github-actions` covers both `uses: owner/repo@sha` actions
+# and `uses: owner/repo/.github/workflows/x.yml@sha` reusable workflows, and it
+# rewrites the version comment alongside the SHA.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(actions)"
+    groups:
+      # One PR for routine action bumps; the publisher is called out separately
+      # because moving it changes how this repo's charts reach the Marketplace,
+      # which deserves its own review rather than riding along in a batch.
+      actions:
+        patterns: ["*"]
+        exclude-patterns: ["krateo-blueprints/charts*"]

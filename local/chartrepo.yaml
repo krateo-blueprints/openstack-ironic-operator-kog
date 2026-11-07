@@ -1,0 +1,97 @@
+# The in-cluster chart repository that chart-inspector fetches composition
+# charts from. Declarative, because the imperative version lost its contents on
+# every pod restart.
+#
+# WHAT WENT WRONG, measured 2026-11-07. `make chart-host` used to
+# `kubectl create deployment chartrepo --image=nginx:1.27-alpine` and then
+# `kubectl cp` four .tgz into /usr/share/nginx/html inside the running
+# container. That path is the container filesystem: no volume of any kind was
+# mounted (`.spec.template.spec.volumes` was empty). So the charts lived only in
+# one container instance, and the first restart took them with it.
+#
+# The cost was three days of wrong diagnosis. All seven compositions sat at
+# Ready=False since 2026-11-04T14:17 and I recorded the reason as `Creating`,
+# chased child health, and asked core-provider about the Ready roll-up. The
+# actual condition was reason=`Unavailable` with the cause spelled out in the
+# message:
+#
+#   generating RBAC using chart-inspector: ... unexpected status code: 500
+#   failed to fetch http://chartrepo.openstack.svc.cluster.local/
+#     baremetal-host-0.6.3.tgz : 404 Not Found
+#
+# and the pod was serving nothing but nginx's own index.html and 50x.html,
+# both dated Apr 16 2025 from the image. `migprobe-1` was Ready=True/Available
+# in the same cluster throughout -- the positive control that proves the
+# composition path works when the chart is actually there.
+#
+# WHY A CONFIGMAP. The four charts are 92,812 bytes packaged, ~124KB base64,
+# against a 1MiB limit, so one ConfigMap holds all of them with room to spare.
+# It lives in etcd, so it survives pod restarts, node restarts and a
+# `docker stop` of the whole kind node. A mounted ConfigMap also picks up
+# changes without a pod restart, so re-running `make chart-host` after a chart
+# bump reconciles the repo rather than needing a rollout.
+#
+# The ConfigMap itself is NOT in this file: it is generated from dist/*.tgz by
+# `make chart-host`, because its content is the packaged charts and those are
+# build output, not source. This file is the part that is desired state.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chartrepo
+  namespace: openstack
+  labels:
+    app: chartrepo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chartrepo
+  template:
+    metadata:
+      labels:
+        app: chartrepo
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27-alpine
+          ports:
+            - containerPort: 80
+          volumeMounts:
+            # Mounting over /usr/share/nginx/html hides the image's stock
+            # index.html and 50x.html. That is intended: chart-inspector
+            # fetches exact filenames and never lists the directory, and their
+            # presence was what made an EMPTY repo look like a working one.
+            - name: charts
+              mountPath: /usr/share/nginx/html
+              readOnly: true
+          readinessProbe:
+            # Probe a chart, not /. With the mount in place / is a 403
+            # (no index), and probing / would have reported ready while
+            # serving no charts at all -- the exact failure this file exists
+            # to prevent. `make chart-host` keeps this path in step with
+            # HOST_CHART_VERSION.
+            httpGet:
+              path: /baremetal-host-0.6.3.tgz
+              port: 80
+            initialDelaySeconds: 2
+            periodSeconds: 10
+      volumes:
+        - name: charts
+          configMap:
+            name: chartrepo-charts
+            optional: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chartrepo
+  namespace: openstack
+  labels:
+    app: chartrepo
+spec:
+  selector:
+    app: chartrepo
+  ports:
+    - port: 80
+      targetPort: 80

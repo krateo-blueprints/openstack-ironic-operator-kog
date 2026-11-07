@@ -637,7 +637,7 @@ __CONFIGDRIVE_HASH_SENTINEL__
            advertiseAddress:  192.168.0.201   (data)
            etcd peer URL:     192.168.0.201   (data)
            derived VIP:       192.168.0.250   (data, enp2s0)
-           node InternalIP:   172.19.74.123   (OOB)  <- the odd one out
+           node InternalIP:   192.0.2.123   (OOB)  <- the odd one out
            KUBELET_KUBEADM_ARGS=""                   <- no --node-ip anywhere
 
          The CP REPLICAS were already correct because their JoinConfiguration
@@ -680,7 +680,7 @@ __CONFIGDRIVE_HASH_SENTINEL__
      uses the node's default-route IP for apiserver advertise AND etcd
      peer URL. On dual-NIC blades where the default route is via the
      management network (192.168.0.x) but the bootstrap CP advertised
-     etcd on the data network (172.19.74.x via VIP_PREFIX), peers can
+     etcd on the data network (192.0.2.x via VIP_PREFIX), peers can
      never reach each other → etcd member never started → kubeadm join
      fails. Replica join.sh sed-substitutes ADVERTISE_IP / CA_HASH /
      CERT_KEY at runtime, computed via the same VIP_PREFIX trick the
@@ -2260,7 +2260,7 @@ write_files:
       # v0.12.8: derive ADVERTISE_IP from the VIP's /24 — same trick the
       # bootstrap CP uses in cp-init.sh. Default-route IP on dual-NIC
       # blades lives on the mgmt network (192.168.0.x), but the bootstrap
-      # advertised etcd on the data network (172.19.74.x). Matching here
+      # advertised etcd on the data network (192.0.2.x). Matching here
       # is what lets the etcd learner peer with the leader.
       VIP_PREFIX_FOR_ADV=$(echo "$VIP" | awk -F: '{print $1}' | awk -F. '{print $1"."$2"."$3"."}')
       ADVERTISE_IP=$(ip -o -4 addr show \
@@ -2401,7 +2401,7 @@ write_files:
         remove_ghost_etcd_members
         wait_for_etcd_no_pending_learner
         # v0.12.8: render JoinConfiguration with ADVERTISE_IP / CA_HASH /
-        # CERT_KEY so kubeadm uses the VIP-prefix-derived IP (172.19.74.x)
+        # CERT_KEY so kubeadm uses the VIP-prefix-derived IP (192.0.2.x)
         # for both apiserver advertise AND etcd peer URL — matches the
         # bootstrap's etcd advertise so peers can actually reach each other.
         sed -e "s|__ADVERTISE_IP__|$ADVERTISE_IP|g" \

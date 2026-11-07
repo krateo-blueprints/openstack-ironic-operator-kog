@@ -115,8 +115,10 @@ version lacks field X; switch to a newer one (see [docs/api.md](docs/api.md)).
 
 ## Marketplace blueprints
 
-Two of the charts here are Krateo Marketplace blueprints, published to the
-[`blueprints` channel](https://krateo-blueprints.github.io/charts/blueprints):
+Two of the charts here are this repository's Krateo Marketplace blueprints.
+**Neither is in the [`blueprints` channel](https://krateo-blueprints.github.io/charts/blueprints)
+yet** — the channel publish fails with `HTTP 401: Bad credentials` and is waiting
+on a valid token ([docs/MARKETPLACE.md](docs/MARKETPLACE.md)):
 
 | Chart | Card | What it does |
 |---|---|---|
@@ -124,8 +126,15 @@ Two of the charts here are Krateo Marketplace blueprints, published to the
 | [`baremetal-host`](charts/baremetal-host/README.md) | Bare-Metal Host (OpenStack Ironic) | manages one physical server through Ironic as a single resource |
 
 Register `baremetal-host` **first** — `kubernetes-cluster` renders its resources.
+
 `baremetal-discovery` and `baremetal-lifecycle` are the superseded split that
-`baremetal-host` absorbed and are not published as blueprints.
+`baremetal-host` absorbed and are not published as blueprints. One caveat a
+reader needs: `baremetal-lifecycle` **0.3.1 is in the channel** — published from
+here on or before 2026-08-19 — and it is the only entry from this repo there.
+Measured 2026-11-07 against the live index, with `baremetal-lifecycle` as the
+positive control: `kubernetes-cluster`, `baremetal-host` and
+`baremetal-discovery` are all absent. So anyone following the channel link above
+looking for the two cards finds a superseded chart instead of them.
 
 See [docs/MARKETPLACE.md](docs/MARKETPLACE.md) for how a chart becomes a card,
 what the channel gate checks, and the one-time token setup the publish needs.
