@@ -153,7 +153,20 @@ smoke-test:   # drive a fake node enroll->active against the local Ironic (CLEAN
 	IRONIC_API=http://localhost:6385 CLEANUP=$${CLEANUP:-1} ./scripts/smoke-test-ironic.sh; rc=$$?; \
 	kill $$pf 2>/dev/null; exit $$rc
 
-KRATEO_CORE_VERSION ?= 1.0.0
+# 2.13.62, corrected 2026-11-07, and the CHANGE OF SOURCE below matters as much
+# as the number. This said 1.0.0, installed from the https://charts.krateo.io
+# index -- and that index's newest core-provider chart IS 1.0.0 (appVersion
+# 1.0.0), a different and older lineage from the 2.13.62 this cluster actually
+# runs, which the index does not carry at all. So `make krateo-up` would have
+# REPLACED a working composition engine with a years-old one, in the same way
+# the comment below describes for oasgen, and for the same reason: the real
+# releases live in the OCI registry.
+#
+# Found by not running the target. I needed to upgrade oasgen only, read what
+# krateo-up would also touch, and checked the installed version first -- which
+# is also how I learned this cluster is 2.13.62 and not the 2.13.59 I had been
+# telling people and had named a branch after.
+KRATEO_CORE_VERSION ?= 2.13.62
 # The https://charts.krateo.io index stops at oasgen 0.11.1; the real releases
 # live in the OCI registry, which is where the 0.47.0 install actually came
 # from. Pinning the stale index version here meant `make krateo-up` would have
@@ -180,7 +193,9 @@ KRATEO_OCI            ?= oci://ghcr.io/krateo-platformops/charts
 krateo-up:    # install Krateo KOG (oasgen-provider) + composition engine (core-provider)
 	helm repo add krateo https://charts.krateo.io 2>/dev/null || true
 	helm repo update krateo
-	$(HELMK) upgrade --install krateo-core-provider krateo/core-provider \
+	$(HELMK) upgrade --install krateo-core-provider-crds $(KRATEO_OCI)/core-provider-crds \
+		-n krateo-system --create-namespace --version $(KRATEO_CORE_VERSION) --wait --timeout 5m
+	$(HELMK) upgrade --install krateo-core-provider $(KRATEO_OCI)/core-provider \
 		-n krateo-system --create-namespace --version $(KRATEO_CORE_VERSION) --wait --timeout 6m
 	$(HELMK) upgrade --install krateo-oasgen-provider-crds $(KRATEO_OCI)/oasgen-provider-crds \
 		-n krateo-system --create-namespace --version $(KRATEO_OASGEN_VERSION) --wait --timeout 5m
