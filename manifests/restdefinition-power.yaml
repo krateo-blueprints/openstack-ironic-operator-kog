@@ -263,8 +263,45 @@ spec:
         # Applied per list item, before matching, so the input is one node
         # object. Guarded on each field: a node may legitimately have a null
         # `name`, and adding a null key is worse than adding none.
+        # REVISED 2026-11-07 after /code-review found two holes in the first
+        # version, which was:
+        #   (if .name then .node_id = .name else . end)
+        #   | (if .power_state then .target = .power_state else . end)
+        #
+        # HOLE 1 -- a node with NO power observation was matched but not
+        # compared. `power_state` is null in `enroll`, and before the first BMC
+        # sync. The old guard still lifted `node_id`, so findby MATCHED
+        # (ResourceExists=true, so `create` unreachable) while skipping the
+        # `target` lift -- and CompareExisting skips a spec key absent from the
+        # response, so it reported no difference. Result: up-to-date, no create,
+        # no update, and `spec.target` never driven. The guard's rationale was
+        # right for `name` (null means "skip this item") and backwards for
+        # `power_state` (null means "never observed", which is exactly when the
+        # PUT must fire).
+        #
+        # HOLE 2 -- an in-flight transition looked like drift. After a 202 Ironic
+        # sets `target_power_state` and leaves `power_state` at the OLD value
+        # until the BMC confirms, seconds to a minute on real Redfish. Lifting
+        # `power_state` then compares stale-actual against desired, sees
+        # divergence, and fires a SECOND PUT into a node Ironic has locked --
+        # 409, which is not a 404 so it cannot reach the Pending branch and
+        # surfaces as an error and a Ready=false blip on every reconcile until
+        # the BMC settles.
+        #
+        # Both fixed by preferring `target_power_state` and lifting nothing when
+        # neither field is present. Tested against all four shapes before
+        # applying (jq 1.7.1):
+        #   {power_state: "power on", target_power_state: null}
+        #     -> node_id, target="power on"      settled: equals spec, no call
+        #   {power_state: "power off", target_power_state: "power on"}
+        #     -> node_id, target="power on"      in flight: equals spec, no call
+        #   {power_state: null, target_power_state: null}
+        #     -> UNCHANGED, no node_id           never observed: no match,
+        #                                        create fires, PUT happens
+        #   {name: null, ...}
+        #     -> UNCHANGED                       unnamed node skipped
         responseTransform:
-          inline: '(if .name then .node_id = .name else . end) | (if .power_state then .target = .power_state else . end)'
+          inline: 'if .name and ((.target_power_state // .power_state) != null) then .node_id = .name | .target = (.target_power_state // .power_state) else . end'
         # v2026-11-04: Ironic's node COLLECTION omits child nodes unless asked.
         # Measured: GET /v1/nodes -> 3 nodes; ?include_children=true -> 17.
         # blade01/04/05/06 are children of an enclosure and are ABSENT without
@@ -282,6 +319,15 @@ spec:
         headers:
           - name: X-OpenStack-Ironic-API-Version
             value: "1.109"
+        # The SAME body pinning as `update` below, added 2026-11-07. /code-review
+        # pointed out that only `update` had it, and the two cannot both be
+        # right: if Ironic really rejects a body carrying node_id,
+        # configurationRef and the microversion -- which is why update pins it --
+        # then this fallback would 400 at exactly the moment it is the only path
+        # left, and `create` has fired zero times ever, so nothing would surface
+        # it. Pinning both is the consistent reading.
+        requestTransform:
+          inline: '{target: .target} + (if .timeout then {timeout: .timeout} else {} end)'
         requestFieldMapping:
           - inPath: node_id
             inCustomResource: spec.node_id
