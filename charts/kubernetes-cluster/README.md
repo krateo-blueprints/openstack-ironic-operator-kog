@@ -81,8 +81,8 @@ spec:
   clusterName: lab-ha
   k8sVersion: v1.36.6
   image:
-    source: http://172.19.74.1:8089/debian-13-genericcloud-amd64.qcow2
-    checksum: http://172.19.74.1:8089/CHECKSUM
+    source: http://192.0.2.1:8089/debian-13-genericcloud-amd64.qcow2
+    checksum: http://192.0.2.1:8089/CHECKSUM
   configurationRef:
     name: ironic-endpoint
     namespace: openstack
@@ -90,56 +90,56 @@ spec:
     podCIDR: 10.244.0.0/16
     serviceCIDR: 10.96.0.0/12
   controlPlane:
-    endpoint: 172.19.74.200          # a load-balanced VIP; required for HA
+    endpoint: 192.0.2.200          # a load-balanced VIP; required for HA
     nodes:
       - nodeName: blade01            # index 0 bootstraps the cluster
-        oobIp: 172.19.74.101         # required for HA: etcd binds to it
+        oobIp: 192.0.2.101         # required for HA: etcd binds to it
         driver: redfish
         driver_info:
-          redfish_address: https://172.19.74.101
+          redfish_address: https://192.0.2.101
           redfish_username: admin
           redfish_password: replace-me
           redfish_system_id: /redfish/v1/Systems/1
         ports:
-          - address: "00:60:2f:33:81:01"
+          - address: "00:00:5e:00:53:01"
             pxe_enabled: true
       - nodeName: blade02
-        oobIp: 172.19.74.102
+        oobIp: 192.0.2.102
         driver: redfish
         driver_info:
-          redfish_address: https://172.19.74.102
+          redfish_address: https://192.0.2.102
           redfish_username: admin
           redfish_password: replace-me
           redfish_system_id: /redfish/v1/Systems/1
         ports:
-          - address: "00:60:2f:33:81:02"
+          - address: "00:00:5e:00:53:02"
             pxe_enabled: true
       - nodeName: blade03
-        oobIp: 172.19.74.103
+        oobIp: 192.0.2.103
         driver: redfish
         driver_info:
-          redfish_address: https://172.19.74.103
+          redfish_address: https://192.0.2.103
           redfish_username: admin
           redfish_password: replace-me
           redfish_system_id: /redfish/v1/Systems/1
         ports:
-          - address: "00:60:2f:33:81:03"
+          - address: "00:00:5e:00:53:03"
             pxe_enabled: true
   workers:
     nodes:
       - nodeName: blade04
         driver: redfish
         driver_info:
-          redfish_address: https://172.19.74.104
+          redfish_address: https://192.0.2.104
           redfish_username: admin
           redfish_password: replace-me
           redfish_system_id: /redfish/v1/Systems/1
         ports:
-          - address: "00:60:2f:33:81:04"
+          - address: "00:00:5e:00:53:04"
             pxe_enabled: true
   ironicAuth:
-    authUrl: http://172.19.74.1:5000
-    ironicUrl: http://172.19.74.1:6385
+    authUrl: http://192.0.2.1:5000
+    ironicUrl: http://192.0.2.1:6385
     username: ironic-publisher
     password: replace-me
     userDomain: Default

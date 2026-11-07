@@ -215,22 +215,38 @@ LIFECYCLE_CHART_VERSION ?= $(shell awk '/^version:/ {print $$2; exit}' charts/ba
 DISCOVERY_CHART_VERSION ?= $(shell awk '/^version:/ {print $$2; exit}' charts/baremetal-discovery/Chart.yaml)
 HOST_CHART_VERSION      ?= $(shell awk '/^version:/ {print $$2; exit}' charts/baremetal-host/Chart.yaml)
 CLUSTER_CHART_VERSION   ?= $(shell awk '/^version:/ {print $$2; exit}' charts/kubernetes-cluster/Chart.yaml)
-chart-host:   # package all four charts (baremetal-lifecycle + baremetal-discovery + baremetal-host + kubernetes-cluster) and serve them
+chart-host:   # package all four charts and serve them from a ConfigMap-backed nginx
+	# The charts are served from a ConfigMap mounted into nginx, NOT copied into
+	# a running container. See local/chartrepo.yaml for the whole story: the
+	# `kubectl cp` version wrote into the container filesystem with no volume
+	# mounted, so every pod restart emptied the repo. That wedged all seven
+	# compositions from 2026-11-04T14:17 until 2026-11-07, and the condition it
+	# produced (reason=Unavailable, a chart-inspector 500 wrapping a 404) sent me
+	# looking at child health for three days.
 	helm package charts/baremetal-lifecycle -d dist/
 	helm package charts/baremetal-discovery -d dist/
 	helm package charts/baremetal-host      -d dist/
 	helm package charts/kubernetes-cluster  -d dist/
-	$(KUBECTL) -n $(IRONIC_NS) create deployment chartrepo --image=nginx:1.27-alpine --dry-run=client -o yaml | $(KUBECTL) apply -f -
-	$(KUBECTL) -n $(IRONIC_NS) expose deployment chartrepo --port=80 --dry-run=client -o yaml | $(KUBECTL) apply -f - 2>/dev/null || true
+	# The readiness probe in local/chartrepo.yaml names ONE chart by version, so
+	# that "Ready" means "this repo is serving that chart". Assert the version
+	# rather than rewrite it: a silently-stamped probe could go green while
+	# serving a chart nobody asked for.
+	@grep -q 'path: /baremetal-host-$(HOST_CHART_VERSION).tgz' local/chartrepo.yaml || { \
+		echo "ERROR: local/chartrepo.yaml's readiness probe does not name baremetal-host-$(HOST_CHART_VERSION).tgz."; \
+		echo "       Update the probe path when HOST_CHART_VERSION changes, or Ready stops meaning anything."; \
+		exit 1; }
+	$(KUBECTL) -n $(IRONIC_NS) create configmap chartrepo-charts \
+		--from-file=dist/baremetal-lifecycle-$(LIFECYCLE_CHART_VERSION).tgz \
+		--from-file=dist/baremetal-discovery-$(DISCOVERY_CHART_VERSION).tgz \
+		--from-file=dist/baremetal-host-$(HOST_CHART_VERSION).tgz \
+		--from-file=dist/kubernetes-cluster-$(CLUSTER_CHART_VERSION).tgz \
+		--dry-run=client -o yaml | $(KUBECTL) apply -f -
+	$(KUBECTL) apply -f local/chartrepo.yaml
+	# This rollout IS the verification, and that is the point of probing a chart
+	# path instead of `/`: the pod cannot become Ready unless nginx returns 200
+	# for a real chart tarball. The old target's `rollout status` proved only
+	# that nginx had started, which it does just as happily with an empty repo.
 	$(KUBECTL) -n $(IRONIC_NS) rollout status deploy/chartrepo --timeout=120s
-	$(KUBECTL) -n $(IRONIC_NS) cp dist/baremetal-lifecycle-$(LIFECYCLE_CHART_VERSION).tgz \
-		$$($(KUBECTL) -n $(IRONIC_NS) get pod -l app=chartrepo -o jsonpath='{.items[0].metadata.name}'):/usr/share/nginx/html/baremetal-lifecycle-$(LIFECYCLE_CHART_VERSION).tgz
-	$(KUBECTL) -n $(IRONIC_NS) cp dist/baremetal-discovery-$(DISCOVERY_CHART_VERSION).tgz \
-		$$($(KUBECTL) -n $(IRONIC_NS) get pod -l app=chartrepo -o jsonpath='{.items[0].metadata.name}'):/usr/share/nginx/html/baremetal-discovery-$(DISCOVERY_CHART_VERSION).tgz
-	$(KUBECTL) -n $(IRONIC_NS) cp dist/baremetal-host-$(HOST_CHART_VERSION).tgz \
-		$$($(KUBECTL) -n $(IRONIC_NS) get pod -l app=chartrepo -o jsonpath='{.items[0].metadata.name}'):/usr/share/nginx/html/baremetal-host-$(HOST_CHART_VERSION).tgz
-	$(KUBECTL) -n $(IRONIC_NS) cp dist/kubernetes-cluster-$(CLUSTER_CHART_VERSION).tgz \
-		$$($(KUBECTL) -n $(IRONIC_NS) get pod -l app=chartrepo -o jsonpath='{.items[0].metadata.name}'):/usr/share/nginx/html/kubernetes-cluster-$(CLUSTER_CHART_VERSION).tgz
 
 check-examples:   # every manifest a reader is told to apply would actually apply
 	# Catches the two defect classes that `helm lint` and kubeconform cannot see

@@ -88,6 +88,49 @@ spec:
     # steady-state observes report up-to-date. "Performing REST call" appears only 5
     # times, but that message's emission conditions are unknown, so this does NOT
     # license "steady-state observes skip the HTTP call".
+    # THE FIRE-ONCE DESIGN MAKES ITS PARENT COMPOSITION PERMANENTLY NOT-READY.
+    # Measured end to end 2026-11-07, and it resolves a question that was open
+    # for three days.
+    #
+    # All six live NodePower CRs report:
+    #   Ready  = False, reason=Pending
+    #   Synced = True,  reason=ReconcileSuccess
+    #   status keys: ['conditions'] only
+    #
+    # `Pending` is the 202 guard this file relies on: it is what stops the PUT
+    # re-firing, and for a fire-once action there is nothing further to observe,
+    # so it is the TERMINAL state rather than a transient one.
+    #
+    # core-provider's roll-up (childhealth.go at 2.13.59) classifies a child
+    # whose Ready is not True, with a reason other than Unavailable /
+    # AuthorizationDenied (failed) or ZeroEvidence / NotObserved (unevaluated),
+    # as CONVERGING -- and any converging child holds the parent at
+    # `Ready=False/Creating`. `Pending` is in that set. Measured consequence,
+    # with the parent's own message naming the child:
+    #
+    #   baremetalhosts/lab-ha-cp-blade01: False/Creating
+    #     "1 of 4 managed children are not ready:
+    #      nodepowers/openstack/lab-ha-cp-blade01-88585z57-power"
+    #
+    # So all six BaremetalHost compositions can never report Ready=True while
+    # they manage a NodePower. This is honest propagation, not a bug in
+    # core-provider and not a bug in the rdc -- it is a collision between two
+    # correct designs: an action CR whose terminal state is `Pending`, and a
+    # composition that requires every child Ready.
+    #
+    # Also note `additionalStatusFields: [uuid, power_state, target_power_state]`
+    # below produces NOTHING: status carries only `conditions`. That follows from
+    # the same never-match -- with no observed external resource there is no
+    # response to lift fields from. Coherent, but it means the CR holds no
+    # evidence of what it did.
+    #
+    # DO NOT "fix" this by rendering the NodePower outside the composition, or by
+    # dropping it from the chart. That hides the collision instead of resolving
+    # it. The open question is upstream and has been put to oasgen-provider:
+    # for a fire-once action CR with a 202 and nothing to observe, what is the
+    # intended terminal Ready? If `Pending` is intended-terminal, then no
+    # composition managing such a CR can ever be Ready, and that needs saying
+    # somewhere both components can see it.
     identifiers:
       - node_id
     additionalStatusFields:

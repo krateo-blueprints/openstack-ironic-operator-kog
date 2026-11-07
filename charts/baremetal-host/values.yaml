@@ -13,7 +13,7 @@ nodeNamespace: ""      # defaults to release namespace
 # --- Ports (Ironic requires >=1 port for inspect + deploy validation) ---
 # Example:
 #   ports:
-#     - address: "00:60:2f:33:81:01"
+#     - address: "00:00:5e:00:53:01"
 #       pxe_enabled: true
 ports:
 
@@ -28,8 +28,8 @@ enableInspection: false
 # When unset, the node stops at `available` (or `manageable` if inspection ran without a
 # provide step — see enableInspection caveat above).
 image:
-  # source: "http://172.19.74.1:8089/debian-13-genericcloud-amd64.qcow2"
-  # checksum: "http://172.19.74.1:8089/CHECKSUM"
+  # source: "http://192.0.2.1:8089/debian-13-genericcloud-amd64.qcow2"
+  # checksum: "http://192.0.2.1:8089/CHECKSUM"
   # checksum_type: "sha256"  # optional
   # format: "qcow2"          # optional
   # root_device:             # optional disk-selection hints (Ironic root_device dict)
@@ -58,8 +58,8 @@ configDrive:
   #         - ssh-ed25519 AAAA... your-key
   # networkData:
   #   links:
-  #     - {id: enp1s0, type: phy, ethernet_mac_address: "00:60:2f:35:81:01"}
-  #     - {id: enp2s0, type: phy, ethernet_mac_address: "00:60:2f:35:81:02"}
+  #     - {id: enp1s0, type: phy, ethernet_mac_address: "00:00:5e:00:53:11"}
+  #     - {id: enp2s0, type: phy, ethernet_mac_address: "00:00:5e:00:53:12"}
   #   networks:
   #     - {id: enp1s0, network_id: enp1s0, type: ipv4_dhcp, link: enp1s0}
   #     - {id: enp2s0, network_id: enp2s0, type: ipv4_dhcp, link: enp2s0}
@@ -109,7 +109,7 @@ networkData:
   # links:
   #   - id: enp1s0
   #     type: phy
-  #     ethernet_mac_address: "00:60:2f:..."
+  #     ethernet_mac_address: "00:00:5e:00:53:..."
   # networks:
   #   - id: enp1s0
   #     network_id: enp1s0

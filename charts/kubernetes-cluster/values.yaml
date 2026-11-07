@@ -70,8 +70,8 @@ configurationRef:
 # was designed for). See scripts/ironic-node-extra-bridge.py for the
 # cluster-side propagation back into k8s BaremetalNode CR spec.extra.
 ironicAuth:
-  authUrl:    ""           # e.g. http://172.19.74.1:5000
-  ironicUrl:  ""           # e.g. http://172.19.74.1:6385
+  authUrl:    ""           # e.g. http://192.0.2.1:5000
+  ironicUrl:  ""           # e.g. http://192.0.2.1:6385
   username:   ""           # e.g. admin
   password:   ""           # plaintext — lab use; rotate after
   userDomain: Default      # keystone user domain
@@ -157,13 +157,13 @@ controlPlane:
   # nodes:
   #   - nodeName: blade06        # bootstrap CP
   #     nodeUuid: 2f05176e-...
-  #     oobIp: 172.19.74.194     # REQUIRED for HA (cpNodes > 1)
+  #     oobIp: 192.0.2.194     # REQUIRED for HA (cpNodes > 1)
   #     driver: redfish
   #     driver_info: {...}
   #     ports: [...]
   #   - nodeName: blade05        # replica CP
   #     nodeUuid: ...
-  #     oobIp: 172.19.74.140
+  #     oobIp: 192.0.2.140
   #     driver: redfish
   #     driver_info: {...}
   #     ports: [...]
