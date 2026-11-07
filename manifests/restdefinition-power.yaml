@@ -134,15 +134,34 @@ spec:
     # and NEITHER IS DECLARED ANYWHERE in this repo's manifests, oas or charts.
     # Grepped 2026-11-07 with a positive control.
     #
-    # So the 406 was not on that path, and THE 318 ARE STILL UNEXPLAINED. Do not
-    # write a third mechanism here without measuring it. The surviving lead is in
-    # the Pending-guard block below: "Performing REST call" appears 5 times in a
-    # 335-line log covering 323 observes, which would mean the findby HTTP call
-    # was not being issued on most reconciles -- but that message's emission
-    # conditions are unknown, so it licenses nothing yet. The measurement that
-    # will settle it is on `provision`, which has zero live CRs: apply the
-    # transform WITHOUT the microversion header, create one throwaway CR,
-    # observe; then add the header and observe again. One variable, two numbers.
+    # RESOLVED, and by the FIRST explanation rather than a third one. The lead
+    # that looked promising -- "Performing REST call" appearing 5 times in a
+    # 335-line log covering 323 observes -- dissolved too: that string is an
+    # ERROR message, emitted at seven `log.Error` sites in restResources.go, so
+    # 5 occurrences are the 5 DNS failures and its ABSENCE means the other ~318
+    # calls SUCCEEDED. The per-request line is `"Performing FindBy API call"` at
+    # Debug (restResources.go:448), so a log above Debug never contained the
+    # number being counted. Reported from code by the oasgen-provider session.
+    #
+    # With that, nothing exotic is needed and the original account holds:
+    #   findby was issued and returned 200 with a list of nodes;
+    #   no item carried `node_id`, because no responseTransform existed;
+    #   an unmatched findby is an ABSENCE, which with `Pending` set takes the
+    #     exists-and-up-to-date branch;
+    #   318 times, 0 creates, no errors.
+    # Every one of my embellishments was about WHY findby did not match -- first
+    # a suppressed spec property, then a silently-dropped query parameter, then a
+    # folded 406 -- and the plain answer was the one proved by the fix: there was
+    # no transform, so there was no `node_id` to compare.
+    #
+    # STILL UNMEASURED, and independent of the above: whether Ironic honoured
+    # `include_children` without a microversion on this cluster. It cannot have
+    # affected the 318, because nothing matched regardless of which nodes came
+    # back. The one-variable test on `provision` (zero live CRs: transform
+    # without the header, one throwaway CR, observe; then add the header and
+    # observe again) answers it, and the 2026-11-04 406 recorded in
+    # restdefinition-provision.yaml is evidence about THAT kind's path on THAT
+    # day, not about this one.
     #
     # WHAT IT REPLACED, in one paragraph. findby never matched, because the
     # responseTransform that charts/baremetal-host/templates/transition-power.yaml
