@@ -343,34 +343,37 @@ Two ways out, and the second is the clearer one:
 1. **Make this repository public**, matching all four siblings. One setting, no
    code, and it is the user's call — the repo carries lab topology and host
    details that have never been reviewed for publication.
-2. **Give the publisher a caller-independent asset host.** Its own header
-   comment already describes that design — "uploads the .tgz to *this repo's*
-   Releases (shared blob store)" — while the code uploads to the caller's
-   release instead, so comment and code disagree. The store exists and works:
-   `krateo-blueprints/charts` is PUBLIC and its `gh-pages` branch already serves
-   **316 `.tgz` files** from `blueprints/`, which is exactly what the 311
-   Pages-hosted entries resolve against. Uploading there and setting the entry
-   URL to the Pages host makes the channel independent of caller visibility for
-   everyone, not just for us. That is an upstream change to
-   `krateo-blueprints/charts`, not a change here.
+2. **Give the publisher a caller-independent asset host.** This is the route
+   Diego chose, and it is being done upstream as
+   **`krateo-blueprints/charts#6`** (open 2026-11-07, +52/-21, "store tarballs
+   in this repo's Releases, so a private caller's charts still download"). The
+   blob store is `krateo-blueprints/charts`'s **own Releases** — that repo is
+   PUBLIC — with one `<chart>-<version>` release per chart created
+   `--latest=false`, a refusal when another repo already stored that version,
+   and **every tarball fetched anonymously before any index entry points at
+   it**. That last step is the right generalisation of the defect above: it
+   makes green-but-unfetchable impossible rather than merely unlikely. Existing
+   entries keep their URLs, and the workflow records that those assets must not
+   be deleted. Once it merges, **this repo needs no visibility change** for the
+   channel to work.
 
-   **The patch is written and kept here:
-   [`docs/proposals/publish-chart-asset-host.patch`](proposals/publish-chart-asset-host.patch)**
-   — 34 lines added, 7 removed, against that repo's
-   `.github/workflows/publish-chart.yaml`. It replaces `RELEASES_BASE` with
-   `PAGES_BASE: https://krateo-blueprints.github.io/charts`, adds one step that
-   copies `dist/*.tgz` into the already-cloned `gh-pages/${CHANNEL}/`, points
-   `helm repo index --url` at the Pages host, and adds the tarballs to the
-   existing commit. The generated URL is byte-identical in shape to the 311
-   entries already serving 200 from there. `--merge` leaves every existing entry
-   untouched, so it is **forward-only**: the 1247 `releases/download` entries
-   keep working. The caller-release upload is kept as provenance and marked as
-   resolving nothing.
+   A patch of mine (commit `bbd4a30`, file since removed) proposed the
+   publisher's `gh-pages` branch as the store instead. It was superseded, and it
+   was wrong twice:
 
-   **It has not been run.** It parses as YAML and the URL shape is verified
-   against the live index; nothing beyond that is tested, and it cannot be
-   tested from here — a reusable workflow only runs when a caller tags a
-   release.
+   - **I misread the header comment.** It says the publisher "uploads the .tgz
+     to this repo's **Releases** (shared blob store) and merges the entry into
+     the chosen channel's index on **gh-pages**" — two different places. I read
+     "this repo's", put the tarballs on gh-pages, and then cited that comment as
+     agreeing with me. It says Releases. The 311 Pages-hosted tarballs that made
+     the route look established came from the 2026-08-19 bulk import, so they
+     are evidence that the host *can* serve a tarball, not that the design ever
+     intended it to.
+   - **Release assets live outside the repository's objects; files committed to
+     a branch do not.** The openstack blueprint alone publishes 37 tarballs per
+     tag, so committing them to `gh-pages` would grow that branch permanently
+     and irreversibly, in clone time for everyone. That is the cost the chosen
+     design avoids, and my patch never weighed it.
 
 Do not "solve" this by publishing only `baremetal-lifecycle`-style charts, by
 hand-editing an index entry's `urls:`, or by making the release assets public
