@@ -88,12 +88,23 @@ managementCluster:
   # k8s 1.20+). Set this only if your management cluster has
   # root-ca-cert-publisher disabled.
   caBundle: ""
-  # Service account name + namespace used by the CP to patch its own
-  # BaremetalNode CR. The chart creates the SA + ClusterRole +
-  # ClusterRoleBinding + token Secret (in templates/_helpers.tpl, around the
-  # `kubernetes-cluster.managementSaManifests` define -- there is no
-  # templates/rbac.yaml, which this comment claimed until 2026-11-07) and reads
-  # the token at render time.
+  # Namespace of the ServiceAccount the CP uses to patch its own BaremetalNode
+  # CR on the management cluster. **This chart does not create that
+  # ServiceAccount** -- it must already exist. The only thing this value does is
+  # choose which namespace `kubernetes-cluster.mgmtCaBundle` looks the
+  # auto-projected `kube-root-ca.crt` ConfigMap up in; when nothing resolves it
+  # returns empty and lifecycle-cp.yaml gates the patch path off.
+  #
+  # Third version of this comment in one day, so here is what it got wrong, to
+  # stop a fourth: it named `templates/rbac.yaml` (does not exist), then a
+  # `kubernetes-cluster.managementSaManifests` define (does not exist either),
+  # and both times claimed the chart creates the SA, ClusterRole,
+  # ClusterRoleBinding and token Secret. It creates none of them. The
+  # ServiceAccount + ClusterRole + binding that DO appear in _helpers.tpl are
+  # inside `kubernetes-cluster.cpUserData`, where cloud-init applies a
+  # drain-scoped `<clusterName>-drainer` SA on the WORKLOAD cluster at runtime
+  # -- a different SA, on a different cluster, for a different purpose.
+  # Verified by grep each time; the first two were corrected without it.
   serviceAccountNamespace: ""
 
 # Network reachability hint — how the management cluster's API server
