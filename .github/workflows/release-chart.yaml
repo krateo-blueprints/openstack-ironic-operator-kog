@@ -127,16 +127,35 @@ jobs:
     needs: publish
     runs-on: ubuntu-latest
     steps:
-      - name: A publish token must be reachable
+      # PRESENCE IS NOT VALIDITY, and this step learned that the expensive way.
+      # It used to test `-n` on the secret only. On 2026-11-07 that passed,
+      # `publish` pushed both charts to GHCR, and then the channel job died with
+      # `HTTP 401: Bad credentials` -- RELEASE_FEED_TOKEN was set and dead. A
+      # check that cannot distinguish a live credential from an expired one is
+      # not a preflight; it is a reassurance.
+      - name: A publish token must be reachable AND authenticate
+        env:
+          GH_TOKEN: ${{ secrets.CHARTS_PUBLISH_TOKEN || secrets.RELEASE_FEED_TOKEN }}
+          HAVE_REPO_SECRET: ${{ secrets.CHARTS_PUBLISH_TOKEN != '' }}
         run: |
-          if [ -n "${{ secrets.CHARTS_PUBLISH_TOKEN }}" ]; then
-            echo "using CHARTS_PUBLISH_TOKEN (repository secret)"
-          elif [ -n "${{ secrets.RELEASE_FEED_TOKEN }}" ]; then
-            echo "using RELEASE_FEED_TOKEN (organisation secret, visibility=all)"
-          else
-            echo "::error::No publish token is reachable, so the blueprints cannot reach the Marketplace channel. Normally RELEASE_FEED_TOKEN -- an organisation secret at visibility=all -- covers this with no per-repo setup; if this fires, that secret was removed or its visibility narrowed. Either restore it, or set a repository secret CHARTS_PUBLISH_TOKEN (a CLASSIC PAT with the 'repo' scope; classic tokens have no granular contents:write). See docs/MARKETPLACE.md."
+          set -euo pipefail
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::error::No publish token is reachable. Set a repository secret CHARTS_PUBLISH_TOKEN (a CLASSIC PAT with the 'repo' scope; classic tokens have no granular contents:write), or restore the organisation secret RELEASE_FEED_TOKEN. See docs/MARKETPLACE.md."
             exit 1
           fi
+          if [ "${HAVE_REPO_SECRET}" = "true" ]; then which=CHARTS_PUBLISH_TOKEN; else which=RELEASE_FEED_TOKEN; fi
+          echo "resolved: $which"
+          # The publisher writes Releases on THIS repo and gh-pages on
+          # krateo-blueprints/charts. A read of each is the cheapest thing that
+          # fails on a dead credential; it does NOT prove write scope, and that
+          # limit is deliberate -- a preflight should not make writes.
+          for repo in "${GITHUB_REPOSITORY}" krateo-blueprints/charts; do
+            if ! gh api "repos/$repo" --jq .full_name >/dev/null 2>&1; then
+              echo "::error::$which is set but does not authenticate against $repo. The channel publish will fail with 'HTTP 401: Bad credentials' after the OCI push has already succeeded. Rotate that token, or set a valid CHARTS_PUBLISH_TOKEN on this repository. See docs/MARKETPLACE.md."
+              exit 1
+            fi
+          done
+          echo "$which authenticates against both repositories"
 
   # Republishes the same bytes into the Marketplace's blueprints channel. The
   # publisher stamps nothing: `krateo.io/source-repo` has to be committed in each

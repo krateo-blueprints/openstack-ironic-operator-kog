@@ -108,14 +108,46 @@ Three things about that are worth knowing before you trust it:
   renders a blank card, because that URL serves an HTML page rather than an
   image. Our screen additionally rejects `/blob/` URLs and, with
   `BLUEPRINT_ONLINE=1`, fetches the URL and requires an `image/*` content type.
-- **Names are unique per channel**, and the publisher refuses to overwrite a name
-  owned by a different `krateo.io/source-repo`. Checked 2026-11-05 against the
-  live index: `kubernetes-cluster` and `baremetal-host` are both free;
-  `baremetal-lifecycle` and `ironic` are taken — the latter by
-  `krateo-blueprints/krateo-openstack-blueprint`, which publishes OpenStack-Helm
-  Ironic itself. That blueprint is complementary to these two, not a rival:
-  `ironic` deploys the service, `baremetal-host` manages a machine through it,
-  `kubernetes-cluster` builds a cluster out of those machines.
+- **Names are unique per channel.** Re-measured 2026-11-07: `kubernetes-cluster`
+  and `baremetal-host` are free; `baremetal-lifecycle` and `ironic` are taken.
+  Who holds them is not what this section said before, and both corrections
+  change what you would do about it:
+
+  - `baremetal-lifecycle` 0.3.1 is **this repository's own chart** —
+    `maintainers: openstack-ironic-operator`, with a description identical to
+    `charts/baremetal-lifecycle/Chart.yaml` (now 0.3.2). The name is not held by
+    a stranger; we published it, on or before 2026-08-19. So this repo *has*
+    reached the channel successfully at least once.
+  - `ironic` 0.2.0 is the **upstream OpenStack-Helm chart** — `maintainers:
+    OpenStack-Helm Authors`, `home: docs.openstack.org/ironic/latest/`,
+    `sources: opendev.org/openstack/{ironic,openstack-helm}`. This section
+    previously attributed it to `krateo-blueprints/krateo-openstack-blueprint`.
+    The index does not support that — the entry carries no
+    `krateo.io/source-repo` annotation — and that repo reports it has never
+    published to this channel at all: its cross-org feed step is skipped because
+    `feed_repo` is empty, and GHCR is its only channel.
+
+  The complementarity still holds, just not via the repo named before: the
+  channel's `ironic` deploys the service, `baremetal-host` manages a machine
+  through it, `kubernetes-cluster` builds a cluster out of those machines.
+
+- **Do not reason about name ownership from `krateo.io/source-repo`.** 1551 of
+  the 1558 versions in the blueprints index carry no such annotation; the only
+  ones that do are `meetup-site` (4 versions), `acme-feedback` and
+  `event-feedback`. An earlier draft of this section asserted the publisher
+  "refuses to overwrite a name owned by a different `krateo.io/source-repo`".
+  Whatever it does on a collision, the index gives no evidence it keys on that
+  annotation. Treat a taken name as taken and pick another.
+
+- **A stale channel index is the normal state.** `index.yaml` carries
+  `generated: 2026-10-09T07:23:32.658Z` and its newest `created` is the same
+  instant, so the whole file is one regeneration and **no `created` in it dates a
+  publish**. Measured again 2026-11-07: byte-identical at 1,618,360 bytes, 810
+  charts, 1558 versions — nothing has entered this channel in 29 days. Two
+  consequences. A chart missing from the index does not by itself prove the
+  publish failed, so pair it with the job conclusion. And the sibling run cited
+  further down as evidence that the publish token worked — 2026-10-08 — falls one
+  day inside that boundary, which is as much as the index can say about it.
 
 Our icon is the Krateo Akmon mark, pinned to a commit:
 
@@ -147,11 +179,13 @@ The artifact deliberately holds only the two blueprints: the gate loops over
 **every** `.tgz` it is given, so including the superseded charts would fail the
 whole publish.
 
-### The publish token — already in place, nothing to do
+### The publish token — present is not the same as valid
 
 The reusable publisher pushes into `krateo-blueprints/charts`, so it needs a
-token with write access there. **This repository needs no setup for that**, and
-the reason is worth recording, because the obvious conclusion is the wrong one.
+token with write access there. **As of 2026-11-07 this repository does need
+setup for that: the org secret no longer authenticates** (the measurement is
+below). The history is recorded because both of the obvious conclusions have
+been wrong once each — first that a PAT was required, then that none was.
 
 `krateo-blueprints` is an **Organisation**, and it carries an organisation
 secret `RELEASE_FEED_TOKEN` at `visibility=all` — so it is already reachable
@@ -178,9 +212,35 @@ conclusion rather than the run's. A skipped job also leaves a green run, so
 "the release passed" would not have shown that the channel publish actually
 happened.
 
-A repository secret `CHARTS_PUBLISH_TOKEN` still takes precedence if one is
-ever set — a CLASSIC PAT with the `repo` scope (classic tokens have no granular
-`contents:write`). It is not needed today.
+A repository secret `CHARTS_PUBLISH_TOKEN` takes precedence if one is set — a
+CLASSIC PAT with the `repo` scope (classic tokens have no granular
+`contents:write`).
+
+**And as of 2026-11-07 one is needed, because `RELEASE_FEED_TOKEN` no longer
+authenticates.** Tag `0.3.0` ran and split exactly along that line:
+
+| job | result |
+|---|---|
+| `publish` (OCI → GHCR) | **success** — both charts live at 0.14.0 / 0.6.3 |
+| `blueprints-token-preflight` | success — and this was the defect |
+| `publish-blueprints-channel` | **failure** — `HTTP 401: Bad credentials` |
+
+The evidence that said the token was fine was: the org secret exists at
+`visibility=all`, and `krateo-aws-blueprint` run `37742845675` published with it
+successfully. That run was **2026-10-08**. "Exists, and worked a month ago" is
+not "authenticates now", and nothing in the earlier reasoning tested the
+difference.
+
+The preflight is what should have caught it and could not: it tested `-n` on the
+secret. A check that cannot distinguish a live credential from an expired one is
+not a preflight, it is a reassurance. It now calls `gh api repos/<repo>` against
+both this repository and `krateo-blueprints/charts`, which fails on a dead
+credential. It still does **not** prove write scope — deliberately, because a
+preflight should not make writes — so a token that authenticates but lacks
+`repo` can still fail inside the publisher.
+
+**This likely affects every sibling blueprint repo**, since they all resolve the
+same org secret with the same `||` fallback.
 
 **An earlier version of this document said the opposite** — that a PAT had to be
 created here because "this is a user account, so there are no org-level
@@ -356,8 +416,18 @@ convergence:
   `{"spec":{"removedField":"SHOULD-IT-SURVIVE-MIGRATION"}}`
 - a `CompositionFieldsPruned` **Warning** event per object
 
-So expect seven such annotations and seven warnings on this fleet, and treat
-their *absence* as the surprising outcome.
+**On this fleet that is ONE annotation and ONE warning, not seven.** An earlier
+version of this section predicted seven — one per composition — which was wrong,
+and the convergence on 2026-11-07 measured it:
+
+| object | label moved | pruned |
+|---|---|---|
+| `lab-ha` (KubernetesCluster) | `v0-13-26` → `v0-14-0` | `ironicApiUrl`, `ironicApiVersion` |
+| six `lab-ha-*` BaremetalHosts | `v0-6-2` → `v0-6-3` | **nothing** |
+
+Only `kubernetes-cluster` 0.14.0 removes fields. `baremetal-host` 0.6.3 removed a
+schema **default**, not a field, so the six hosts migrate with nothing to prune.
+Predicting seven would have had someone hunting six warnings that were never due.
 
 Mechanism, which rules out the obvious wrong explanation: the storage version
 `vacuum` is `{type: object, x-kubernetes-preserve-unknown-fields: true}` with
@@ -371,12 +441,23 @@ that last reference went. `prunableServedVersions` needs *no reference*, not
 merely zero instances — all three instances had moved 40s earlier and the
 version stayed.
 
-**The limit that bounds all of the above:** the lab runs core-provider
-**2.13.59**, and this was measured on 2.13.71. A probe on 2.13.59 was built for
-exactly this question and did **not** produce a valid result — the new
-controller was unschedulable, so the migration never ran and the field appeared
-to survive because nothing had happened. The version this lab actually runs is
-**unmeasured**.
+**2.13.59 now agrees, measured on this lab.** The above was measured on 2.13.71;
+an earlier probe on 2.13.59 produced no valid result, because the new controller
+was unschedulable and the migration never ran — so the field appeared to survive
+when nothing had happened. The real convergence on 2026-11-07 settled it, with
+the same witness:
+
+    label                 v0-13-26 -> v0-14-0        (the migration genuinely ran)
+    krateo.io/pruned-fields  {"spec":{"ironicApiUrl":"http://ironic.openstack
+                              .svc.cluster.local:6385","ironicApiVersion":"1.81"}}
+    pruned-fields-truncated  absent (under the 16 KiB cap)
+    spec.ironicApiUrl        gone
+    CompositionFieldsPruned  1 Warning, on lab-ha
+
+So the two versions behave identically on this path, and the values were
+recoverable from the annotation. **Always read the label before the after-state**
+— it is the only thing that distinguishes "the migration ran" from "something
+else wrote the object".
 
 ### The recovery annotation has a cap, and it is not where you would guess
 

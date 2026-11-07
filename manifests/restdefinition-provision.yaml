@@ -18,31 +18,27 @@ spec:
     kind: NodeProvision
     # node_id is the human-friendly id the caller sets (node name or uuid). findby never
     # matches -> first Observe -> Create (the PUT). The 202 Pending condition then makes
-    # subsequent Observe report exists -> the PUT fires once.
-    # MECHANISM CORRECTED 2026-11-04. findby never matches, which is what this
-    # design wants (one PUT, then the 202 Pending condition suppresses re-fire)
-    # -- but the reason written here for two weeks was not the reason operating.
+    # subsequent Observe report exists -> the PUT fires once. For WHY it never matches, read
+    # the measured block in restdefinition-power.yaml and nothing else.
+    # MECHANISM: see the measured block in restdefinition-power.yaml, which is
+    # the sibling of this file and shares the shape. Summary of what was
+    # measured there on 2026-11-07, against the served CRD and six live CRs:
+    # the match fails on the RESPONSE side. `spec.node_id` is present AND
+    # required, Ironic's /v1/nodes items carry `name` and never `node_id`, and
+    # the responseTransform that oas/ironic-*.yaml documents as lifting
+    # `name` -> `node_id` was never written in either file.
     #
-    # Stated reason:  node_id is not a field on Ironic's listed nodes, so the
-    #                 comparison finds no match.
-    # Actual reason:  node_id is absent from the CR entirely. Measured on all
-    #                 six live NodePower CRs: `node_id` is in NEITHER spec NOR
-    #                 status. oasgen's `isInResource` compares a response value
-    #                 against spec.<path> then status.<path>; with both missing
-    #                 it cannot compare at all, and returns the same
-    #                 (false, nil) it returns for "compared and differed".
+    # A claim dated 2026-11-04 stood here saying the opposite -- that the spec
+    # property was suppressed by `requestFieldMapping` (oasgen#419) and the CR
+    # carried no node_id at all. That was false, and it was itself labelled a
+    # correction, which is what made it convincing. Deleted rather than
+    # annotated here; the power file keeps the full record of all three
+    # mechanisms and why only one survived.
     #
-    # The spec property is suppressed by the `requestFieldMapping` below --
-    # oasgen-provider#419. So the match is impossible one layer earlier than
-    # the comment claimed, and the stated mechanism has never been reached.
-    #
-    # Why this matters rather than being pedantry: when #419/#421 restores the
-    # spec property, the stated mechanism TAKES OVER from the actual one and
-    # the outcome stays identical (node_id still is not a field on listed
-    # nodes, so the lookup skips it). The comment would become true by
-    # accident, via an unrelated fix, having been causally wrong throughout.
-    # A claim that is predictively right and causally wrong is the kind nothing
-    # ever falsifies.
+    # NOT measured for THIS kind: there are zero live NodeProvision CRs
+    # (`nodepowers` 6, `nodeprovisions` 0, as of 2026-11-07). Everything above
+    # is read off the power kind and is expected to apply here by symmetry --
+    # expected, not observed. Do not cite this file as live fleet behaviour.
     identifiers:
       - node_id
     additionalStatusFields:
@@ -51,9 +47,17 @@ spec:
       - target_provision_state
     verbsDescription:
       # No `get` verb: IsResourceKnown can't build a get call -> Observe uses findby. findby
-      # matches on node_id, which is not a field on listed nodes, so it never matches ->
-      # ResourceExists=false on first Observe -> Create (the PUT) fires. The 202 sets a Pending
-      # condition that makes later Observes report exists, so the PUT fires exactly once.
+      # never matches -> ResourceExists=false on first Observe -> Create (the PUT) fires. The
+      # 202 sets a Pending condition that makes later Observes report exists, so the PUT fires
+      # exactly once.
+      #
+      # DO NOT restate the reason here. This comment said "matches on node_id, which is not a
+      # field on listed nodes" -- the reason the block above corrected on 2026-11-04 and which
+      # has never been the one operating. The correction lived 30 lines up and this restatement
+      # survived it, so a reader landing here got the superseded version. On 2026-11-07 that
+      # reader was me, and I passed it to another team as primary evidence for oasgen #485
+      # before catching it. The mechanism is stated once, above; this comment states only the
+      # outcome.
       - action: findby
         method: GET
         path: /v1/nodes
