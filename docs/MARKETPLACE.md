@@ -206,6 +206,30 @@ Verified 2026-11-05: HTTP 200, `content-type: image/svg+xml`.
 
 ## The publish path
 
+**Pending, and not applied yet (2026-11-07).** When
+`krateo-blueprints/charts#6` and `#7` merge and the publisher is released, this
+repo makes exactly two changes, together:
+
+- `uses:` moves from `...publish-chart.yaml@main` to the publisher's **full
+  commit SHA** with its version in a trailing comment, kept current by
+  Dependabot. Not a major tag: a movable `@1` would let whoever moves it run
+  code with `CHARTS_PUBLISH_TOKEN` in every caller at once. **There is no
+  `.github/dependabot.yml` in this repo yet** — the pin needs one added for the
+  `github-actions` ecosystem, or the SHA silently goes stale.
+- `PUBLISH_TOKEN` drops the `|| secrets.RELEASE_FEED_TOKEN` fallback and passes
+  `secrets.CHARTS_PUBLISH_TOKEN` alone.
+
+Neither can land before then: the publisher has **no tags at all** (the tags API
+404s for the whole namespace), and dropping the fallback today removes the only
+token that exists, converting a legible 401 into an unresolvable-ref error.
+
+`verify-channel-entry` can go once the publisher's own anonymous `helm pull`
+check has been seen green for some caller — redundant then, rather than wrong.
+Rule 11's visibility grant is **not** this chart's job: the standard puts it on
+the registrar (installer `readerGroups`, or a manifest beside the
+CompositionDefinition), because the chart renders per instance.
+
+
 ```
 git tag 1.2.3 && git push --tags
       │
@@ -367,6 +391,21 @@ part of this that survives.
 ## The chart version is the API version
 
 `0.14.0` is served as `composition.krateo.io/v0-14-0`. Three consequences:
+
+> **Do not "fix" the literal versions in this repo.** The org publishing
+> standard (`krateo-blueprints/charts#7`, `PUBLISHING.md`) requires charts to
+> carry a `CHART_VERSION` placeholder stamped from the git tag — and explicitly
+> exempts repositories like this one, naming our case as the example: *"…
+> `composition.krateo.io/v0-6-3`, which must equal `baremetal-host` 0.6.3 …
+> these repositories commit literal versions, and their release refuses any
+> chart whose CompositionDefinition or dependent apiVersion reference disagrees
+> (openstack-ironic-operator-kog's `check-examples`)."* Verified in the branch
+> 2026-11-07. Replacing these literals with a tag-derived version would
+> re-point the parent at a new child apiVersion on every release and stop
+> serving the previous one — the wedge `_helpers.tpl` records from when it
+> drifted to `v0-5-5`. The guard that makes the literals safe is
+> `make check-examples`; keep it.
+
 
 1. **Two files hold the number.** `Chart.yaml`'s `version` and the in-chart
    `compositiondefinition.yaml`'s `spec.chart.version`. `make check-blueprints`
