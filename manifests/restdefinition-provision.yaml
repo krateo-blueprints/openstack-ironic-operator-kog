@@ -94,13 +94,23 @@ spec:
           - name: include_children
             value: "true"
         identifiersMatchPolicy: OR
-        # The microversion, static and per-verb -- the Configuration's is dropped
-        # (oasgen #304: generated as `header`, looked up as `headers`). Required
-        # for `include_children` above, which needs >= 1.83, and for node lookup
-        # by name, which needs >= 1.5. Without it this findby returns
-        # 406 "The minimal required API version should be 1.83" -- measured on a
-        # throwaway CR 2026-11-04 -- and the not-found-plus-`Pending` path then
-        # records that hard error as "External resource is up to date".
+        # The microversion, static and per-verb. BELT-AND-BRACES, not the thing
+        # that makes `include_children` work -- measured here 2026-11-07 with a
+        # one-variable test on this very kind, static header removed in both
+        # arms, probe node_id naming no existing node:
+        #
+        #   spec X-OpenStack-Ironic-API-Version = "1.1"    -> findby 406
+        #   spec X-OpenStack-Ironic-API-Version = "1.109"  -> findby succeeds
+        #
+        # So the GENERATED SPEC PROPERTY ships as a header. The CRD declares it
+        # required with `default: "1.109"`, so every CR carries it unasked. The
+        # 2026-11-04 406 recorded below was real and is consistent: the OAS did
+        # not declare the property then, so nothing was sent and Ironic
+        # negotiated its minimum. Declaring it is what fixed that; this header
+        # only guarantees the version if a CR sets the property low.
+        #
+        # oasgen #304 concerns the CONFIGURATION-sourced header, a different
+        # path that really is dropped. Do not generalise it to this one.
         headers:
           - name: X-OpenStack-Ironic-API-Version
             value: "1.109"

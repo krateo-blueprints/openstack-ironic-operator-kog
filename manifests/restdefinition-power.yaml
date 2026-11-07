@@ -107,8 +107,29 @@ spec:
     #   spec.target == status.power_state  =>  no drift  =>  no PUT fired
     #
     # All six matched, including blade01/04/05/06, which are enclosure CHILDREN.
-    # The microversion header on findby is required for that: `include_children`
-    # needs >= 1.83 and children are absent from the collection without it.
+    # `include_children` needs microversion >= 1.83 and children are absent from
+    # the collection without it.
+    #
+    # THE STATIC HEADER BELOW IS REDUNDANT, MEASURED 2026-11-07. The microversion
+    # already reaches the wire from the GENERATED SPEC PROPERTY, which the CRD
+    # declares required with `default: "1.109"`, so every CR carries it without
+    # anyone setting it. One-variable test on `provision` (zero live CRs, static
+    # findby header removed in BOTH arms, probe `node_id` deliberately naming no
+    # existing node so `create` could only 404):
+    #
+    #   spec X-OpenStack-Ironic-API-Version = "1.1"    -> findby 406
+    #       condition: "observe failed: unexpected status: 406"
+    #   spec X-OpenStack-Ironic-API-Version = "1.109"  -> findby SUCCEEDS
+    #       (then create -> 404 "Node ... could not be found", as intended)
+    #
+    # The only difference was the spec value, so the property ships as a header.
+    # oasgen #304 is about the CONFIGURATION-sourced header, which is a
+    # different path and really is dropped -- I had generalised it to this one.
+    #
+    # Keeping the static header anyway, as belt-and-braces: it pins the version
+    # regardless of what a CR carries, and a future CR that sets the property
+    # low would otherwise silently lose the child nodes. But it is NOT what made
+    # the six match, and this file claimed it was.
     #
     # A CLAIM MADE HERE AND RETRACTED THE SAME DAY: that without the header the
     # transform "would have matched 2 of 6 while looking like it worked". Not
