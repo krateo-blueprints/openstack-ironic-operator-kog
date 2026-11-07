@@ -3,12 +3,16 @@
 # currently in Chart.yaml.
 #
 # Why this exists. `make chart-host` packages whatever version each chart has on
-# disk right now and copies it into the chartrepo pod. That pod has NO VOLUMES,
-# so everything it serves lives in its container filesystem and is lost the
-# moment the pod is recreated — which happens on every cluster restart. Before a
-# restart the chartrepo has accumulated every version ever published; after one,
-# it has only today's. A CompositionDefinition pinning an older version then
-# cannot fetch its chart, chart-inspector returns 500, and cdc reports
+# disk right now. A CompositionDefinition pinning an OLDER version then cannot
+# fetch its chart, chart-inspector returns 500, and cdc reports
+#
+# The premise this script was written on is GONE as of 2026-11-07: it said "that
+# pod has NO VOLUMES, so everything it serves lives in its container filesystem
+# and is lost the moment the pod is recreated -- which happens on every cluster
+# restart", and that was true and was the bug. local/chartrepo.yaml now mounts a
+# ConfigMap, whose content lives in etcd and survives pod restarts, node
+# restarts and `docker stop`. So this is no longer a restore-on-every-resume
+# chore; it is for adding a pinned version that is no longer in Chart.yaml.
 #
 #   observe failed: generating RBAC using chart-inspector: ... status code: 500
 #
@@ -43,6 +47,7 @@ for i in json.load(sys.stdin)["items"]:
 ' > "$WORK/cds"
 
 rc=0
+PENDING=()   # declared before the loop: ${#PENDING[@]} under `set -u` is fatal if the loop body never runs
 while IFS=$'\t' read -r name version url; do
   case "$url" in
     *chartrepo*) ;;
@@ -89,9 +94,21 @@ PY
   [ "$built" = "$version" ] || { echo "  FAIL  $name: git gave $built, wanted $version" >&2; rc=1; continue; }
 
   helm package "$WORK/charts/$name" -d "$WORK" >/dev/null
-  $K -n "$IRONIC_NS" cp "$WORK/$tgz" "$IRONIC_NS/$POD:/usr/share/nginx/html/$tgz"
-  echo "  PUB   $tgz  (from ${sha:0:12})"
+  # Collected, not copied. `kubectl cp` into /usr/share/nginx/html stopped
+  # working when that path became a read-only ConfigMap mount -- it fails with
+  # "Read-only file system" and, under `set -euo pipefail`, aborted this script.
+  # The packages are merged into the ConfigMap in one call after the loop.
+  PENDING+=("$WORK/$tgz")
+  echo "  BUILT $tgz  (from ${sha:0:12})"
 done < "$WORK/cds"
+
+if [ "${#PENDING[@]}" -gt 0 ]; then
+  python3 hack/chartrepo-sync.py \
+    --namespace "$IRONIC_NS" --kubeconfig "$KUBECONFIG_FILE" --context "$KCTX" \
+    "${PENDING[@]}" | $K apply -f -
+else
+  echo "  nothing to add: every pinned version is already in Chart.yaml"
+fi
 
 echo "chartrepo now serving:"
 $K -n "$IRONIC_NS" exec "$POD" -- ls -1 /usr/share/nginx/html/ | grep '\.tgz$' | sed 's/^/    /'

@@ -275,18 +275,37 @@ chart-host:   # package all four charts and serve them from a ConfigMap-backed n
 		echo "ERROR: local/chartrepo.yaml's readiness probe does not name baremetal-host-$(HOST_CHART_VERSION).tgz."; \
 		echo "       Update the probe path when HOST_CHART_VERSION changes, or Ready stops meaning anything."; \
 		exit 1; }
-	$(KUBECTL) -n $(IRONIC_NS) create configmap chartrepo-charts \
-		--from-file=dist/baremetal-lifecycle-$(LIFECYCLE_CHART_VERSION).tgz \
-		--from-file=dist/baremetal-discovery-$(DISCOVERY_CHART_VERSION).tgz \
-		--from-file=dist/baremetal-host-$(HOST_CHART_VERSION).tgz \
-		--from-file=dist/kubernetes-cluster-$(CLUSTER_CHART_VERSION).tgz \
-		--dry-run=client -o yaml | $(KUBECTL) apply -f -
+	# MERGE, never regenerate. `create configmap --from-file=... | apply` used to
+	# build the ConfigMap from only today's four versions, and apply PRUNES keys
+	# it no longer lists -- so bumping baremetal-host to 0.6.4 would DELETE
+	# baremetal-host-0.6.3.tgz, which manifests/compositiondefinition-baremetal-host.yaml
+	# still pins, bringing back the chart-inspector 500-wrapping-404 this whole
+	# arrangement exists to prevent. Found by /code-review before it happened.
+	# hack/chartrepo-sync.py reads the live ConfigMap, adds today's packages, and
+	# refuses to grow past a budget rather than failing inside the API server.
+	python3 hack/chartrepo-sync.py \
+		--namespace $(IRONIC_NS) --kubeconfig $(KUBECONFIG_FILE) --context $(KCTX) \
+		dist/baremetal-lifecycle-$(LIFECYCLE_CHART_VERSION).tgz \
+		dist/baremetal-discovery-$(DISCOVERY_CHART_VERSION).tgz \
+		dist/baremetal-host-$(HOST_CHART_VERSION).tgz \
+		dist/kubernetes-cluster-$(CLUSTER_CHART_VERSION).tgz \
+		| $(KUBECTL) apply -f -
 	$(KUBECTL) apply -f local/chartrepo.yaml
-	# This rollout IS the verification, and that is the point of probing a chart
-	# path instead of `/`: the pod cannot become Ready unless nginx returns 200
-	# for a real chart tarball. The old target's `rollout status` proved only
-	# that nginx had started, which it does just as happily with an empty repo.
+	# The rollout is necessary and NOT sufficient. The claim that it "IS the
+	# verification" was wrong and /code-review caught it: on a RE-RUN the
+	# Deployment spec is unchanged, so `apply` is a no-op, the pod is already
+	# Ready against the OLD ConfigMap, and `rollout status` returns in
+	# milliseconds. kubelet propagates the new ConfigMap on its periodic sync, up
+	# to a minute later, and for that window nginx 404s the version just
+	# published while this target reports success. The readiness probe only ever
+	# proved the first run.
 	$(KUBECTL) -n $(IRONIC_NS) rollout status deploy/chartrepo --timeout=120s
+	# So assert what actually matters: the pod SERVES every version the ConfigMap
+	# holds. Kept in a script rather than inline shell -- the first attempt at
+	# this was a nested Makefile loop that a safety check refused because a stray
+	# character made it unparseable, which is the right verdict for that shape.
+	python3 hack/chartrepo-wait.py --namespace $(IRONIC_NS) \
+		--kubeconfig $(KUBECONFIG_FILE) --context $(KCTX)
 
 check-examples:   # every manifest a reader is told to apply would actually apply
 	# Catches the two defect classes that `helm lint` and kubeconform cannot see
@@ -393,12 +412,14 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 check: check-examples check-mapping-sources check-oas-defaults check-blueprints   # every standing screen
 	@echo "all standing screens passed"
 
-chart-host-pinned:   # restore the chart versions the LIVE CompositionDefinitions pin
-	# `chart-host` publishes whatever is in Chart.yaml today. The chartrepo pod has
-	# no volumes, so a cluster restart wipes everything it serves and leaves the
-	# pinned older versions missing -- which surfaces as a chart-inspector 500 and
-	# every composition going Synced=False. This rebuilds the pinned versions from
-	# git and uploads them. Run it after `chart-host` on every resume.
+chart-host-pinned:   # add the chart versions the LIVE CompositionDefinitions pin
+	# NO LONGER NEEDED ON EVERY RESUME. It used to be, because the chartrepo pod
+	# had no volumes and a restart wiped everything it served. The ConfigMap-backed
+	# chartrepo (local/chartrepo.yaml) keeps its content in etcd, so it survives
+	# pod restarts, node restarts and `docker stop`, and `chart-host` now MERGES
+	# rather than replacing. Run this once after a chart bump, when a
+	# CompositionDefinition still pins a version no longer in Chart.yaml -- it
+	# rebuilds that version from git and merges it in.
 	./scripts/chart-host-pinned.sh
 
 composition-up: chart-host   # install all four CompositionDefinitions
