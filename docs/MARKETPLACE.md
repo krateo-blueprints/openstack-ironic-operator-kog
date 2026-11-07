@@ -147,7 +147,7 @@ The artifact deliberately holds only the two blueprints: the gate loops over
 **every** `.tgz` it is given, so including the superseded charts would fail the
 whole publish.
 
-### The publish token — already in place, nothing to do
+### The publish token — present is not the same as valid
 
 The reusable publisher pushes into `krateo-blueprints/charts`, so it needs a
 token with write access there. **This repository needs no setup for that**, and
@@ -178,9 +178,35 @@ conclusion rather than the run's. A skipped job also leaves a green run, so
 "the release passed" would not have shown that the channel publish actually
 happened.
 
-A repository secret `CHARTS_PUBLISH_TOKEN` still takes precedence if one is
-ever set — a CLASSIC PAT with the `repo` scope (classic tokens have no granular
-`contents:write`). It is not needed today.
+A repository secret `CHARTS_PUBLISH_TOKEN` takes precedence if one is set — a
+CLASSIC PAT with the `repo` scope (classic tokens have no granular
+`contents:write`).
+
+**And as of 2026-11-07 one is needed, because `RELEASE_FEED_TOKEN` no longer
+authenticates.** Tag `0.3.0` ran and split exactly along that line:
+
+| job | result |
+|---|---|
+| `publish` (OCI → GHCR) | **success** — both charts live at 0.14.0 / 0.6.3 |
+| `blueprints-token-preflight` | success — and this was the defect |
+| `publish-blueprints-channel` | **failure** — `HTTP 401: Bad credentials` |
+
+The evidence that said the token was fine was: the org secret exists at
+`visibility=all`, and `krateo-aws-blueprint` run `37742845675` published with it
+successfully. That run was **2026-10-08**. "Exists, and worked a month ago" is
+not "authenticates now", and nothing in the earlier reasoning tested the
+difference.
+
+The preflight is what should have caught it and could not: it tested `-n` on the
+secret. A check that cannot distinguish a live credential from an expired one is
+not a preflight, it is a reassurance. It now calls `gh api repos/<repo>` against
+both this repository and `krateo-blueprints/charts`, which fails on a dead
+credential. It still does **not** prove write scope — deliberately, because a
+preflight should not make writes — so a token that authenticates but lacks
+`repo` can still fail inside the publisher.
+
+**This likely affects every sibling blueprint repo**, since they all resolve the
+same org secret with the same `||` fallback.
 
 **An earlier version of this document said the opposite** — that a PAT had to be
 created here because "this is a user account, so there are no org-level
@@ -356,8 +382,18 @@ convergence:
   `{"spec":{"removedField":"SHOULD-IT-SURVIVE-MIGRATION"}}`
 - a `CompositionFieldsPruned` **Warning** event per object
 
-So expect seven such annotations and seven warnings on this fleet, and treat
-their *absence* as the surprising outcome.
+**On this fleet that is ONE annotation and ONE warning, not seven.** An earlier
+version of this section predicted seven — one per composition — which was wrong,
+and the convergence on 2026-11-07 measured it:
+
+| object | label moved | pruned |
+|---|---|---|
+| `lab-ha` (KubernetesCluster) | `v0-13-26` → `v0-14-0` | `ironicApiUrl`, `ironicApiVersion` |
+| six `lab-ha-*` BaremetalHosts | `v0-6-2` → `v0-6-3` | **nothing** |
+
+Only `kubernetes-cluster` 0.14.0 removes fields. `baremetal-host` 0.6.3 removed a
+schema **default**, not a field, so the six hosts migrate with nothing to prune.
+Predicting seven would have had someone hunting six warnings that were never due.
 
 Mechanism, which rules out the obvious wrong explanation: the storage version
 `vacuum` is `{type: object, x-kubernetes-preserve-unknown-fields: true}` with
@@ -371,12 +407,23 @@ that last reference went. `prunableServedVersions` needs *no reference*, not
 merely zero instances — all three instances had moved 40s earlier and the
 version stayed.
 
-**The limit that bounds all of the above:** the lab runs core-provider
-**2.13.59**, and this was measured on 2.13.71. A probe on 2.13.59 was built for
-exactly this question and did **not** produce a valid result — the new
-controller was unschedulable, so the migration never ran and the field appeared
-to survive because nothing had happened. The version this lab actually runs is
-**unmeasured**.
+**2.13.59 now agrees, measured on this lab.** The above was measured on 2.13.71;
+an earlier probe on 2.13.59 produced no valid result, because the new controller
+was unschedulable and the migration never ran — so the field appeared to survive
+when nothing had happened. The real convergence on 2026-11-07 settled it, with
+the same witness:
+
+    label                 v0-13-26 -> v0-14-0        (the migration genuinely ran)
+    krateo.io/pruned-fields  {"spec":{"ironicApiUrl":"http://ironic.openstack
+                              .svc.cluster.local:6385","ironicApiVersion":"1.81"}}
+    pruned-fields-truncated  absent (under the 16 KiB cap)
+    spec.ironicApiUrl        gone
+    CompositionFieldsPruned  1 Warning, on lab-ha
+
+So the two versions behave identically on this path, and the values were
+recoverable from the annotation. **Always read the label before the after-state**
+— it is the only thing that distinguishes "the migration ran" from "something
+else wrote the object".
 
 ### The recovery annotation has a cap, and it is not where you would guess
 
