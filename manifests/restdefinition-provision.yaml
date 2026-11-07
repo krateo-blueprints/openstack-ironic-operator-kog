@@ -114,18 +114,36 @@ spec:
         headers:
           - name: X-OpenStack-Ironic-API-Version
             value: "1.109"
-        # OBSERVABLE, DELIBERATELY NOT CONVERGENT. Added 2026-11-07.
+        # NO responseTransform HERE, AND THE ONE ADDED 2026-11-07 WAS REVERTED THE
+        # SAME DAY. It lifted `node_id` from `name` and `target` from
+        # `provision_state`, by symmetry with restdefinition-power.yaml. Both
+        # halves were wrong for this kind, and /code-review caught it before any
+        # NodeProvision CR existed to be broken by it.
         #
-        # Both lifts, for the same reasons as restdefinition-power.yaml:
-        #   node_id <- name           so findby can match at all; `isInResource`
-        #                             compares a value taken FROM THE RESPONSE,
-        #                             and node objects have no `node_id`.
-        #   target  <- provision_state  so a divergence is VISIBLE;
-        #                             CompareExisting walks the spec's keys and
-        #                             skips any key absent from the response, and
-        #                             `target` is not a field on a node.
-        responseTransform:
-          inline: '(if .name then .node_id = .name else . end) | (if .provision_state then .target = .provision_state else . end)'
+        # 1. THE IDENTIFIER LIFT DISABLES THE ONLY WORKING VERB. `create` is the
+        #    sole verb here that performs PUT /v1/nodes/{node_id}/states/provision.
+        #    A matching findby means ResourceExists=true on the first Observe, so
+        #    `create` is never called and NO provision transition fires at all --
+        #    deploy, undeploy, manage, provide, inspect and clean would all become
+        #    silent no-ops. Power survives the same lift only because it has an
+        #    `update` verb pointing at its endpoint; this kind deliberately does
+        #    not, because a provision drift correction would redeploy a machine.
+        #
+        # 2. `target` AND `provision_state` ARE DIFFERENT VALUE SPACES.
+        #    oas/ironic-provision.yaml:108 defines target as
+        #    "manage | provide | active | deleted | inspect | rebuild | clean"
+        #    -- VERBS. `provision_state` holds STATES: manageable, available,
+        #    active. Only `active` coincides. The charts render six targets
+        #    (active, clean, deleted, inspect, manage, provide), so five could
+        #    never equal the lifted value, and with no `update` verb that phantom
+        #    drift is permanent -- latching every CR non-Ready and pinning the
+        #    BaremetalHost composition at Ready=false. Precisely the failure this
+        #    branch had just removed from the power kind.
+        #
+        # So observability for THIS kind cannot be bought with an identifier
+        # lift. It needs a different shape -- a `get` verb so existence does not
+        # depend on findby matching, or lifting the observed state into a field
+        # that is NOT the desired-state field. Neither is attempted here.
       # NO `update` VERB, ON PURPOSE -- and this is the one asymmetry with
       # restdefinition-power.yaml that must not be "fixed" for consistency.
       #
