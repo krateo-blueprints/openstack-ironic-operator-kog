@@ -116,8 +116,17 @@ Three things about that are worth knowing before you trust it:
   - `baremetal-lifecycle` 0.3.1 is **this repository's own chart** —
     `maintainers: openstack-ironic-operator`, with a description identical to
     `charts/baremetal-lifecycle/Chart.yaml` (now 0.3.2). The name is not held by
-    a stranger; we published it, on or before 2026-08-19. So this repo *has*
-    reached the channel successfully at least once.
+    a stranger.
+
+    It does **not** follow that this repo's publish path has ever worked, and an
+    earlier draft said it did ("we published it, on or before 2026-08-19, so
+    this repo *has* reached the channel successfully at least once"). That date
+    is the 221-millisecond import of 311 charts in the table below — somebody's
+    bulk backfill, which our chart was swept into. The openstack blueprint
+    reports the same of its own 0.2.0 entries (their #184: a one-off backfill,
+    not that repo's pipeline). So there is **no evidence any release of ours has
+    reached this channel**, which makes the 401 below the likely original and
+    only state of the publish path rather than a regression.
   - `ironic` 0.2.0 is the **upstream OpenStack-Helm chart** — `maintainers:
     OpenStack-Helm Authors`, `home: docs.openstack.org/ironic/latest/`,
     `sources: opendev.org/openstack/{ironic,openstack-helm}`. This section
@@ -158,15 +167,31 @@ Three things about that are worth knowing before you trust it:
   Whatever it does on a collision, the index gives no evidence it keys on that
   annotation. Treat a taken name as taken and pick another.
 
-- **A stale channel index is the normal state.** `index.yaml` carries
-  `generated: 2026-10-09T07:23:32.658Z` and its newest `created` is the same
-  instant, so the whole file is one regeneration and **no `created` in it dates a
-  publish**. Measured again 2026-11-07: byte-identical at 1,618,360 bytes, 810
-  charts, 1558 versions — nothing has entered this channel in 29 days. Two
-  consequences. A chart missing from the index does not by itself prove the
-  publish failed, so pair it with the job conclusion. And the sibling run cited
-  further down as evidence that the publish token worked — 2026-10-08 — falls one
-  day inside that boundary, which is as much as the index can say about it.
+- **A stale channel index is the normal state.** Measured 2026-11-07:
+  byte-identical at 1,618,360 bytes, 810 charts, 1558 versions, and no `created`
+  later than 2026-10-09 — **nothing has entered this channel in 29 days**. A
+  chart missing from the index still does not by itself prove the publish
+  failed, so pair it with the job conclusion.
+
+- **`created` DOES date a write, and an earlier draft of this bullet denied it.**
+  That draft read: `generated` equals the newest `created`, "so the whole file is
+  one regeneration and no `created` in it dates a publish". The first half is
+  true and the inference does not follow — `created` is preserved across
+  regenerations. The openstack blueprint session caught it; measuring the whole
+  distribution shows five write events, not one:
+
+  | `created` date | versions | span | reading |
+  |---|---|---|---|
+  | 2026-08-19 | 311 | 221 **ms** | bulk import |
+  | 2026-10-06 | 7 | 17 hours | ordinary individual publishes |
+  | 2026-10-07 | 206 | 29 s | batch |
+  | 2026-10-08 | 828 | 53 min | batch |
+  | 2026-10-09 | 206 | 73 s | batch, ending 0.9 ms *after* `generated` |
+
+  So `generated` is stamped at the start of a regeneration run and that run's own
+  `created` values straddle it — which is the whole of the coincidence that the
+  draft generalised to 1558 entries. Use a `created` as the date that version
+  entered the channel; use its **span** to tell a publish from an import.
 
 Our icon is the Krateo Akmon mark, pinned to a commit:
 
@@ -234,6 +259,19 @@ happened.
 A repository secret `CHARTS_PUBLISH_TOKEN` takes precedence if one is set — a
 CLASSIC PAT with the `repo` scope (classic tokens have no granular
 `contents:write`).
+
+**The two tokens are not interchangeable in general — only here.** In this repo
+the channel publish resolves `CHARTS_PUBLISH_TOKEN || RELEASE_FEED_TOKEN`
+(`release-chart.yaml:138,183`), so either one unblocks it and the 401 below is a
+real verdict on the org token. `krateo-blueprints/krateo-openstack-blueprint`
+has no such fallback: its release pushes only to GHCR and never attempts an
+index publish, its `RELEASE_FEED_TOKEN` is used solely by the release-notes
+cross-org feed step (skipped there, `feed_repo` empty), and the publisher its
+PR #186 introduces reads `CHARTS_PUBLISH_TOKEN` alone. Reported by that session
+2026-11-07. So for that repo rotating the org token would not unblock the index
+and creating the repo secret would not fix release-notes, while for this one the
+fallback makes either sufficient for the channel. Do not carry a conclusion
+about one repo's token across to the other.
 
 **And as of 2026-11-07 one is needed, because `RELEASE_FEED_TOKEN` no longer
 authenticates.** Tag `0.3.0` ran and split exactly along that line:
