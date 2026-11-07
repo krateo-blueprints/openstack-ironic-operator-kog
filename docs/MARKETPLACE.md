@@ -354,6 +354,24 @@ Two ways out, and the second is the clearer one:
    everyone, not just for us. That is an upstream change to
    `krateo-blueprints/charts`, not a change here.
 
+   **The patch is written and kept here:
+   [`docs/proposals/publish-chart-asset-host.patch`](proposals/publish-chart-asset-host.patch)**
+   — 34 lines added, 7 removed, against that repo's
+   `.github/workflows/publish-chart.yaml`. It replaces `RELEASES_BASE` with
+   `PAGES_BASE: https://krateo-blueprints.github.io/charts`, adds one step that
+   copies `dist/*.tgz` into the already-cloned `gh-pages/${CHANNEL}/`, points
+   `helm repo index --url` at the Pages host, and adds the tarballs to the
+   existing commit. The generated URL is byte-identical in shape to the 311
+   entries already serving 200 from there. `--merge` leaves every existing entry
+   untouched, so it is **forward-only**: the 1247 `releases/download` entries
+   keep working. The caller-release upload is kept as provenance and marked as
+   resolving nothing.
+
+   **It has not been run.** It parses as YAML and the URL shape is verified
+   against the live index; nothing beyond that is tested, and it cannot be
+   tested from here — a reusable workflow only runs when a caller tags a
+   release.
+
 Do not "solve" this by publishing only `baremetal-lifecycle`-style charts, by
 hand-editing an index entry's `urls:`, or by making the release assets public
 some other way. The asset host is the publisher's decision and belongs there.
