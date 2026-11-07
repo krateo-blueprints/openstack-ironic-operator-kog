@@ -135,15 +135,17 @@ jobs:
       # not a preflight; it is a reassurance.
       - name: A publish token must be reachable AND authenticate
         env:
-          GH_TOKEN: ${{ secrets.CHARTS_PUBLISH_TOKEN || secrets.RELEASE_FEED_TOKEN }}
-          HAVE_REPO_SECRET: ${{ secrets.CHARTS_PUBLISH_TOKEN != '' }}
+          # Must be the SAME token the publish call uses. When these diverge the
+          # preflight validates a credential the publish will not send, which is
+          # the presence-is-not-validity defect this job already learned once.
+          GH_TOKEN: ${{ secrets.CHARTS_PUBLISH_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN}" ]; then
-            echo "::error::No publish token is reachable. Set a repository secret CHARTS_PUBLISH_TOKEN (a CLASSIC PAT with the 'repo' scope; classic tokens have no granular contents:write), or restore the organisation secret RELEASE_FEED_TOKEN. See docs/MARKETPLACE.md."
+            echo "::error::CHARTS_PUBLISH_TOKEN is not set. It is now the ONLY credential this release uses for the channel (org publishing standard rule 7) -- the RELEASE_FEED_TOKEN fallback was removed deliberately. Set the ORGANISATION secret CHARTS_PUBLISH_TOKEN at visibility=all: a CLASSIC PAT with the 'repo' scope, since classic tokens have no granular contents:write. See docs/MARKETPLACE.md."
             exit 1
           fi
-          if [ "${HAVE_REPO_SECRET}" = "true" ]; then which=CHARTS_PUBLISH_TOKEN; else which=RELEASE_FEED_TOKEN; fi
+          which=CHARTS_PUBLISH_TOKEN
           echo "resolved: $which"
           # The publisher writes Releases on THIS repo and gh-pages on
           # krateo-blueprints/charts. A read of each is the cheapest thing that
@@ -151,7 +153,7 @@ jobs:
           # limit is deliberate -- a preflight should not make writes.
           for repo in "${GITHUB_REPOSITORY}" krateo-blueprints/charts; do
             if ! gh api "repos/$repo" --jq .full_name >/dev/null 2>&1; then
-              echo "::error::$which is set but does not authenticate against $repo. The channel publish will fail with 'HTTP 401: Bad credentials' after the OCI push has already succeeded. Rotate that token, or set a valid CHARTS_PUBLISH_TOKEN on this repository. See docs/MARKETPLACE.md."
+              echo "::error::$which is set but does not authenticate against $repo. The channel publish will fail with 'HTTP 401: Bad credentials' after the OCI push has already succeeded. Rotate it. See docs/MARKETPLACE.md."
               exit 1
             fi
           done
@@ -165,22 +167,42 @@ jobs:
     needs:
       - publish
       - blueprints-token-preflight
-    uses: krateo-blueprints/charts/.github/workflows/publish-chart.yaml@main
+    # Pinned by FULL COMMIT SHA, with the version in the comment, per the org
+    # publishing standard (krateo-blueprints/charts PUBLISHING.md rule 9). NOT a
+    # moving major tag such as @1: whoever can move that tag could run code with
+    # CHARTS_PUBLISH_TOKEN in every caller at once, which is a supply-chain
+    # property rather than a convenience one.
+    #
+    # Verified before pinning, not taken on report:
+    #   git ls-remote .../charts 'refs/tags/1.0.0^{}' -> a2d63ba50e138b17f678528d6d6be3afef48715a
+    # and at that SHA the publisher really does contain #6 and #7 --
+    # `RELEASES_BASE` is hardcoded to the CHARTS repo's own releases
+    # (github.com/krateo-blueprints/charts/releases/download), with zero
+    # occurrences derived from `inputs.source_repo`, and the served-index check
+    # runs `env -u GH_TOKEN helm pull --repo`, which strips the token so the pull
+    # is genuinely anonymous.
+    #
+    # .github/dependabot.yml advances this; a SHA pin with nothing advancing it
+    # is worse than @main because it looks deliberate while going stale.
+    uses: krateo-blueprints/charts/.github/workflows/publish-chart.yaml@a2d63ba50e138b17f678528d6d6be3afef48715a # 1.0.0
     with:
       source_repo: ${{ github.repository }}
       git_tag: ${{ github.ref_name }}
       channel: blueprints
       artifact: charts-dist-blueprints
     secrets:
-      # Same resolution the three sibling blueprint repos use
-      # (krateo-aws/azure/gcp-blueprint, .github/workflows/release-tag.yaml):
-      # a repository secret if one exists, otherwise the ORGANISATION secret
-      # RELEASE_FEED_TOKEN, which is visibility=all and therefore already
-      # reachable here. Verified 2026-11-06 rather than assumed: none of the
-      # three siblings holds a repo-level secret, and krateo-aws-blueprint run
-      # 37742845675 shows `publish-blueprints / publish` CONCLUDED SUCCESS --
-      # the job itself, not merely a green run with the job skipped.
-      PUBLISH_TOKEN: ${{ secrets.CHARTS_PUBLISH_TOKEN || secrets.RELEASE_FEED_TOKEN }}
+      # ONE TOKEN, NO FALLBACK -- standard rule 7. The `|| secrets.RELEASE_FEED_TOKEN`
+      # fallback that used to be here is gone on purpose: RELEASE_FEED_TOKEN is
+      # for the release-notes cross-org feed and is not an index credential, and
+      # falling back to it is how a release could publish with a token nobody
+      # intended. It is also dead (401 on tag 0.3.0).
+      #
+      # CONSEQUENCE, accepted: until the organisation secret
+      # CHARTS_PUBLISH_TOKEN exists, a release reaches GHCR and then fails at
+      # the preflight with a message naming the missing secret. That is the
+      # intended behaviour -- a legible failure rather than a publish with the
+      # wrong credential.
+      PUBLISH_TOKEN: ${{ secrets.CHARTS_PUBLISH_TOKEN }}
 
   # Fetch whatever URL the index ACTUALLY advertises, with no credentials. This
   # is the only check in this pipeline that uses the CONSUMER's credentials
