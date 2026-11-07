@@ -127,6 +127,25 @@ Three things about that are worth knowing before you trust it:
     published to this channel at all: its cross-org feed step is skipped because
     `feed_repo` is empty, and GHCR is its only channel.
 
+    Refined 2026-11-07, because "upstream's chart" names the metadata and not
+    the publisher. This channel holds **28 charts whose `maintainers` is
+    `OpenStack-Helm Authors`** — aodh through watcher — and **every one is at
+    exactly 0.2.0**. Upstream does not version 28 service charts in lockstep, so
+    a uniform 0.2.0 is one pipeline packaging a vendored subchart set at its
+    umbrella's version. The umbrella is here too: `openstack` 0.2.0, whose
+    `sources` name `github.com/braghettos/krateo-openstack-blueprint` — the
+    personal-namespace predecessor of the blueprint, which is exactly why
+    `krateo-blueprints/krateo-openstack-blueprint` can truthfully report it has
+    never published here.
+
+    So the name `ironic` is held by the openstack-blueprint lineage, not by
+    upstream. Practically that is better than a stranger holding it: it is one
+    team's to move or rename, and a publish from the current repo extends that
+    chart rather than colliding with someone unreachable. It also means the
+    "stale at 0.2.0" that repo sees is not its pipeline publishing an old
+    version — its pipeline has published nothing, and 0.2.0 is its
+    predecessor's.
+
   The complementarity still holds, just not via the repo named before: the
   channel's `ironic` deploys the service, `baremetal-host` manages a machine
   through it, `kubernetes-cluster` builds a cluster out of those machines.
