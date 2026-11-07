@@ -306,86 +306,61 @@ and it would have cost someone a pointless credential.
 
 ---
 
-### The token is not the last blocker: this repo is PRIVATE and the index URL is not
+### RETRACTED: "this repo is PRIVATE". It is public, and this section was wrong
 
-Found 2026-11-07, before the token was replaced, so it has never been exercised.
-A publish from here will go **green and produce an uninstallable card.**
+Written 2026-11-07 and refuted the same day. It claimed that a valid
+`CHARTS_PUBLISH_TOKEN` would not be enough, because the publisher builds each
+index entry's download URL from the caller and **this repository is private**,
+so the asset would 404 for anonymous `helm`. The mechanism is real and the
+premise was false.
 
-The reusable publisher builds each index entry's download URL from the caller:
+**Measured:**
 
-```yaml
-# krateo-blueprints/charts/.github/workflows/publish-chart.yaml:44
-RELEASES_BASE: https://github.com/${{ inputs.source_repo }}/releases/download
+| | |
+|---|---|
+| `git remote get-url origin` | `krateo-blueprints/openstack-ironic-operator-kog` |
+| that repo's visibility | **PUBLIC** |
+| the failing release run `42353202553` | lives in that repo, tag `0.3.0` |
+| `github.repository` in those jobs | `krateo-blueprints/openstack-ironic-operator-kog` |
+
+So the caller is public, its release assets are anonymously fetchable, and the
+only blocker was the token after all.
+
+**How the wrong premise got in.** `gh repo view --json isPrivate` was run with no
+`-R`, from this working tree. `gh` resolves the current repository by preferring
+a remote named **`upstream`** over `origin`, and this tree has both:
+
+```
+origin    https://github.com/krateo-blueprints/openstack-ironic-operator-kog.git   (PUBLIC)
+upstream  https://github.com/braghettos/openstack-ironic-operator.git
 ```
 
-and the index bears that out — measured over all 1558 versions:
+`upstream` is the personal-namespace predecessor, since transferred, so GitHub
+redirects it to `krateo-blueprints/openstack-ironic-operator`, which is a
+different repository and **is** private. `gh` answered about that one. The
+command was correct, the question it answered was not the one being asked —
+`github.repository`, the value the workflow actually uses, is `origin`.
 
-| `urls:` host | versions | fetchable anonymously |
-|---|---|---|
-| `github.com/<source_repo>/releases/download/…` | 1247 | only if that repo is public |
-| `krateo-blueprints.github.io/charts/blueprints/…` | 311 | yes — the 2026-08-19 import |
+**The refutation was already on screen.** In the same investigation, an
+anonymous fetch of this chart's icon —
+`raw.githubusercontent.com/krateo-blueprints/openstack-ironic-operator-kog/…` —
+returned **`http=200  content-type=image/svg+xml`**. A private repository's raw
+URL cannot. The evidence that settled it was in an earlier tool result, under a
+different heading, and went unconnected for three commits.
 
-And the repos:
+**Cost.** Two commits argued from it (`f2ff1b3`, and the gate in `9153b92`), the
+claim was relayed twice to the openstack blueprint session, and
+`krateo-blueprints/charts#6` carries it in its title — "so a private caller's
+charts still download". That PR stands on its own merits (tarball volume, the
+anonymous `helm pull` verification, and decoupling the index from per-chart
+releases), but its motivating example was mine and was wrong. When offering the
+user a choice, "make this repository public" was listed as an option; it was
+already public.
 
-| repo | visibility |
-|---|---|
-| `krateo-blueprints/openstack-ironic-operator` | **PRIVATE** |
-| `krateo-aws-blueprint`, `-azure-`, `-gcp-`, `krateo-openstack-blueprint` | PUBLIC |
-
-An anonymous `curl` of a published sibling asset returns **200**; a private
-repo's release asset cannot return one. So once a valid `CHARTS_PUBLISH_TOKEN`
-exists, the publish job succeeds, the card appears, and `helm` cannot fetch the
-chart. The job's own conclusion will not show it — the same defect shape as the
-preflight that tested presence instead of validity, one layer further out.
-
-Two ways out, and the second is the clearer one:
-
-1. **Make this repository public**, matching all four siblings. One setting, no
-   code, and it is the user's call — the repo carries lab topology and host
-   details that have never been reviewed for publication.
-2. **Give the publisher a caller-independent asset host.** This is the route
-   Diego chose, and it is being done upstream as
-   **`krateo-blueprints/charts#6`** (open 2026-11-07, +52/-21, "store tarballs
-   in this repo's Releases, so a private caller's charts still download"). The
-   blob store is `krateo-blueprints/charts`'s **own Releases** — that repo is
-   PUBLIC — with one `<chart>-<version>` release per chart created
-   `--latest=false`, a refusal when another repo already stored that version,
-   and **every tarball fetched anonymously before any index entry points at
-   it**. That last step is the right generalisation of the defect above: it
-   makes green-but-unfetchable impossible rather than merely unlikely. Existing
-   entries keep their URLs, and the workflow records that those assets must not
-   be deleted. Once it merges, **this repo needs no visibility change** for the
-   channel to work.
-
-   A patch of mine (commit `bbd4a30`, file since removed) proposed the
-   publisher's `gh-pages` branch as the store instead. It was superseded, and it
-   was wrong twice:
-
-   - **I misread the header comment.** It says the publisher "uploads the .tgz
-     to this repo's **Releases** (shared blob store) and merges the entry into
-     the chosen channel's index on **gh-pages**" — two different places. I read
-     "this repo's", put the tarballs on gh-pages, and then cited that comment as
-     agreeing with me. It says Releases. The 311 Pages-hosted tarballs that made
-     the route look established came from the 2026-08-19 bulk import, so they
-     are evidence that the host *can* serve a tarball, not that the design ever
-     intended it to.
-   - **Release assets live outside the repository's objects; files committed to
-     a branch do not.** The openstack blueprint alone publishes 37 tarballs per
-     tag, so committing them to `gh-pages` would grow that branch permanently
-     and irreversibly, in clone time for everyone. That is the cost the chosen
-     design avoids, and my patch never weighed it.
-
-Do not "solve" this by publishing only `baremetal-lifecycle`-style charts, by
-hand-editing an index entry's `urls:`, or by making the release assets public
-some other way. The asset host is the publisher's decision and belongs there.
-
-**Related hazard, not ours but worth knowing:** those 1247 URLs embed the
-*per-chart* release tag — e.g.
-`…/krateo-aws-blueprint/releases/download/aws-wafv2-webacl-0.3.3/aws-wafv2-webacl-0.3.3.tgz`.
-`krateo-blueprints/charts#5` (merged 2026-11-07T14:28Z) stops creating a release
-per chart, which is right, but **deleting the existing per-chart releases as
-cleanup would 404 all 1247 entries.** Resetting "Latest" is safe; deleting is
-not.
+For the general rule this was supposed to illustrate — verify a published
+artifact with the **consumer's** credentials, not the publisher's — see
+`hack/verify-channel-entry.py`, which is still worth having and is now the only
+part of this that survives.
 
 ---
 

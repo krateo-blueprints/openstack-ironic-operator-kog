@@ -157,52 +157,6 @@ jobs:
           done
           echo "$which authenticates against both repositories"
 
-  # THE CONSUMER IS ANONYMOUS, AND NOTHING ELSE IN THIS PIPELINE CHECKS THAT.
-  #
-  # Found 2026-11-07, before it had a chance to bite. The reusable publisher
-  # builds each index entry's download URL from the CALLER
-  # (`publish-chart.yaml`: `RELEASES_BASE: .../${{ inputs.source_repo }}/releases/download`)
-  # and THIS REPOSITORY IS PRIVATE. A private repo's release asset never
-  # returns 200 anonymously, so the publish would conclude SUCCESS, the card
-  # would appear, and `helm` could not fetch the chart. Every job above would
-  # be green -- the same shape as the preflight that tested presence instead of
-  # validity, one layer further out.
-  #
-  # This gate is deliberately NOT "refuse while the repo is private". That
-  # would keep refusing after the fix lands, because the repo stays private.
-  # It tests the actual condition instead: private caller AND a publisher that
-  # still resolves assets from the caller. `krateo-blueprints/charts` is
-  # public, so its workflow at the ref we pin can simply be read. When #6
-  # ("store tarballs in this repo's Releases") merges to main, RELEASES_BASE
-  # disappears, this gate passes on its own and nothing here needs editing.
-  #
-  # It fails CLOSED: a gate that cannot determine the answer must not wave the
-  # release through.
-  channel-asset-host-gate:
-    needs: publish
-    runs-on: ubuntu-latest
-    steps:
-      - name: A private caller must not publish while the index points at its own releases
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          vis="$(gh api "repos/${{ github.repository }}" --jq .visibility)"
-          echo "this repository: $vis"
-          if [ "$vis" = "public" ]; then
-            echo "Caller is public; its release assets are anonymously fetchable."
-            exit 0
-          fi
-          # Read the publisher we actually pin (`uses: ...@main`), anonymously.
-          pub="$(curl -fsSL --max-time 60 \
-            https://raw.githubusercontent.com/krateo-blueprints/charts/main/.github/workflows/publish-chart.yaml)" \
-            || { echo "::error::cannot read the publisher at @main to determine where it stores assets; refusing to publish blind"; exit 1; }
-          if printf '%s' "$pub" | grep -qE '^\s*RELEASES_BASE:.*inputs\.source_repo'; then
-            echo "::error::The publisher still builds index URLs from the caller, and ${{ github.repository }} is $vis. Publishing now would write an index entry whose .tgz 404s for anonymous helm, and the entry persists until the chart version is bumped. Wait for krateo-blueprints/charts#6 (moves the store to that repo's own public Releases), or make this repository public. See docs/MARKETPLACE.md."
-            exit 1
-          fi
-          echo "Publisher no longer resolves assets from the caller; a private caller is fine."
-
   # Republishes the same bytes into the Marketplace's blueprints channel. The
   # publisher stamps nothing: `krateo.io/source-repo` has to be committed in each
   # Chart.yaml, and without it the chart lands in the index and never gets a card.
@@ -211,7 +165,6 @@ jobs:
     needs:
       - publish
       - blueprints-token-preflight
-      - channel-asset-host-gate
     uses: krateo-blueprints/charts/.github/workflows/publish-chart.yaml@main
     with:
       source_repo: ${{ github.repository }}
@@ -229,14 +182,32 @@ jobs:
       # the job itself, not merely a green run with the job skipped.
       PUBLISH_TOKEN: ${{ secrets.CHARTS_PUBLISH_TOKEN || secrets.RELEASE_FEED_TOKEN }}
 
-  # The counterpart to the gate above, on the far side of the publish: fetch
-  # whatever URL the index ACTUALLY advertises, with no credentials. It asserts
-  # nothing about which host that is, so it stays correct across #6 and
-  # anything after it.
+  # Fetch whatever URL the index ACTUALLY advertises, with no credentials. This
+  # is the only check in this pipeline that uses the CONSUMER's credentials
+  # rather than the publisher's: the portal's Marketplace and `helm` reach the
+  # .tgz anonymously, so an index entry can be written, concluded green, and
+  # still be unfetchable. It asserts nothing about which host the index names,
+  # so it survives krateo-blueprints/charts#6 and anything after it.
   #
-  # It is a DETECTOR, not a gate -- by the time it runs the entry is written,
-  # and failing this job does not retract it. Its job is to make the failure
-  # loud on the first release instead of silent until a user tries to install.
+  # A DETECTOR, not a gate -- by the time it runs the entry exists and failing
+  # this job does not retract it. It makes the failure loud on the first release
+  # instead of silent until someone tries to install.
+  #
+  # A sibling `channel-asset-host-gate` stood here and has been deleted. It
+  # refused the publish when the caller was non-public AND the publisher still
+  # derived asset URLs from the caller -- written on the false premise that THIS
+  # repository is private. It is not: `origin` is
+  # krateo-blueprints/openstack-ironic-operator-kog, which is PUBLIC, and that
+  # is what `github.repository` resolves to here. The gate could therefore never
+  # have fired, which is the worst kind of check to keep. See the retraction in
+  # docs/MARKETPLACE.md.
+  #
+  # krateo-blueprints/charts#7 (the org publishing standard) makes the publisher
+  # run this same verification for every caller, with an anonymous
+  # `helm pull --repo`. When that lands, this job becomes redundant rather than
+  # wrong, and the standard says callers may drop it. Keeping it until then, and
+  # arguably after: it checks the served result independently of the publisher's
+  # own report of it.
   verify-channel-entry:
     needs: publish-blueprints-channel
     runs-on: ubuntu-latest
