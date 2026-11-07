@@ -31,6 +31,9 @@ env:
 
 jobs:
   publish:
+    # Gated on the credential check above, so a release is all-or-nothing: see
+    # the comment on blueprints-token-preflight for why this inverted.
+    needs: blueprints-token-preflight
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -115,16 +118,25 @@ jobs:
 
   # A missing token otherwise surfaces from inside the reusable workflow, where
   # the message is about an unauthenticated git push rather than about what is
-  # actually wrong. This says it here, and does not run until the OCI push --
-  # the source of truth -- has succeeded.
+  # actually wrong. This says it here instead.
   #
-  # It is expected to PASS with no setup: krateo-blueprints is an Organisation
-  # (not a user account, as an earlier version of this comment wrongly claimed)
-  # and RELEASE_FEED_TOKEN is an org secret at visibility=all. The step now
-  # reports WHICH token it resolved, so a green preflight still says which
-  # credential a release used.
+  # RUNS BEFORE THE GHCR PUSH, inverted 2026-11-07. It used to carry
+  # `needs: publish` with the stated reason that it "does not run until the OCI
+  # push -- the source of truth -- has succeeded", so a credential problem could
+  # not block the real artifact. That reasoning is coherent and it is wrong under
+  # the org publishing standard, which rule 1 states as: a chart that is in GHCR
+  # and not in the index IS NOT PUBLISHED, because the Marketplace installs from
+  # the index and nothing re-resolves it against GHCR. Checking after the push
+  # is precisely how you reach that half-published state -- version in GHCR,
+  # absent from the index -- and tag 0.3.0 did exactly that: `publish`
+  # succeeded, both charts landed at 0.14.0 / 0.6.3, and the channel job then
+  # died on a 401.
+  #
+  # So the invariant is both or neither, and the cost is accepted: with no valid
+  # token a release now produces NOTHING, not even the OCI artifact. Raised by
+  # the openstack-as-a-service session against rule 7; being written into the
+  # standard as charts#9.
   blueprints-token-preflight:
-    needs: publish
     runs-on: ubuntu-latest
     steps:
       # PRESENCE IS NOT VALIDITY, and this step learned that the expensive way.
@@ -165,8 +177,9 @@ jobs:
   # `make check-blueprints` fails the build if it goes missing.
   publish-blueprints-channel:
     needs:
+      # `publish` already depends on blueprints-token-preflight, so naming it
+      # here too would be redundant rather than safer.
       - publish
-      - blueprints-token-preflight
     # Pinned by FULL COMMIT SHA, with the version in the comment, per the org
     # publishing standard (krateo-blueprints/charts PUBLISHING.md rule 9). NOT a
     # moving major tag such as @1: whoever can move that tag could run code with
