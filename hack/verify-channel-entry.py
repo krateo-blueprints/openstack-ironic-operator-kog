@@ -66,7 +66,13 @@ def load_index(src):
         body = open(src, "rb").read()
     doc = yaml.safe_load(body)
     if not isinstance(doc, dict) or "entries" not in doc:
-        raise SystemExit(f"::error::{src} is not a Helm index (no 'entries' key)")
+        # RuntimeError, NOT SystemExit. SystemExit derives from BaseException, so
+        # `except Exception` around the caller did not catch it and the retry
+        # loop -- whose whole purpose is the lagging-Pages case -- terminated on
+        # attempt 1 of 10. A Pages deploy serving a holding page answers 200 with
+        # an HTML body, which parses to a str and lands exactly here. Found by
+        # /code-review.
+        raise RuntimeError(f"{src} is not a Helm index (no 'entries' key)")
     return doc
 
 

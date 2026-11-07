@@ -105,7 +105,7 @@ done < "$WORK/cds"
 if [ "${#PENDING[@]}" -gt 0 ]; then
   python3 hack/chartrepo-sync.py \
     --namespace "$IRONIC_NS" --kubeconfig "$KUBECONFIG_FILE" --context "$KCTX" \
-    "${PENDING[@]}" | $K apply -f -
+    "${PENDING[@]}" | $K apply --server-side --force-conflicts -f -
 else
   echo "  nothing to add: every pinned version is already in Chart.yaml"
 fi

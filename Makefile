@@ -289,7 +289,7 @@ chart-host:   # package all four charts and serve them from a ConfigMap-backed n
 		dist/baremetal-discovery-$(DISCOVERY_CHART_VERSION).tgz \
 		dist/baremetal-host-$(HOST_CHART_VERSION).tgz \
 		dist/kubernetes-cluster-$(CLUSTER_CHART_VERSION).tgz \
-		| $(KUBECTL) apply -f -
+		| $(KUBECTL) apply --server-side --force-conflicts -f -
 	$(KUBECTL) apply -f local/chartrepo.yaml
 	# The rollout is necessary and NOT sufficient. The claim that it "IS the
 	# verification" was wrong and /code-review caught it: on a RE-RUN the

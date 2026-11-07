@@ -115,10 +115,13 @@ version lacks field X; switch to a newer one (see [docs/api.md](docs/api.md)).
 
 ## Marketplace blueprints
 
-Two of the charts here are this repository's Krateo Marketplace blueprints.
-**Neither is in the [`blueprints` channel](https://krateo-blueprints.github.io/charts/blueprints)
-yet** — the channel publish fails with `HTTP 401: Bad credentials` and is waiting
-on a valid token ([docs/MARKETPLACE.md](docs/MARKETPLACE.md)):
+Two of the charts here are this repository's Krateo Marketplace blueprints, and
+**both are live in the
+[`blueprints` channel](https://krateo-blueprints.github.io/charts/blueprints)**
+as of release `0.3.2` on 2026-11-07 — measured at `http=200` from the channel's
+own index, which had not moved since 2026-10-09
+([docs/MARKETPLACE.md](docs/MARKETPLACE.md) records the before/after and the two
+failed tags it took):
 
 | Chart | Card | What it does |
 |---|---|---|
