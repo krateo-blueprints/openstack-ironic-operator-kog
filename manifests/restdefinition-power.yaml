@@ -426,8 +426,27 @@ spec:
         #                                        create fires, PUT happens
         #   {name: null, ...}
         #     -> UNCHANGED                       unnamed node skipped
+        # findby lifts node_id, and ONLY when Ironic has actually observed a
+        # power state. Two separate reasons, both measured:
+        #
+        # It does not lift `target`: the collection has 7 fields and
+        # target_power_state is not one of them, and lifting `target` from
+        # `power_state` is actively wrong -- `target` accepts five values (power
+        # on, power off, rebooting, soft power off, soft rebooting) while
+        # power_state holds two, so three would show permanent drift.
+        # Comparison belongs on the `get` verb, which sees all 69 fields.
+        #
+        # And it REFUSES TO MATCH a node with power_state null, which is the
+        # state of a freshly enrolled node. Measured 2026-11-08 on the isolated
+        # cluster with the guard absent: findby matched, `get` had nothing to
+        # lift `target` from, an absent key reads as "no difference", no PUT
+        # fired, and the CR reported **Ready=True/Available** with status holding
+        # only node_id and uuid -- a FALSE GREEN claiming convergence while the
+        # node was unpowered. Not matching instead means ResourceExists=false and
+        # `create` drives the state, which is the only outcome that actually
+        # powers the node.
         responseTransform:
-          inline: 'if .name and ((.target_power_state // .power_state) != null) then .node_id = .name | .target = (.target_power_state // .power_state) else . end'
+          inline: 'if (.name and .power_state) then .node_id = .name else . end'
         # v2026-11-04: Ironic's node COLLECTION omits child nodes unless asked.
         # Measured: GET /v1/nodes -> 3 nodes; ?include_children=true -> 17.
         # blade01/04/05/06 are children of an enclosure and are ABSENT without
@@ -439,6 +458,29 @@ spec:
           - name: include_children
             value: "true"
         identifiersMatchPolicy: OR
+      # THE GET VERB, added 2026-11-08 because findby cannot see what the
+      # comparison needs. Measured: GET /v1/nodes returns 7 fields and no
+      # target_power_state; GET /v1/nodes/<id> returns 69 and does. restResources
+      # picks `get` for a known resource and `findby` before it is known, so this
+      # is the verb that decides drift once a CR has been observed once -- and it
+      # is the shape restdefinition-node.yaml has used all along.
+      #
+      # Both lifts belong here: node_id so the comparison addresses the right
+      # fields, and target from target_power_state when a transition is in
+      # flight, falling back to power_state when it is not. That fallback is
+      # what makes an in-flight 202 read as already-converging instead of as
+      # fresh drift.
+      - action: get
+        method: GET
+        path: /v1/nodes/{node_id}
+        headers:
+          - name: X-OpenStack-Ironic-API-Version
+            value: "1.109"
+        responseTransform:
+          inline: 'if .name then .node_id = .name else . end | if (.target_power_state // .power_state) then .target = (.target_power_state // .power_state) else . end'
+        requestFieldMapping:
+          - inPath: node_id
+            inCustomResource: spec.node_id
       - action: create
         method: PUT
         path: /v1/nodes/{node_id}/states/power
