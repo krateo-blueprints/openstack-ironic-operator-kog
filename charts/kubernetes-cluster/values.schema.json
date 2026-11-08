@@ -793,7 +793,6 @@
       "type": "object",
       "title": "Node access",
       "description": "How to reach a provisioned node. Default-safe: with nothing set the `ironic` account is locked and SSH password authentication is off. Password login requires both a password and allowPasswordAuth.",
-      "additionalProperties": false,
       "properties": {
         "sshAuthorizedKeys": {
           "type": "array",

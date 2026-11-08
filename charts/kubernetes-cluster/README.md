@@ -59,14 +59,18 @@ Register `baremetal-host` **first**, then this one:
 helm pull oci://ghcr.io/krateo-blueprints/charts/baremetal-host --version 0.6.3
 kubectl apply -f compositiondefinition.yaml     # from inside that chart
 
-helm pull oci://ghcr.io/krateo-blueprints/charts/kubernetes-cluster --version 0.15.0
+helm pull oci://ghcr.io/krateo-blueprints/charts/kubernetes-cluster --version 0.15.1
 kubectl apply -f compositiondefinition.yaml     # from inside this chart
 ```
 
-The chart version *is* the served apiVersion: `0.15.0` is served as
-`composition.krateo.io/v0-15-0`, and registering a version stops the previous one
+The chart version *is* the served apiVersion: `0.15.1` is served as
+`composition.krateo.io/v0-15-1`, and registering a version stops the previous one
 
 ### Migrating a live cluster to a new chart version, measured
+
+> The worked example below is the **0.14.0 → 0.15.0** migration as measured on
+> 2026-11-08, and its version numbers are deliberately left alone: it is a dated
+> record, not a template. The current version is above.
 
 Investigated 2026-11-08 before touching anything, because `lab-ha` is a live
 3CP/3worker cluster. The risk is **not** where I assumed it was.
@@ -113,7 +117,7 @@ version; left empty it uses the one this chart was released against
 A three-node control plane with three workers:
 
 ```yaml
-apiVersion: composition.krateo.io/v0-15-0
+apiVersion: composition.krateo.io/v0-15-1
 kind: KubernetesCluster
 metadata:
   name: lab-ha

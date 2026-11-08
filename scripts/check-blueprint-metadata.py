@@ -272,6 +272,40 @@ def check_chart(root, name, online=False):
         with open(schema_path) as fh:
             schema = json.load(fh)
 
+        # NESTED occurrences too, not just the root. The root rule exists for
+        # chart-inspector's dry-run (core-provider#325); this one is harder: the
+        # API SERVER forbids `additionalProperties` ALONGSIDE `properties`
+        # anywhere in a CRD schema, and crdgen copies values.schema.json nodes
+        # through verbatim. Proven on the live cluster with a server-side dry-run:
+        #   spec.validation.openAPIV3Schema.properties[spec].properties[nodeAccess]
+        #   .additionalProperties: Forbidden: additionalProperties and properties
+        #   are mutual exclusive
+        # So a nested one makes the generated CRD unregisterable: the new version
+        # is never served while registering it still stops the previous one, and
+        # a PUBLISHED blueprint becomes uninstallable. That happened here with
+        # kubernetes-cluster 0.15.0 on 2026-11-08, and this rule tested only the
+        # root, so it passed.
+        def _ap_paths(node, path="(root)"):
+            if not isinstance(node, dict):
+                return
+            if node.get("additionalProperties") is False and "properties" in node:
+                yield path
+            for k, v in (node.get("properties") or {}).items():
+                yield from _ap_paths(v, f"{path}.{k}" if path != "(root)" else k)
+            it = node.get("items")
+            if isinstance(it, dict):
+                yield from _ap_paths(it, f"{path}[]")
+
+        for where in _ap_paths(schema):
+            if where == "(root)":
+                continue  # the root case is reported by the rule below
+            problems.append(
+                f"{rel}: values.schema.json sets additionalProperties:false "
+                f"alongside properties at `{where}`. The API server forbids that "
+                f"combination in a CRD and crdgen copies this node through, so "
+                f"the generated CRD will not register and the published version "
+                f"becomes uninstallable. Remove additionalProperties there.")
+
         if schema.get("additionalProperties") is False:
             problems.append(
                 f"{rel}: values.schema.json root sets additionalProperties:false. helm "
@@ -378,6 +412,21 @@ def self_test():
         cases.append(("a title with no description is caught", build("titleonly", schema={
             "type": "object",
             "properties": {"a": {"type": "string", "title": "A"}}}), True))
+        cases.append(("NESTED additionalProperties:false beside properties is caught",
+                      build("apnested", schema={
+            "type": "object",
+            "properties": {"nodeAccess": {
+                "type": "object", "title": "t", "description": "d",
+                "additionalProperties": False,
+                "properties": {"password": {"type": "string", "title": "t", "description": "d"}}}},
+        }), True))
+        cases.append(("a nested object WITHOUT additionalProperties is accepted",
+                      build("apnestedok", schema={
+            "type": "object",
+            "properties": {"nodeAccess": {
+                "type": "object", "title": "t", "description": "d",
+                "properties": {"password": {"type": "string", "title": "t", "description": "d"}}}},
+        }), False))
         cases.append(("additionalProperties:false is caught", build("apfalse", schema={
             "type": "object", "additionalProperties": False,
             "properties": {"a": {"type": "string", "title": "A", "description": "d"}}}), True))

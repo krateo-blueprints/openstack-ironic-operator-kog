@@ -1,3 +1,51 @@
+{{/* ONE definition, included by all three user-data paths. It used to be the
+     same 20 lines pasted three times -- which is exactly how the hardcoded
+     password survived in three places and took three edits to remove, and
+     /code-review flagged that the duplication had been recreated by the fix. A
+     change here (an ssh_import_id, a different username, dropping
+     chpasswd.expire) now lands once. */}}
+{{- define "kubernetes-cluster.nodeAccess" -}}
+{{- $na := default (dict) .Values.nodeAccess }}
+{{- $keys := default (list) $na.sshAuthorizedKeys }}
+{{- $pw := default "" $na.password }}
+{{- /* `eq true` rather than truthiness. `and (default false $na.allowPasswordAuth) ...`
+       was two bugs: `default false X` is a no-op in Go templates, since false IS
+       the empty value, and `and` tests truthiness -- so every NON-EMPTY STRING
+       is true. `--set-string nodeAccess.allowPasswordAuth=false` with a password
+       set rendered ssh_pwauth: true and the plaintext password, the precise
+       outcome the two-flag design exists to prevent. values.schema.json's
+       `type: boolean` guards the CR path but not --set-string, --set-file or a
+       quoted "false" in a values file. /code-review caught it. */}}
+{{- /* A string-typed flag already FAILS CLOSED -- `eq true "false"` is
+       "incompatible types for comparison: bool and string" and the render dies.
+       That is the safe direction but the message tells an operator nothing, so
+       say it plainly instead. Measured both ways before and after. */}}
+{{- if and (hasKey $na "allowPasswordAuth") (not (kindIs "bool" $na.allowPasswordAuth)) }}
+{{- fail (printf "nodeAccess.allowPasswordAuth must be a boolean true or false, got %s %q. A quoted value (--set-string, --set-file, or \"false\" in a values file) is not accepted: it would otherwise decide whether a plaintext password is written into cloud-init." (kindOf $na.allowPasswordAuth) (printf "%v" $na.allowPasswordAuth)) }}
+{{- end }}
+{{- $pwAuth := and (eq true $na.allowPasswordAuth) (ne $pw "") }}
+ssh_pwauth: {{ $pwAuth }}
+chpasswd:
+  expire: false
+users:
+  - name: ironic
+{{- if $pwAuth }}
+    plain_text_passwd: {{ $pw | quote }}
+    lock-passwd: false
+{{- else }}
+    lock-passwd: true
+{{- end }}
+{{- if $keys }}
+    ssh_authorized_keys:
+{{- range $keys }}
+      - {{ . | quote }}
+{{- end }}
+{{- end }}
+    shell: /bin/bash
+    sudo:
+      - "ALL=(ALL) NOPASSWD:ALL"
+{{- end -}}
+
 {{- define "kubernetes-cluster.nodeApiVersion" -}}baremetal.ogen.krateo.io/v1-0-0{{- end -}}
 
 {{/* Per-node CR kind/apiVersion. The chart renders BaremetalHost
@@ -1020,39 +1068,7 @@ __CONFIGDRIVE_HASH_SENTINEL__
      `kubernetes-cluster.cpToken` pulls the token via lookup. */}}
 {{- define "kubernetes-cluster.cpUserData" -}}
 #cloud-config
-{{- $na := default (dict) .Values.nodeAccess }}
-{{- $keys := default (list) $na.sshAuthorizedKeys }}
-{{- $pw := default "" $na.password }}
-{{- $pwAuth := and (default false $na.allowPasswordAuth) (ne $pw "") }}
-{{- /* DEFAULT-SAFE. This block used to hardcode `ssh_pwauth: true`, an unlocked
-       `ironic` user with `plain_text_passwd: baremetal`, no expiry and sudo --
-       in all three user-data paths, with no value or schema field to override
-       it. charts/kubernetes-cluster is a PUBLISHED Marketplace blueprint
-       (0.14.0 reached the channel on 2026-11-07), so every installer provisioned
-       blades with a known password and SSH password auth on.
-       Password login is now opt-in: it needs BOTH nodeAccess.allowPasswordAuth
-       and a non-empty nodeAccess.password. With neither set the account is
-       locked and ssh_pwauth is false. */}}
-ssh_pwauth: {{ $pwAuth }}
-chpasswd:
-  expire: false
-users:
-  - name: ironic
-{{- if $pwAuth }}
-    plain_text_passwd: {{ $pw | quote }}
-    lock-passwd: false
-{{- else }}
-    lock-passwd: true
-{{- end }}
-{{- if $keys }}
-    ssh_authorized_keys:
-{{- range $keys }}
-      - {{ . | quote }}
-{{- end }}
-{{- end }}
-    shell: /bin/bash
-    sudo:
-      - "ALL=(ALL) NOPASSWD:ALL"
+{{- include "kubernetes-cluster.nodeAccess" . | nindent 0 }}
 write_files:
   - path: /etc/kubernetes/install-k8s.sh
     permissions: "0755"
@@ -1865,39 +1881,7 @@ runcmd:
 {{- define "kubernetes-cluster.workerUserData" -}}
 {{- $jc := include "kubernetes-cluster.joinCommand" . -}}
 #cloud-config
-{{- $na := default (dict) .Values.nodeAccess }}
-{{- $keys := default (list) $na.sshAuthorizedKeys }}
-{{- $pw := default "" $na.password }}
-{{- $pwAuth := and (default false $na.allowPasswordAuth) (ne $pw "") }}
-{{- /* DEFAULT-SAFE. This block used to hardcode `ssh_pwauth: true`, an unlocked
-       `ironic` user with `plain_text_passwd: baremetal`, no expiry and sudo --
-       in all three user-data paths, with no value or schema field to override
-       it. charts/kubernetes-cluster is a PUBLISHED Marketplace blueprint
-       (0.14.0 reached the channel on 2026-11-07), so every installer provisioned
-       blades with a known password and SSH password auth on.
-       Password login is now opt-in: it needs BOTH nodeAccess.allowPasswordAuth
-       and a non-empty nodeAccess.password. With neither set the account is
-       locked and ssh_pwauth is false. */}}
-ssh_pwauth: {{ $pwAuth }}
-chpasswd:
-  expire: false
-users:
-  - name: ironic
-{{- if $pwAuth }}
-    plain_text_passwd: {{ $pw | quote }}
-    lock-passwd: false
-{{- else }}
-    lock-passwd: true
-{{- end }}
-{{- if $keys }}
-    ssh_authorized_keys:
-{{- range $keys }}
-      - {{ . | quote }}
-{{- end }}
-{{- end }}
-    shell: /bin/bash
-    sudo:
-      - "ALL=(ALL) NOPASSWD:ALL"
+{{- include "kubernetes-cluster.nodeAccess" . | nindent 0 }}
 write_files:
   - path: /etc/kubernetes/install-k8s.sh
     permissions: "0755"
@@ -2077,39 +2061,7 @@ runcmd:
 {{- /* v0.11.4: $jc + $ck are no longer baked at template time —
        join.sh polls the bootstrap CP's Node.spec.extra at runtime. */ -}}
 #cloud-config
-{{- $na := default (dict) .Values.nodeAccess }}
-{{- $keys := default (list) $na.sshAuthorizedKeys }}
-{{- $pw := default "" $na.password }}
-{{- $pwAuth := and (default false $na.allowPasswordAuth) (ne $pw "") }}
-{{- /* DEFAULT-SAFE. This block used to hardcode `ssh_pwauth: true`, an unlocked
-       `ironic` user with `plain_text_passwd: baremetal`, no expiry and sudo --
-       in all three user-data paths, with no value or schema field to override
-       it. charts/kubernetes-cluster is a PUBLISHED Marketplace blueprint
-       (0.14.0 reached the channel on 2026-11-07), so every installer provisioned
-       blades with a known password and SSH password auth on.
-       Password login is now opt-in: it needs BOTH nodeAccess.allowPasswordAuth
-       and a non-empty nodeAccess.password. With neither set the account is
-       locked and ssh_pwauth is false. */}}
-ssh_pwauth: {{ $pwAuth }}
-chpasswd:
-  expire: false
-users:
-  - name: ironic
-{{- if $pwAuth }}
-    plain_text_passwd: {{ $pw | quote }}
-    lock-passwd: false
-{{- else }}
-    lock-passwd: true
-{{- end }}
-{{- if $keys }}
-    ssh_authorized_keys:
-{{- range $keys }}
-      - {{ . | quote }}
-{{- end }}
-{{- end }}
-    shell: /bin/bash
-    sudo:
-      - "ALL=(ALL) NOPASSWD:ALL"
+{{- include "kubernetes-cluster.nodeAccess" . | nindent 0 }}
 write_files:
   - path: /etc/kubernetes/install-k8s.sh
     permissions: "0755"
