@@ -280,8 +280,21 @@ jobs:
       - name: The URL the index advertises must be fetchable with no credentials
         run: |
           set -euo pipefail
-          # PyYAML is normally present on the runner; do not assume it.
-          python3 -c "import yaml" 2>/dev/null || pip install --quiet pyyaml
+          # PyYAML is needed only by hack/verify-channel-entry.py, to parse the
+          # 1.6 MB channel index -- the chart versions below use awk instead.
+          #
+          # The fallback had to change. `pip install pyyaml` on a runner with an
+          # externally-managed Python exits non-zero
+          # (error: externally-managed-environment) and, under `set -e`, fails
+          # this step with a message about pip rather than about a missing
+          # dependency -- killing the only consumer-credentials check in the
+          # pipeline. It had never run, because the image ships PyYAML, so the
+          # broken branch was invisible. /code-review caught it.
+          if ! python3 -c "import yaml" 2>/dev/null; then
+            pip install --quiet --break-system-packages pyyaml \
+              || pip install --quiet --user pyyaml \
+              || { echo "::error::PyYAML is unavailable and could not be installed; hack/verify-channel-entry.py needs it to parse the channel index"; exit 1; }
+          fi
           # An ARRAY, expanded quoted. An unquoted "$pairs" string happens to
           # work in bash and silently does not in zsh, where the whole string
           # arrives as one argv entry -- and this script's argparse ACCEPTED
@@ -290,7 +303,11 @@ jobs:
           # on which shell splits what.
           pairs=()
           for chart in kubernetes-cluster baremetal-host; do
-            ver="$(python3 -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))['version'])" "charts/$chart/Chart.yaml")"
+            # awk, the idiom the Makefile already uses -- no YAML parser needed
+            # for a top-level scalar. Verified to give the same answer as the
+            # yaml read for both charts before switching.
+            ver="$(awk '/^version:/{print $2; exit}' "charts/$chart/Chart.yaml")"
+            [ -n "$ver" ] || { echo "::error::no version: line in charts/$chart/Chart.yaml"; exit 1; }
             pairs+=("$chart=$ver")
           done
           python3 hack/verify-channel-entry.py "${pairs[@]}"

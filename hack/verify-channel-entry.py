@@ -85,10 +85,28 @@ def advertised_url(index, chart, version):
 
 
 def head_status(url):
+    """A real HEAD, with a GET fallback.
+
+    This used to call fetch(), which does r.read() on the whole body just to
+    look at r.status -- 80 KB for kubernetes-cluster, per attempt. Some servers
+    refuse HEAD (405/501), so fall back rather than reporting a refusal as a
+    missing asset.
+    """
+    req = urllib.request.Request(url, method="HEAD",
+                                 headers={"User-Agent": "verify-channel-entry"})
     try:
-        status, _ = fetch(url)
-        return status
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return r.status
     except urllib.error.HTTPError as e:
+        if e.code in (405, 501):
+            try:
+                status, _ = fetch(url)
+                return status
+            except urllib.error.HTTPError as e2:
+                return e2.code
+            except Exception as e2:  # noqa: BLE001
+                print(f"  transport error on GET fallback: {e2}", file=sys.stderr)
+                return 0
         return e.code
     except Exception as e:  # noqa: BLE001 - any transport failure is a failure
         print(f"  transport error: {e}", file=sys.stderr)
@@ -119,19 +137,36 @@ def main():
             )
         wanted.append((name, ver))
 
+    # ONE index fetch per attempt, checked against every outstanding pair. It
+    # used to be one fetch per pair per attempt -- two charts x 10 attempts = 20
+    # downloads and 20 parses of a 1.6 MB document -- and the two waits were
+    # SEQUENTIAL, so a pair absent for all 10 attempts made the next pair start
+    # its own full wait. /code-review caught both.
+    found = {}
+    outstanding = list(wanted)
+    for i in range(a.attempts):
+        try:
+            index = load_index(a.index)
+        except Exception as e:  # noqa: BLE001 - RuntimeError, transport, parse
+            print(f"  index unreadable ({e})", file=sys.stderr)
+            index = None
+        if index is not None:
+            still = []
+            for name, ver in outstanding:
+                url = advertised_url(index, name, ver)
+                if url:
+                    found[(name, ver)] = url
+                else:
+                    still.append((name, ver))
+            outstanding = still
+        if not outstanding:
+            break
+        if i + 1 < a.attempts:
+            time.sleep(a.sleep)
+
     failed = False
     for name, ver in wanted:
-        url = None
-        for i in range(a.attempts):
-            try:
-                url = advertised_url(load_index(a.index), name, ver)
-            except Exception as e:  # noqa: BLE001
-                print(f"  index unreadable ({e})", file=sys.stderr)
-                url = None
-            if url:
-                break
-            if i + 1 < a.attempts:
-                time.sleep(a.sleep)
+        url = found.get((name, ver))
         if not url:
             print(
                 f"::error::{name} {ver} is not in {a.index} after "
