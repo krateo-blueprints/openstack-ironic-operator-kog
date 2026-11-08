@@ -31,20 +31,21 @@ spec:
         name: ironic-keystone-token
         namespace: openstack
         key: token
-  configuration:
-    # X-Ironic-Endpoint is gone: it existed only so the proxy knew where to forward.
-    # The endpoint now comes from servers[].url in the OAS, which resolves to the
-    # in-cluster `ironic` Service -> WireGuard tunnel -> the real Ironic.
-    #
-    # Microversion raised 1.99 -> 1.109: at 1.99 Ironic's RBAC returned 403 on
-    # baremetal:port:create for nodes whose owner was not yet set; 1.109 matches the
-    # caller's project against node.owner and the write ops succeed.
-    header:
-      create:
-        X-OpenStack-Ironic-API-Version: "1.109"
-      get:
-        X-OpenStack-Ironic-API-Version: "1.109"
-      delete:
-        X-OpenStack-Ironic-API-Version: "1.109"
-      findby:
-        X-OpenStack-Ironic-API-Version: "1.109"
+  # spec.configuration REMOVED 2026-11-07. It carried the #304 shape --
+  # `header` SINGULAR, per verb -- which rest-dynamic-controller never reads: it
+  # looks up `headers` plural, so the lookup missed and every microversion in
+  # here was dropped with no error. restdefinition-node.yaml has carried that
+  # explanation for a while and the working mechanism alongside it: static
+  # per-verb `headers:` on each verb, which take a different code path and do
+  # ship.
+  #
+  # It is now also UN-APPLIABLE, which is how it was finally noticed. The
+  # Configuration CRD oasgen 0.54.1 generates declares only `spec.authentication`,
+  # so applying this file failed outright:
+  #   strict decoding error: unknown field "spec.configuration"
+  # Measured on both clusters: baremetalnodeconfigurations and
+  # nodepowerconfigurations each accept ['authentication'] and nothing else, and
+  # the live ironic-endpoint CR carries only that.
+  #
+  # `make check-examples` never covered this file (0 mentions), which is the
+  # honest limit of a document-level screen: it cannot see a generated schema.

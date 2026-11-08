@@ -447,6 +447,29 @@ The decoded server URL is `https://<cp-data-ip>:6443`. Anyone with network acces
 
 ### Fallback — SSH-tunnel from a workstation that only reaches OOB
 
+> **You need `nodeAccess` set for this to work, from chart 0.15.0 onwards.**
+> Until 0.14.0 every node was provisioned with an unlocked `ironic` account,
+> the password `baremetal` and `ssh_pwauth: true`, hardcoded — so `ssh
+> ironic@...` below simply worked, and that is exactly why it was a defect.
+> 0.15.0 is default-safe: with `nodeAccess` unset the account is **locked** and
+> password authentication is **off**, so both commands in this section fail with
+> no way in. Set one of:
+>
+> ```yaml
+> nodeAccess:
+>   sshAuthorizedKeys:
+>     - "ssh-ed25519 AAAA... operator@workstation"   # preferred
+> ```
+>
+> ```yaml
+> nodeAccess:                      # lab only; rotate after
+>   password: "<choose one>"
+>   allowPasswordAuth: true        # BOTH are required
+> ```
+>
+> These apply at provisioning time, via cloud-init. An already-provisioned node
+> is not changed by editing them.
+
 ```sh
 ssh -L 6443:192.168.0.206:6443 ironic@<cp-OOB-ip>
 

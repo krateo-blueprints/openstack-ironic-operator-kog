@@ -58,7 +58,11 @@ deploy-chart:
 	$(HELMK) upgrade --install baremetal-lifecycle ./charts/baremetal-lifecycle \
 		-n $(HELM_NAMESPACE) --create-namespace
 
-package-chart:
+package-chart:   # legacy: packages ONLY the deprecated baremetal-lifecycle
+	# Left as-is deliberately. It predates the other charts, is a local
+	# convenience, and CI does its own `helm package` over every chart directory
+	# rather than calling this. The chart it names is deprecated -- use
+	# `chart-host` for anything you intend to install.
 	@mkdir -p dist
 	helm package charts/baremetal-lifecycle -d dist/
 
@@ -153,19 +157,59 @@ smoke-test:   # drive a fake node enroll->active against the local Ironic (CLEAN
 	IRONIC_API=http://localhost:6385 CLEANUP=$${CLEANUP:-1} ./scripts/smoke-test-ironic.sh; rc=$$?; \
 	kill $$pf 2>/dev/null; exit $$rc
 
-KRATEO_CORE_VERSION ?= 1.0.0
+# 2.13.62, corrected 2026-11-07, and the CHANGE OF SOURCE below matters as much
+# as the number. This said 1.0.0, installed from the https://charts.krateo.io
+# index -- and that index's newest core-provider chart IS 1.0.0 (appVersion
+# 1.0.0), a different and older lineage from the 2.13.62 this cluster actually
+# runs, which the index does not carry at all. So `make krateo-up` would have
+# REPLACED a working composition engine with a years-old one, in the same way
+# the comment below describes for oasgen, and for the same reason: the real
+# releases live in the OCI registry.
+#
+# Found by not running the target. I needed to upgrade oasgen only, read what
+# krateo-up would also touch, and checked the installed version first -- which
+# is also how I learned this cluster is 2.13.62 and not the 2.13.59 I had been
+# telling people and had named a branch after.
+#
+# Not just ours: the core-provider session measured that index afterwards and
+# found 71 core-provider versions there, newest 1.0.1-rc1 / 1.0.0, NO 2.x at
+# all, and no core-provider-crds chart -- which is why the CRDs line above also
+# has to come from OCI. Their own README example pinned a stale 2.12.4, the same
+# trap from the right registry. Being fixed upstream in
+# krateo-platformops/core-provider#389 ("install the current release from OCI,
+# and warn off the charts.krateo.io index"), open as of 2026-11-07. Until that
+# lands, assume any core-provider or oasgen version you find in that index is
+# the wrong lineage rather than merely old.
+KRATEO_CORE_VERSION ?= 2.13.62
 # The https://charts.krateo.io index stops at oasgen 0.11.1; the real releases
 # live in the OCI registry, which is where the 0.47.0 install actually came
 # from. Pinning the stale index version here meant `make krateo-up` would have
 # silently reinstalled a years-old provider over a working one.
-KRATEO_OASGEN_VERSION ?= 0.50.0
-KRATEO_RDC_VERSION    ?= 0.50.0
+# 0.54.1, bumped from 0.50.0 on 2026-11-07. Not 0.52.0 (which is the first with
+# #421) and emphatically not 0.53.0 or 0.54.0: a resource whose Configuration
+# uses an `apiKey` security scheme IN A HEADER cannot read its credential on
+# those two, so nothing reconciles and there is no workaround. This repo's OAS
+# declares exactly that -- `securitySchemes: {apiKey: {type: apiKey, in: header,
+# name: X-Auth-Token}}` with `security: [{apiKey: []}]` -- so 0.53.0 and 0.54.0
+# are both unusable here. Reported by the oasgen-provider session, which
+# corrected its own first answer that scoped the defect to 0.54.0 alone.
+# Safe pins are therefore <= 0.52.0 or >= 0.54.1.
+KRATEO_OASGEN_VERSION ?= 0.54.1
+# Kept explicit and equal rather than letting the chart default it. The 0.54.1
+# chart ships `rdc.image.tag: ""`, the helm idiom for "use appVersion", so the
+# default would resolve to the same thing -- but silently, and a future chart
+# could change what empty means. Both image tags verified present in GHCR
+# before this bump, because a tag that does not exist fails as ImagePullBackOff
+# several minutes into `helm --wait`.
+KRATEO_RDC_VERSION    ?= 0.54.1
 KRATEO_OCI            ?= oci://ghcr.io/krateo-platformops/charts
 
 krateo-up:    # install Krateo KOG (oasgen-provider) + composition engine (core-provider)
 	helm repo add krateo https://charts.krateo.io 2>/dev/null || true
 	helm repo update krateo
-	$(HELMK) upgrade --install krateo-core-provider krateo/core-provider \
+	$(HELMK) upgrade --install krateo-core-provider-crds $(KRATEO_OCI)/core-provider-crds \
+		-n krateo-system --create-namespace --version $(KRATEO_CORE_VERSION) --wait --timeout 5m
+	$(HELMK) upgrade --install krateo-core-provider $(KRATEO_OCI)/core-provider \
 		-n krateo-system --create-namespace --version $(KRATEO_CORE_VERSION) --wait --timeout 6m
 	$(HELMK) upgrade --install krateo-oasgen-provider-crds $(KRATEO_OCI)/oasgen-provider-crds \
 		-n krateo-system --create-namespace --version $(KRATEO_OASGEN_VERSION) --wait --timeout 5m
@@ -211,7 +255,12 @@ provision-demo:
 	  sleep 12; \
 	done
 
-LIFECYCLE_CHART_VERSION ?= $(shell awk '/^version:/ {print $$2; exit}' charts/baremetal-lifecycle/Chart.yaml)
+# LIFECYCLE_CHART_VERSION removed 2026-11-08. Its only consumer was the
+# `kubectl cp` of the lifecycle tgz, deleted when chart-host became
+# ConfigMap-backed and that chart was deprecated. It had exactly one mention
+# left -- its own definition -- while sitting next to three CHART_VERSION
+# variables that are still live, so the next reader bumping versions would have
+# updated an input nothing consumes. /code-review caught it.
 DISCOVERY_CHART_VERSION ?= $(shell awk '/^version:/ {print $$2; exit}' charts/baremetal-discovery/Chart.yaml)
 HOST_CHART_VERSION      ?= $(shell awk '/^version:/ {print $$2; exit}' charts/baremetal-host/Chart.yaml)
 CLUSTER_CHART_VERSION   ?= $(shell awk '/^version:/ {print $$2; exit}' charts/kubernetes-cluster/Chart.yaml)
@@ -223,7 +272,9 @@ chart-host:   # package all four charts and serve them from a ConfigMap-backed n
 	# compositions from 2026-11-04T14:17 until 2026-11-07, and the condition it
 	# produced (reason=Unavailable, a chart-inspector 500 wrapping a 404) sent me
 	# looking at child health for three days.
-	helm package charts/baremetal-lifecycle -d dist/
+	# baremetal-lifecycle is DEPRECATED (see its Chart.yaml) and is no longer
+	# packaged or served here. The ConfigMap MERGES, so the copy already in it
+	# stays served and an existing composition pinning 0.3.2 still resolves.
 	helm package charts/baremetal-discovery -d dist/
 	helm package charts/baremetal-host      -d dist/
 	helm package charts/kubernetes-cluster  -d dist/
@@ -235,18 +286,36 @@ chart-host:   # package all four charts and serve them from a ConfigMap-backed n
 		echo "ERROR: local/chartrepo.yaml's readiness probe does not name baremetal-host-$(HOST_CHART_VERSION).tgz."; \
 		echo "       Update the probe path when HOST_CHART_VERSION changes, or Ready stops meaning anything."; \
 		exit 1; }
-	$(KUBECTL) -n $(IRONIC_NS) create configmap chartrepo-charts \
-		--from-file=dist/baremetal-lifecycle-$(LIFECYCLE_CHART_VERSION).tgz \
-		--from-file=dist/baremetal-discovery-$(DISCOVERY_CHART_VERSION).tgz \
-		--from-file=dist/baremetal-host-$(HOST_CHART_VERSION).tgz \
-		--from-file=dist/kubernetes-cluster-$(CLUSTER_CHART_VERSION).tgz \
-		--dry-run=client -o yaml | $(KUBECTL) apply -f -
-	$(KUBECTL) apply -f local/chartrepo.yaml
-	# This rollout IS the verification, and that is the point of probing a chart
-	# path instead of `/`: the pod cannot become Ready unless nginx returns 200
-	# for a real chart tarball. The old target's `rollout status` proved only
-	# that nginx had started, which it does just as happily with an empty repo.
+	# MERGE, never regenerate. `create configmap --from-file=... | apply` used to
+	# build the ConfigMap from only today's four versions, and apply PRUNES keys
+	# it no longer lists -- so bumping baremetal-host to 0.6.4 would DELETE
+	# baremetal-host-0.6.3.tgz, which manifests/compositiondefinition-baremetal-host.yaml
+	# still pins, bringing back the chart-inspector 500-wrapping-404 this whole
+	# arrangement exists to prevent. Found by /code-review before it happened.
+	# hack/chartrepo-sync.py reads the live ConfigMap, adds today's packages, and
+	# refuses to grow past a budget rather than failing inside the API server.
+	python3 hack/chartrepo-sync.py \
+		--namespace $(IRONIC_NS) --kubeconfig $(KUBECONFIG_FILE) --context $(KCTX) \
+		dist/baremetal-discovery-$(DISCOVERY_CHART_VERSION).tgz \
+		dist/baremetal-host-$(HOST_CHART_VERSION).tgz \
+		dist/kubernetes-cluster-$(CLUSTER_CHART_VERSION).tgz \
+		| $(KUBECTL) apply --server-side --force-conflicts -f -
+	$(KUBECTL) -n $(IRONIC_NS) apply -f local/chartrepo.yaml
+	# The rollout is necessary and NOT sufficient. The claim that it "IS the
+	# verification" was wrong and /code-review caught it: on a RE-RUN the
+	# Deployment spec is unchanged, so `apply` is a no-op, the pod is already
+	# Ready against the OLD ConfigMap, and `rollout status` returns in
+	# milliseconds. kubelet propagates the new ConfigMap on its periodic sync, up
+	# to a minute later, and for that window nginx 404s the version just
+	# published while this target reports success. The readiness probe only ever
+	# proved the first run.
 	$(KUBECTL) -n $(IRONIC_NS) rollout status deploy/chartrepo --timeout=120s
+	# So assert what actually matters: the pod SERVES every version the ConfigMap
+	# holds. Kept in a script rather than inline shell -- the first attempt at
+	# this was a nested Makefile loop that a safety check refused because a stray
+	# character made it unparseable, which is the right verdict for that shape.
+	python3 hack/chartrepo-wait.py --namespace $(IRONIC_NS) \
+		--kubeconfig $(KUBECONFIG_FILE) --context $(KCTX)
 
 check-examples:   # every manifest a reader is told to apply would actually apply
 	# Catches the two defect classes that `helm lint` and kubeconform cannot see
@@ -269,16 +338,27 @@ check-mapping-sources:   # every request-direction fieldMapping reads from a fie
 	# resolves to nothing on the wire -- oasgen-provider #419, which cost five days
 	# here because the 406 it produced went unread.
 	#
-	# This reads the DOCUMENTS, so it answers before a single API call, and it is
-	# calibrated the hard way: it must find the two known-broken mappings and will
-	# exit NON-ZERO if it finds zero. The chain is merged -> tagged -> published ->
-	# deployed -> REGENERATED, and only the last rung decides what these documents
-	# render to. #421 is merged (8461460), in no released tag, the generator here
-	# is 0.50.0 -- and even once it ships, oasgen does not regenerate an existing
-	# CRD on upgrade (#453), so a deployed fix alone changes nothing. Verified on
-	# the stored side: node_id is ABSENT from both served CRD schemas. A clean run
-	# means the screen broke, not that the repo healed.
-	python3 -I scripts/check-mapping-sources.py
+	# This reads the DOCUMENTS, so it answers before a single API call.
+	#
+	# CORRECTED 2026-11-07. This comment said #421 was "merged (8461460), in no
+	# released tag", that "the generator here is 0.50.0", that node_id was "ABSENT
+	# from both served CRD schemas", and that "a clean run means the screen broke".
+	# All four were true when written; three are now false. #421 shipped in
+	# 0.52.0, this cluster runs 0.54.1, and the served CRDs regenerated -- measured
+	# on both, node_id present AND required. So the suppression the screen looked
+	# for has no remaining case, since every mapping it examines is an `inPath`
+	# mapping and #421 restores exactly those. It now checks what is still real:
+	# excludedSpecFields suppression, and status sources missing from
+	# additionalStatusFields or identifiers.
+	#
+	# A clean run is therefore good news, and `--self-test` is what makes it
+	# meaningful -- which is the honest version of the calibration this comment
+	# used to assert.
+	# Self-test FIRST and the && is load-bearing, as with the other three
+	# screens. This one had no self-test and used a hand-maintained KNOWN_BROKEN
+	# list instead, which rotted into a false alarm -- see the script docstring.
+	python3 -I scripts/check-mapping-sources.py --self-test && \
+		python3 -I scripts/check-mapping-sources.py
 
 regenerate-crds:   # force oasgen to re-read the OAS and rewrite the generated CRDs
 	# oasgen does NOT regenerate an existing CRD when the provider is upgraded --
@@ -353,12 +433,14 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 check: check-examples check-mapping-sources check-oas-defaults check-blueprints   # every standing screen
 	@echo "all standing screens passed"
 
-chart-host-pinned:   # restore the chart versions the LIVE CompositionDefinitions pin
-	# `chart-host` publishes whatever is in Chart.yaml today. The chartrepo pod has
-	# no volumes, so a cluster restart wipes everything it serves and leaves the
-	# pinned older versions missing -- which surfaces as a chart-inspector 500 and
-	# every composition going Synced=False. This rebuilds the pinned versions from
-	# git and uploads them. Run it after `chart-host` on every resume.
+chart-host-pinned:   # add the chart versions the LIVE CompositionDefinitions pin
+	# NO LONGER NEEDED ON EVERY RESUME. It used to be, because the chartrepo pod
+	# had no volumes and a restart wiped everything it served. The ConfigMap-backed
+	# chartrepo (local/chartrepo.yaml) keeps its content in etcd, so it survives
+	# pod restarts, node restarts and `docker stop`, and `chart-host` now MERGES
+	# rather than replacing. Run this once after a chart bump, when a
+	# CompositionDefinition still pins a version no longer in Chart.yaml -- it
+	# rebuilds that version from git and merges it in.
 	./scripts/chart-host-pinned.sh
 
 composition-up: chart-host   # install all four CompositionDefinitions
