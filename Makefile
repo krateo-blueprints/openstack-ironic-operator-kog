@@ -255,7 +255,12 @@ provision-demo:
 	  sleep 12; \
 	done
 
-LIFECYCLE_CHART_VERSION ?= $(shell awk '/^version:/ {print $$2; exit}' charts/baremetal-lifecycle/Chart.yaml)
+# LIFECYCLE_CHART_VERSION removed 2026-11-08. Its only consumer was the
+# `kubectl cp` of the lifecycle tgz, deleted when chart-host became
+# ConfigMap-backed and that chart was deprecated. It had exactly one mention
+# left -- its own definition -- while sitting next to three CHART_VERSION
+# variables that are still live, so the next reader bumping versions would have
+# updated an input nothing consumes. /code-review caught it.
 DISCOVERY_CHART_VERSION ?= $(shell awk '/^version:/ {print $$2; exit}' charts/baremetal-discovery/Chart.yaml)
 HOST_CHART_VERSION      ?= $(shell awk '/^version:/ {print $$2; exit}' charts/baremetal-host/Chart.yaml)
 CLUSTER_CHART_VERSION   ?= $(shell awk '/^version:/ {print $$2; exit}' charts/kubernetes-cluster/Chart.yaml)

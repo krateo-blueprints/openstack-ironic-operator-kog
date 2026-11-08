@@ -188,13 +188,22 @@ jobs:
               echo "::error::$which contains whitespace or a newline. It authenticates as a header but git rejects it inside a clone URL ('Malformed input to a URL function'), which is how the publisher uses it. Recreate the secret with no trailing newline -- printf '%s' instead of echo, and no copy-paste line break."
               exit 1 ;;
           esac
-          # Exactly what the publisher does, against the same repository, with
-          # output discarded so the URL never reaches the log.
-          if ! git ls-remote "https://x-access-token:${GH_TOKEN}@github.com/krateo-blueprints/charts" HEAD >/dev/null 2>&1; then
-            echo "::error::$which authenticates as a header but FAILS as git-over-HTTPS credentials against krateo-blueprints/charts. The publisher clones gh-pages with this token in the URL, so the channel publish cannot succeed. Check the secret for whitespace, a newline, or characters that need URL-encoding."
-            exit 1
-          fi
-          echo "$which authenticates against both repositories AND works as git-over-HTTPS credentials"
+          # THE git ls-remote GATE WAS REMOVED, 2026-11-08. It embedded the
+          # token in a clone URL and refused the release if that failed -- which
+          # was exactly right against publisher 1.0.0, and is STRICTER THAN THE
+          # TRUTH against 1.0.1: that version puts no token in any URL and
+          # authenticates git through gh's credential helper instead (measured:
+          # `x-access-token` appears zero times at 36ea357). So a token that is
+          # fine for the helper but not URL-safe would have been refused here,
+          # producing a release that yields nothing -- not even the OCI artifact,
+          # since `publish` depends on this job. /code-review caught that the
+          # justification had been fixed upstream by the same commit that wrote
+          # it.
+          #
+          # The whitespace check above stays: it is the ACTUAL failure mode tag
+          # 0.3.1 hit, it is cheap, and it is true regardless of which transport
+          # the publisher uses.
+          echo "$which authenticates against both repositories"
 
   # Republishes the same bytes into the Marketplace's blueprints channel. The
   # publisher stamps nothing: `krateo.io/source-repo` has to be committed in each
@@ -212,7 +221,12 @@ jobs:
     # property rather than a convenience one.
     #
     # Verified before pinning, not taken on report:
-    #   git ls-remote .../charts 'refs/tags/1.0.0^{}' -> a2d63ba50e138b17f678528d6d6be3afef48715a
+    #   git ls-remote .../charts 'refs/tags/1.0.1^{}' -> 36ea357cb0fe4b49628cc984d9939babf0049d03
+    # (This block described 1.0.0 / a2d63ba for a while after the pin moved to
+    #  1.0.1 in fd45819, whose subject was about the chartrepo ConfigMap. A
+    #  reader auditing the supply-chain pin would have read a verification of a
+    #  SHA that was not in use. /code-review caught it. When Dependabot advances
+    #  this pin, this record has to move with it.)
     # and at that SHA the publisher really does contain #6 and #7 --
     # `RELEASES_BASE` is hardcoded to the CHARTS repo's own releases
     # (github.com/krateo-blueprints/charts/releases/download), with zero

@@ -115,7 +115,15 @@ if [ "${#PENDING[@]}" -gt 0 ]; then
   python3 hack/chartrepo-wait.py --namespace "$IRONIC_NS" \
     --kubeconfig "$KUBECONFIG_FILE" --context "$KCTX"
 else
-  echo "  nothing to add: every pinned version is already in Chart.yaml"
+  # PENDING is empty in four distinct cases and this used to claim only one of
+  # them -- including the case where every git lookup FAILED and rc=1, so the
+  # last line on stdout said the repo was complete while the script was about to
+  # exit non-zero. /code-review caught it.
+  if [ "$rc" != "0" ]; then
+    echo "  nothing was added AND at least one lookup FAILED (see the FAIL lines above) -- the chartrepo is NOT complete"
+  else
+    echo "  nothing to add: every pinned version is either already served, OCI-served, or already in Chart.yaml"
+  fi
 fi
 
 echo "chartrepo now serving:"

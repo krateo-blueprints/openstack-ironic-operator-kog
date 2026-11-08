@@ -164,6 +164,22 @@ def main():
         if i + 1 < a.attempts:
             time.sleep(a.sleep)
 
+    # The asset gets the SAME retry budget as the index. It used to get exactly
+    # one shot: the loop above broke as soon as every pair was present in the
+    # index, then head_status ran once. But the release asset is a SEPARATE write
+    # from the gh-pages index write, so the lag the index retry exists for
+    # applies to it too -- and a 404 seconds after publication was reported as
+    # "in the index but its .tgz is not anonymously fetchable", a hard failure in
+    # the only consumer-credentials check in the pipeline. /code-review caught it.
+    def status_with_retry(url):
+        code = head_status(url)
+        for _ in range(a.attempts - 1):
+            if code == 200:
+                return code
+            time.sleep(a.sleep)
+            code = head_status(url)
+        return code
+
     failed = False
     for name, ver in wanted:
         url = found.get((name, ver))
@@ -175,7 +191,7 @@ def main():
             )
             failed = True
             continue
-        code = head_status(url)
+        code = status_with_retry(url)
         print(f"{name} {ver} -> {url}  http={code}")
         if code != 200:
             print(

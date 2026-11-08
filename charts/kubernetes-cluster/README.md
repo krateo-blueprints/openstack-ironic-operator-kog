@@ -65,6 +65,9 @@ kubectl apply -f compositiondefinition.yaml     # from inside this chart
 
 The chart version *is* the served apiVersion: `0.15.1` is served as
 `composition.krateo.io/v0-15-1`, and registering a version stops the previous one
+being served. `lifecycleApiVersion` must name the registered `baremetal-host`
+version; left empty it uses the one this chart was released against
+(`v0-6-3`).
 
 ### Migrating a live cluster to a new chart version, measured
 
@@ -110,9 +113,6 @@ So the sequence is:
 **Rollback:** revert the CompositionDefinition to 0.14.0. Because the chartrepo
 merges rather than replaces, `kubernetes-cluster-0.14.0.tgz` is still being
 served, so this is clean — which is the second reason step 1 comes first.
-being served. `lifecycleApiVersion` must name the registered `baremetal-host`
-version; left empty it uses the one this chart was released against
-(`v0-6-3`).
 
 A three-node control plane with three workers:
 
