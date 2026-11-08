@@ -59,12 +59,12 @@ Register `baremetal-host` **first**, then this one:
 helm pull oci://ghcr.io/krateo-blueprints/charts/baremetal-host --version 0.6.3
 kubectl apply -f compositiondefinition.yaml     # from inside that chart
 
-helm pull oci://ghcr.io/krateo-blueprints/charts/kubernetes-cluster --version 0.14.0
+helm pull oci://ghcr.io/krateo-blueprints/charts/kubernetes-cluster --version 0.15.0
 kubectl apply -f compositiondefinition.yaml     # from inside this chart
 ```
 
-The chart version *is* the served apiVersion: `0.14.0` is served as
-`composition.krateo.io/v0-14-0`, and registering a version stops the previous one
+The chart version *is* the served apiVersion: `0.15.0` is served as
+`composition.krateo.io/v0-15-0`, and registering a version stops the previous one
 being served. `lifecycleApiVersion` must name the registered `baremetal-host`
 version; left empty it uses the one this chart was released against
 (`v0-6-3`).
@@ -72,7 +72,7 @@ version; left empty it uses the one this chart was released against
 A three-node control plane with three workers:
 
 ```yaml
-apiVersion: composition.krateo.io/v0-14-0
+apiVersion: composition.krateo.io/v0-15-0
 kind: KubernetesCluster
 metadata:
   name: lab-ha

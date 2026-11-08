@@ -3,11 +3,11 @@ name: kubernetes-cluster
 description: Turn a set of physical servers into a working Kubernetes cluster. Declare the control plane and worker blades and the OS image; the composition provisions each machine through OpenStack Ironic, bootstraps the cluster with kubeadm, joins the rest and installs Cilium. Upstream Kubernetes from pkgs.k8s.io, unmodified -- this is an installer, not a distribution, and the 1.36 build it produces passes the CNCF conformance suite 443/443. Day-two operations (add and drain workers, reimage a node onto a new Kubernetes version, recover a failed control plane, snapshot etcd) are inputs on the same resource. Needs a reachable Ironic API and the baremetal-host blueprint registered alongside it.
 type: application
 
-# The chart version IS the served composition apiVersion: 0.14.0 is served as
-# composition.krateo.io/v0-14-0. Minor rather than patch because the input
+# The chart version IS the served composition apiVersion: 0.15.0 is served as
+# composition.krateo.io/v0-15-0. Minor rather than patch because the input
 # contract changed in three ways -- `cni.kubeProxyReplacement` and `conformance`
 # are now reachable, and the two inert `ironicApi*` inputs are gone.
-version: 0.14.0
+version: 0.15.0
 appVersion: "1.0"
 
 home: https://github.com/krateo-blueprints/openstack-ironic-operator-kog

@@ -1020,13 +1020,36 @@ __CONFIGDRIVE_HASH_SENTINEL__
      `kubernetes-cluster.cpToken` pulls the token via lookup. */}}
 {{- define "kubernetes-cluster.cpUserData" -}}
 #cloud-config
-ssh_pwauth: true
+{{- $na := default (dict) .Values.nodeAccess }}
+{{- $keys := default (list) $na.sshAuthorizedKeys }}
+{{- $pw := default "" $na.password }}
+{{- $pwAuth := and (default false $na.allowPasswordAuth) (ne $pw "") }}
+{{- /* DEFAULT-SAFE. This block used to hardcode `ssh_pwauth: true`, an unlocked
+       `ironic` user with `plain_text_passwd: baremetal`, no expiry and sudo --
+       in all three user-data paths, with no value or schema field to override
+       it. charts/kubernetes-cluster is a PUBLISHED Marketplace blueprint
+       (0.14.0 reached the channel on 2026-11-07), so every installer provisioned
+       blades with a known password and SSH password auth on.
+       Password login is now opt-in: it needs BOTH nodeAccess.allowPasswordAuth
+       and a non-empty nodeAccess.password. With neither set the account is
+       locked and ssh_pwauth is false. */}}
+ssh_pwauth: {{ $pwAuth }}
 chpasswd:
   expire: false
 users:
   - name: ironic
-    plain_text_passwd: baremetal
+{{- if $pwAuth }}
+    plain_text_passwd: {{ $pw | quote }}
     lock-passwd: false
+{{- else }}
+    lock-passwd: true
+{{- end }}
+{{- if $keys }}
+    ssh_authorized_keys:
+{{- range $keys }}
+      - {{ . | quote }}
+{{- end }}
+{{- end }}
     shell: /bin/bash
     sudo:
       - "ALL=(ALL) NOPASSWD:ALL"
@@ -1842,13 +1865,36 @@ runcmd:
 {{- define "kubernetes-cluster.workerUserData" -}}
 {{- $jc := include "kubernetes-cluster.joinCommand" . -}}
 #cloud-config
-ssh_pwauth: true
+{{- $na := default (dict) .Values.nodeAccess }}
+{{- $keys := default (list) $na.sshAuthorizedKeys }}
+{{- $pw := default "" $na.password }}
+{{- $pwAuth := and (default false $na.allowPasswordAuth) (ne $pw "") }}
+{{- /* DEFAULT-SAFE. This block used to hardcode `ssh_pwauth: true`, an unlocked
+       `ironic` user with `plain_text_passwd: baremetal`, no expiry and sudo --
+       in all three user-data paths, with no value or schema field to override
+       it. charts/kubernetes-cluster is a PUBLISHED Marketplace blueprint
+       (0.14.0 reached the channel on 2026-11-07), so every installer provisioned
+       blades with a known password and SSH password auth on.
+       Password login is now opt-in: it needs BOTH nodeAccess.allowPasswordAuth
+       and a non-empty nodeAccess.password. With neither set the account is
+       locked and ssh_pwauth is false. */}}
+ssh_pwauth: {{ $pwAuth }}
 chpasswd:
   expire: false
 users:
   - name: ironic
-    plain_text_passwd: baremetal
+{{- if $pwAuth }}
+    plain_text_passwd: {{ $pw | quote }}
     lock-passwd: false
+{{- else }}
+    lock-passwd: true
+{{- end }}
+{{- if $keys }}
+    ssh_authorized_keys:
+{{- range $keys }}
+      - {{ . | quote }}
+{{- end }}
+{{- end }}
     shell: /bin/bash
     sudo:
       - "ALL=(ALL) NOPASSWD:ALL"
@@ -2031,13 +2077,36 @@ runcmd:
 {{- /* v0.11.4: $jc + $ck are no longer baked at template time —
        join.sh polls the bootstrap CP's Node.spec.extra at runtime. */ -}}
 #cloud-config
-ssh_pwauth: true
+{{- $na := default (dict) .Values.nodeAccess }}
+{{- $keys := default (list) $na.sshAuthorizedKeys }}
+{{- $pw := default "" $na.password }}
+{{- $pwAuth := and (default false $na.allowPasswordAuth) (ne $pw "") }}
+{{- /* DEFAULT-SAFE. This block used to hardcode `ssh_pwauth: true`, an unlocked
+       `ironic` user with `plain_text_passwd: baremetal`, no expiry and sudo --
+       in all three user-data paths, with no value or schema field to override
+       it. charts/kubernetes-cluster is a PUBLISHED Marketplace blueprint
+       (0.14.0 reached the channel on 2026-11-07), so every installer provisioned
+       blades with a known password and SSH password auth on.
+       Password login is now opt-in: it needs BOTH nodeAccess.allowPasswordAuth
+       and a non-empty nodeAccess.password. With neither set the account is
+       locked and ssh_pwauth is false. */}}
+ssh_pwauth: {{ $pwAuth }}
 chpasswd:
   expire: false
 users:
   - name: ironic
-    plain_text_passwd: baremetal
+{{- if $pwAuth }}
+    plain_text_passwd: {{ $pw | quote }}
     lock-passwd: false
+{{- else }}
+    lock-passwd: true
+{{- end }}
+{{- if $keys }}
+    ssh_authorized_keys:
+{{- range $keys }}
+      - {{ . | quote }}
+{{- end }}
+{{- end }}
     shell: /bin/bash
     sudo:
       - "ALL=(ALL) NOPASSWD:ALL"

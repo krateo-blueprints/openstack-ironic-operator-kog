@@ -245,3 +245,22 @@ conformance:
   version: v0.8.0
   runOnBoot: false
   outputDir: /var/lib/conformance
+
+# How an operator reaches a provisioned node. DEFAULT-SAFE: with nothing set
+# here the `ironic` account is LOCKED and SSH password authentication is off.
+#
+# Until 2026-11-08 this chart hardcoded `plain_text_passwd: baremetal`,
+# `lock-passwd: false` and `ssh_pwauth: true` into all three cloud-init paths,
+# with no way to change them -- and it is a published Marketplace blueprint, so
+# every installer got blades with a known password. Password login now requires
+# BOTH flags below, which is why it cannot happen by accident.
+nodeAccess:
+  # Public keys added to the `ironic` user. The preferred way in.
+  sshAuthorizedKeys: []
+  # Plaintext password for the `ironic` user. Ignored unless
+  # allowPasswordAuth is also true. Lab use; rotate after.
+  password: ""
+  # Must be true AND password non-empty before any password login is rendered.
+  # Two flags rather than one so that neither a stray password nor a stray
+  # boolean is enough on its own.
+  allowPasswordAuth: false
