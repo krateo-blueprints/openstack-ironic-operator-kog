@@ -251,16 +251,46 @@ spec:
     # Convergent power fixed observation and drift DETECTION; it did not fix what
     # happens to Ready after a write.
     #
-    # That is oasgen-provider#509's territory and wider than its title suggests:
-    # #509 is about a fire-once verb that got its 202, and this is the UPDATE path
-    # getting a 202. Reported.
+    # oasgen-provider#509 is the nearest issue and it is CLOSED as NOT_PLANNED
+    # (2026-11-07T18:14:11Z, resolved by `gh issue view` rather than taken from a
+    # relay). Its title records the closure reasoning: "no live instance: the
+    # reported case was a missing responseTransform" -- that case was mine, and it
+    # did dissolve. What is measured above is a DIFFERENT instance on the
+    # ordinary convergent `update` path, so the closure's premise no longer
+    # holds. The oasgen-provider session is putting a re-open to Diego with this
+    # measurement attached; nobody has re-opened it unilaterally. Until that is
+    # decided, do not write here that a fix is coming.
     #
-    # Also NOT reproduced here, and so NOT refuted: /code-review predicted that a
-    # node with no power observation would have `create` rejected by a real Ironic
-    # (400/409 "can not be performed on node ... while it is in state enroll"),
-    # which is not a 404, so nothing would latch it and it would re-fire forever.
-    # This FAKE Ironic accepted the power-on in `enroll` with a 202 and the latch
-    # engaged, so the retry loop did not occur. A real Ironic may well reject it.
+    # THE CREATE-RETRY HAZARD IS REAL, confirmed from rdc source by the
+    # oasgen-provider session after this test could not reproduce it.
+    #
+    # My fake Ironic ACCEPTED a power-on for a node in `enroll` with a 202, so the
+    # latch engaged and no retry occurred. A real Ironic rejects that
+    # ("can not be performed on node ... while it is in state enroll"), and their
+    # reading of the code says what happens then:
+    #
+    #   a non-404 EXISTENCE failure  -> returns an error, no create is dispatched
+    #   a create that IS dispatched
+    #     and fails 400/409          -> error -> ReconcileError -> requeue ->
+    #                                   retried, WITH NO COUNTER AND NO TERMINAL
+    #                                   STATE
+    #   maxDriftRepeats = 5          -> covers UPDATES ONLY; there is no
+    #                                   equivalent for creates
+    #
+    # So on a real Ironic this re-fires indefinitely. The asymmetry is the finding:
+    # a 403 brakes PERMANENTLY (suppressing the verb from one response) while a
+    # 400/409 does not brake at all -- too aggressive on one status, too permissive
+    # on every other.
+    #
+    # THIS REPO IS THE INPUT THAT PRODUCES IT: charts/baremetal-host renders
+    # NodePower as soon as `spec.online` is set, which can precede `manageable`.
+    # And it cannot be gated here, because gating would need the node's
+    # provision_state at RENDER time -- the chart-render-time observation this
+    # project forbids, and which the old rename scheme was removed for using.
+    # So the brake belongs upstream. Not filed as a defect: it is read from code
+    # and predicted, not measured, and a prediction should not be filed as one.
+    # If a real Ironic in `enroll` is ever reached and it does re-fire, that is
+    # the measurement and it gets filed then.
     identifiers:
       - node_id
     additionalStatusFields:
