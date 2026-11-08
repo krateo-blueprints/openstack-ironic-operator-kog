@@ -131,7 +131,12 @@ failed tags it took):
 Register `baremetal-host` **first** — `kubernetes-cluster` renders its resources.
 
 `baremetal-discovery` and `baremetal-lifecycle` are the superseded split that
-`baremetal-host` absorbed and are not published as blueprints. One caveat a
+`baremetal-host` absorbed and are not published as blueprints.
+**`baremetal-lifecycle` is deprecated as of 2026-11-08** (`deprecated: true` in
+its `Chart.yaml`, so `helm install` warns) and is no longer packaged by
+`make chart-host`: its `transition-power.yaml` still documents the fire-once
+NodePower contract that convergent power replaced, and it omits
+`spec.configurationRef`, which the generated kind marks required. One caveat a
 reader needs: `baremetal-lifecycle` **0.3.1 is in the channel** — published from
 here on or before 2026-08-19 — and it is the only entry from this repo there.
 Measured 2026-11-07 against the live index, with `baremetal-lifecycle` as the

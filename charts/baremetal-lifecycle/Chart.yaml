@@ -1,5 +1,23 @@
 apiVersion: v2
+# DEPRECATED 2026-11-08. `baremetal-host` replaces this chart: it absorbed the
+# discovery/lifecycle split into one CR per machine for its whole lifecycle.
+#
+# Why it is deprecated rather than fixed or deleted. Zero live
+# BaremetalLifecycle compositions, and its templates/transition-power.yaml still
+# documents the FIRE-ONCE NodePower contract -- name-encodes-target, "fires
+# exactly once per intent", "a 409 is harmless because the prior CR sits in
+# Pending and is never re-fired". NodePower became convergent on 2026-11-07, so
+# all three sentences are false. It also omits `spec.configurationRef`, which the
+# generated kind marks REQUIRED, so any NodePower it rendered would be rejected
+# outright. Fixing it would mean maintaining two implementations of one
+# lifecycle; deleting it would leave 0.3.1 installable from the Marketplace
+# channel with no source in this repo, and the org publishing standard forbids
+# deleting a stored tarball.
+#
+# `deprecated: true` is Helm's own flag: `helm install` warns, and the
+# Marketplace index carries it. 0.3.1 stays published and resolvable.
 name: baremetal-lifecycle
+deprecated: true
 description: Helm chart for Ironic bare metal server provisioning via composition-dynamic-controller. Creates a Node CR + Port CRs (synced by KOG) and per-state NodeProvision CRs that drive Ironic from `enroll` to `active`. Inspection is OUT OF SCOPE - use the sibling `baremetal-discovery` chart first if you need inventory before provisioning.
 type: application
 version: 0.3.2

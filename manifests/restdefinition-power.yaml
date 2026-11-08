@@ -251,15 +251,18 @@ spec:
     # Convergent power fixed observation and drift DETECTION; it did not fix what
     # happens to Ready after a write.
     #
-    # oasgen-provider#509 is the nearest issue and it is CLOSED as NOT_PLANNED
-    # (2026-11-07T18:14:11Z, resolved by `gh issue view` rather than taken from a
-    # relay). Its title records the closure reasoning: "no live instance: the
-    # reported case was a missing responseTransform" -- that case was mine, and it
-    # did dissolve. What is measured above is a DIFFERENT instance on the
-    # ordinary convergent `update` path, so the closure's premise no longer
-    # holds. The oasgen-provider session is putting a re-open to Diego with this
-    # measurement attached; nobody has re-opened it unilaterally. Until that is
-    # decided, do not write here that a fix is coming.
+    # oasgen-provider#509 tracks this, and it is OPEN again -- re-opened on
+    # Diego's call with the measurement above attached (verified here:
+    # `state=OPEN reason=REOPENED`, not taken from a relay; it had been closed
+    # NOT_PLANNED at 2026-11-07T18:14:11Z and this file said so for an hour).
+    #
+    # The closure was correct for the case as then understood: its title still
+    # reads "no live instance: the reported case was a missing responseTransform",
+    # and that case was mine and did dissolve. The update-path measurement is a
+    # different instance, which is why the premise no longer holds. A retitle is
+    # with Diego too -- "fire-once" and "no live instance" are both now wrong, and
+    # nobody is editing that title unilaterally; a previous relay about it already
+    # cost one restoration.
     #
     # THE CREATE-RETRY HAZARD IS REAL, confirmed from rdc source by the
     # oasgen-provider session after this test could not reproduce it.

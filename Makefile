@@ -58,7 +58,11 @@ deploy-chart:
 	$(HELMK) upgrade --install baremetal-lifecycle ./charts/baremetal-lifecycle \
 		-n $(HELM_NAMESPACE) --create-namespace
 
-package-chart:
+package-chart:   # legacy: packages ONLY the deprecated baremetal-lifecycle
+	# Left as-is deliberately. It predates the other charts, is a local
+	# convenience, and CI does its own `helm package` over every chart directory
+	# rather than calling this. The chart it names is deprecated -- use
+	# `chart-host` for anything you intend to install.
 	@mkdir -p dist
 	helm package charts/baremetal-lifecycle -d dist/
 
@@ -263,7 +267,9 @@ chart-host:   # package all four charts and serve them from a ConfigMap-backed n
 	# compositions from 2026-11-04T14:17 until 2026-11-07, and the condition it
 	# produced (reason=Unavailable, a chart-inspector 500 wrapping a 404) sent me
 	# looking at child health for three days.
-	helm package charts/baremetal-lifecycle -d dist/
+	# baremetal-lifecycle is DEPRECATED (see its Chart.yaml) and is no longer
+	# packaged or served here. The ConfigMap MERGES, so the copy already in it
+	# stays served and an existing composition pinning 0.3.2 still resolves.
 	helm package charts/baremetal-discovery -d dist/
 	helm package charts/baremetal-host      -d dist/
 	helm package charts/kubernetes-cluster  -d dist/
@@ -285,7 +291,6 @@ chart-host:   # package all four charts and serve them from a ConfigMap-backed n
 	# refuses to grow past a budget rather than failing inside the API server.
 	python3 hack/chartrepo-sync.py \
 		--namespace $(IRONIC_NS) --kubeconfig $(KUBECONFIG_FILE) --context $(KCTX) \
-		dist/baremetal-lifecycle-$(LIFECYCLE_CHART_VERSION).tgz \
 		dist/baremetal-discovery-$(DISCOVERY_CHART_VERSION).tgz \
 		dist/baremetal-host-$(HOST_CHART_VERSION).tgz \
 		dist/kubernetes-cluster-$(CLUSTER_CHART_VERSION).tgz \
