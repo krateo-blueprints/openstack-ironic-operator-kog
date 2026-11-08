@@ -213,6 +213,54 @@ spec:
     # stated intent -- "the whole point of the chart is continuous power
     # enforcement" -- and it is why the suppression had to move from a latch to a
     # comparison.
+    # THE UPDATE VERB IS NOW EXERCISED, 2026-11-08, on an ISOLATED cluster with a
+    # FAKE Ironic. /code-review was right that nothing had executed it: the
+    # measurement that certified this change records zero PUTs, so six CRs at
+    # Ready=True proved only that findby matches. The lab cluster's Ironic is a
+    # real one behind a hand-managed EndpointSlice (172.19.74.1) with
+    # driver=redfish nodes, so drift was NOT created there.
+    #
+    # Setup: kind cluster `ironic-arms`, oasgen + rdc 0.54.1, the in-cluster fake
+    # Ironic (enabled_power_interfaces = fake), one node created through the
+    # BaremetalNode CR -- not by curl -- which Ironic reported as
+    # power_state=None, target_power_state=None, provision_state=enroll.
+    #
+    # WHAT WORKED, each from a primary source rather than from a green condition:
+    #   create: PUT /v1/nodes/quickstart-node/states/power -> 202, in IRONIC's own
+    #           API log, exactly once. Node went to power_state='power on'.
+    #   update: a second CR with spec.target='power off' against an observed
+    #           'power on'. The rdc's own op label says `update` (1), NOT create;
+    #           additionalStatusFields populated (node_id, power_state, uuid), so
+    #           findby MATCHED and the transform's node_id lift works; the PUT
+    #           count went 1 -> 2; and IRONIC's node reached power_state='power
+    #           off'. Drift detection and correction both work end to end.
+    #
+    # WHAT DOES NOT, AND IT MATTERS: after the update's 202 the CR stays
+    # Ready=False/Pending with status.power_state STALE at 'power on' while the
+    # node is 'power off'. In a ~2 minute window the rdc logged exactly one event
+    # for that CR -- `event:update`, "Successfully requested update of external
+    # resource" -- and no observe after it. So Ready never returned to True
+    # within the window. Whether it converges on a longer resync is UNMEASURED;
+    # do not assume either way.
+    #
+    # The consequence for the composition roll-up, stated plainly because I got
+    # this wrong earlier: the six live CRs report Ready=True only because they
+    # were ALREADY converged when first observed -- target == observed, no call.
+    # A CR that actually has work to do ends at Pending, so the BaremetalHost
+    # composition goes back to Ready=False/Creating for as long as that lasts.
+    # Convergent power fixed observation and drift DETECTION; it did not fix what
+    # happens to Ready after a write.
+    #
+    # That is oasgen-provider#509's territory and wider than its title suggests:
+    # #509 is about a fire-once verb that got its 202, and this is the UPDATE path
+    # getting a 202. Reported.
+    #
+    # Also NOT reproduced here, and so NOT refuted: /code-review predicted that a
+    # node with no power observation would have `create` rejected by a real Ironic
+    # (400/409 "can not be performed on node ... while it is in state enroll"),
+    # which is not a 404, so nothing would latch it and it would re-fire forever.
+    # This FAKE Ironic accepted the power-on in `enroll` with a 202 and the latch
+    # engaged, so the retry loop did not occur. A real Ironic may well reject it.
     identifiers:
       - node_id
     additionalStatusFields:
