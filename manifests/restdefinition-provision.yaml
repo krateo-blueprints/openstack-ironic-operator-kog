@@ -157,9 +157,19 @@ spec:
       # so an automatic drift correction here would retry a destructive
       # operation precisely when it had just failed, in a loop.
       #
-      # So drift is made VISIBLE and nothing acts on it: status now carries
-      # provision_state, target_provision_state and uuid, and the composition
-      # can report honestly. Decided by the user 2026-11-07 when offered the
+      # So nothing acts on drift here. And to be exact about what that costs,
+      # because this comment claimed the opposite: with no responseTransform this
+      # kind's findby NEVER MATCHES, so `additionalStatusFields` NEVER POPULATE --
+      # provision_state, target_provision_state and uuid stay empty for the life
+      # of every CR. restdefinition-power.yaml records the measurement that
+      # proves it: an unmatched findby plus a `Pending` condition reports
+      # up-to-date without having observed anything, 323 observes, 0 creates, no
+      # status fields. /code-review caught the claim.
+      #
+      # So do NOT write a composition template against status.provision_state on
+      # a NodeProvision CR. The charts read provision_state off the
+      # BaremetalNode CR, which has a working responseTransform, and that is why
+      # nothing has broken. Decided by the user 2026-11-07 when offered the
       # convergent option.
       - action: create
         method: PUT

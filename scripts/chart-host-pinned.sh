@@ -106,10 +106,22 @@ if [ "${#PENDING[@]}" -gt 0 ]; then
   python3 hack/chartrepo-sync.py \
     --namespace "$IRONIC_NS" --kubeconfig "$KUBECONFIG_FILE" --context "$KCTX" \
     "${PENDING[@]}" | $K apply --server-side --force-conflicts -f -
+  # Wait for the mount, exactly as `make chart-host` does. Without this the
+  # listing below reports success while kubelet has not yet propagated the
+  # ConfigMap -- up to a minute -- so a caller going straight to
+  # `make composition-up` gets the chart-inspector 500-wrapping-404 this whole
+  # arrangement exists to prevent. /code-review caught that the same diff fixed
+  # this in the Makefile target and not here.
+  python3 hack/chartrepo-wait.py --namespace "$IRONIC_NS" \
+    --kubeconfig "$KUBECONFIG_FILE" --context "$KCTX"
 else
   echo "  nothing to add: every pinned version is already in Chart.yaml"
 fi
 
 echo "chartrepo now serving:"
-$K -n "$IRONIC_NS" exec "$POD" -- ls -1 /usr/share/nginx/html/ | grep '\.tgz$' | sed 's/^/    /'
+# `|| true` is load-bearing: under `set -euo pipefail` a grep that matches
+# nothing exits 1 and would kill the script AFTER all the work succeeded,
+# leaving a bare non-zero exit and no diagnostic.
+$K -n "$IRONIC_NS" exec "$POD" -- ls -1 /usr/share/nginx/html/ 2>/dev/null \
+  | { grep '\.tgz$' || true; } | sed 's/^/    /'
 exit $rc

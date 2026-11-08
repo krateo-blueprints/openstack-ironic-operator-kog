@@ -76,13 +76,31 @@ def audit(root="."):
             excluded = set(r.get("excludedSpecFields") or [])
             status = set(r.get("additionalStatusFields") or []) | set(r.get("identifiers") or [])
             verbs = r.get("verbsDescription") or []
-            # The cross-verb note that used to live here (a mapping on any verb
-            # removes the name for all verbs, oasgen #457) described the #419
-            # behaviour and no longer applies -- see the measurement below.
+            # A mapping on ANY verb removes the name from the spec for ALL verbs
+            # (oasgen #457), so suppression is computed across the whole
+            # resource. Still true for the non-path-parameter case; #421 only
+            # restores path parameters.
+            mapped_any = {m.get("inPath") for vv in verbs
+                          for k in ("fieldMapping", "requestFieldMapping")
+                          for m in (vv.get(k) or []) if m.get("inCustomResource")}
             for v in verbs:
                 for k in ("fieldMapping", "requestFieldMapping"):
                     for m in (v.get(k) or []):
                         src, name = m.get("inCustomResource") or "", m.get("inPath")
+                        # IS THIS A PATH PARAMETER? Decidable from the document:
+                        # it is one iff `{name}` appears in this verb's own path.
+                        # That matters because #421 restores a suppressed PATH
+                        # parameter's spec property and nothing else -- so the
+                        # suppression rule still applies to a mapping whose
+                        # inPath names a request-BODY field.
+                        #
+                        # The previous commit dropped the rule for EVERY mapping
+                        # on the strength of measuring exactly two, both path
+                        # params, and /code-review caught the over-generalisation:
+                        # with KNOWN_BROKEN emptied in the same change, a
+                        # reintroduced body-field suppression would have read as
+                        # a clean run.
+                        in_path = ("{" + str(name) + "}") in (v.get("path") or "")
                         if src.startswith("spec."):
                             fld = src[5:]
                             # THE MAPPING-SUPPRESSION RULE IS GONE, and that is a
@@ -103,8 +121,15 @@ def audit(root="."):
                             # `excludedSpecFields` suppression is NOT affected and
                             # is still checked: that removes the property outright
                             # and no generator fix restores it.
-                            ok = fld not in excluded
-                            why = "excluded"
+                            if fld in excluded:
+                                ok, why = False, "excluded"
+                            elif not in_path and fld in mapped_any:
+                                # Suppressed by its own declaration and NOT
+                                # restored by #421, because it is not a path
+                                # parameter of this verb.
+                                ok, why = False, "mapping-suppressed (not a path parameter)"
+                            else:
+                                ok, why = True, ""
                         elif src.startswith("status."):
                             fld = src[7:]
                             ok = fld in status
@@ -118,19 +143,45 @@ def audit(root="."):
 
 SELF_TEST_CASES = [
     # (name, restdefinition spec dict, must_be_reported)
+    # NOTE both of these carry an explicit `path`. They did not, and the
+    # sharpened rule rightly reported them: without `{node_id}` in the path a
+    # mapping is not a path parameter, so #421 does not restore it. The fixtures
+    # were underspecified, not the rule -- the real verbs are
+    # `/v1/nodes/{node_id}/states/power`.
     ("path mapping from its own name is FINE under #421 (the old false alarm)",
      {"identifiers": ["node_id"],
-      "verbsDescription": [{"action": "create", "requestFieldMapping":
+      "verbsDescription": [{"action": "create", "method": "PUT",
+                            "path": "/v1/nodes/{node_id}/states/power",
+                            "requestFieldMapping":
                             [{"inPath": "node_id", "inCustomResource": "spec.node_id"}]}]},
      False),
-    ("same mapping on two verbs is still one finding, not two",
+    ("the same PATH mapping on two verbs is still fine, and fires nothing",
      {"identifiers": ["node_id"],
       "verbsDescription": [
-          {"action": "create", "requestFieldMapping":
+          {"action": "create", "method": "PUT",
+           "path": "/v1/nodes/{node_id}/states/power", "requestFieldMapping":
            [{"inPath": "node_id", "inCustomResource": "spec.node_id"}]},
-          {"action": "update", "requestFieldMapping":
+          {"action": "update", "method": "PUT",
+           "path": "/v1/nodes/{node_id}/states/power", "requestFieldMapping":
            [{"inPath": "node_id", "inCustomResource": "spec.node_id"}]}]},
      False),
+    ("a BODY-field mapping suppressed by its own declaration -- MUST fire "
+     "(#421 restores path params only, and `target` is not in this path)",
+     {"verbsDescription": [{"action": "create", "method": "PUT",
+                            "path": "/v1/nodes/{node_id}/states/power",
+                            "requestFieldMapping": [
+                                {"inPath": "node_id", "inCustomResource": "spec.node_id"},
+                                {"inPath": "target", "inCustomResource": "spec.target"}]}]},
+     True),
+    ("the SAME excluded mapping on two verbs fires once, not twice -- covers the "
+     "dedup display added for the power kind",
+     {"excludedSpecFields": ["uuid"],
+      "verbsDescription": [
+          {"action": "get", "method": "GET", "path": "/v1/nodes/{uuid}",
+           "requestFieldMapping": [{"inPath": "uuid", "inCustomResource": "spec.uuid"}]},
+          {"action": "delete", "method": "DELETE", "path": "/v1/nodes/{uuid}",
+           "requestFieldMapping": [{"inPath": "uuid", "inCustomResource": "spec.uuid"}]}]},
+     True),
     ("excludedSpecFields really does remove the source -- MUST fire",
      {"excludedSpecFields": ["uuid"],
       "verbsDescription": [{"action": "get", "requestFieldMapping":
@@ -186,9 +237,13 @@ def self_test():
                 print(f"  FAIL  {name}: expected fire={must_fire}, got {fired} {found}")
                 fails += 1
             # the dedupe case additionally asserts the COUNT
-            if "one finding, not two" in name and len({(f, n, s) for f, n, s, _ in found}) > 1:
-                print(f"  FAIL  {name}: deduped set should hold at most 1, got {found}")
-                fails += 1
+            if "fires once, not twice" in name:
+                raw = len(found)
+                uniq = len({(f, n, s) for f, n, s, _ in found})
+                if not (raw == 2 and uniq == 1):
+                    print(f"  FAIL  {name}: expected 2 raw findings deduping to 1, "
+                          f"got raw={raw} uniq={uniq} {found}")
+                    fails += 1
         finally:
             shutil.rmtree(root, ignore_errors=True)
     print(f"  self-test: {len(SELF_TEST_CASES)} cases, {fails} failure(s)")

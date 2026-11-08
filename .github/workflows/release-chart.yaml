@@ -235,11 +235,15 @@ jobs:
       # falling back to it is how a release could publish with a token nobody
       # intended. It is also dead (401 on tag 0.3.0).
       #
-      # CONSEQUENCE, accepted: until the organisation secret
-      # CHARTS_PUBLISH_TOKEN exists, a release reaches GHCR and then fails at
-      # the preflight with a message naming the missing secret. That is the
-      # intended behaviour -- a legible failure rather than a publish with the
-      # wrong credential.
+      # CONSEQUENCE, accepted: with no valid token a release produces NOTHING,
+      # not even the OCI artifact, because `publish` depends on
+      # blueprints-token-preflight. This comment used to say the release
+      # "reaches GHCR and then fails at the preflight" -- which described the
+      # ordering before d3bd4a3 inverted it, and contradicted the job comment
+      # 100 lines above on the exact half-published question the inversion was
+      # made to settle. /code-review caught it, and a reader lands on this
+      # `secrets:` block precisely when the token is the question, which is the
+      # worst place for a stale answer.
       PUBLISH_TOKEN: ${{ secrets.CHARTS_PUBLISH_TOKEN }}
 
   # Fetch whatever URL the index ACTUALLY advertises, with no credentials. This
