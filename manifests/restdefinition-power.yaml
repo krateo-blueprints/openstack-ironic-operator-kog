@@ -61,6 +61,21 @@ spec:
     # that kind working. Do not re-add it by symmetry; read the block in that
     # file first.
     #
+    # SECOND, SEPARATE DEFECT in the same lift, also from /code-review and also
+    # measured: `target` and `power_state` are different value spaces, which is
+    # verbatim the reason the provision-side transform was reverted and which I
+    # never applied to power. oas/ironic-power.yaml documents PowerTarget as
+    # "power on | power off | rebooting | soft power off | soft rebooting", and
+    # `power_state` only ever holds "power on" or "power off". So a CR with
+    # target=rebooting, soft rebooting or soft power off can NEVER equal the
+    # lifted value: CompareExisting reports drift on every reconcile, `update`
+    # re-PUTs until rdc's maxDriftRepeats=5 brakes, and the CR then latches
+    # non-Ready and pins its composition at Ready=false.
+    #
+    # Latent only because charts/baremetal-host/templates/transition-power.yaml
+    # renders `ternary "power on" "power off"` and nothing else. The generated
+    # CRD accepts all five.
+    #
     # The two superseded reasons, kept because the error has a shape worth
     # recognising:
     #   (a) "node_id is not a field on listed nodes"          -- right about
@@ -374,9 +389,34 @@ spec:
         # surfaces as an error and a Ready=false blip on every reconcile until
         # the BMC settles.
         #
-        # Both fixed by preferring `target_power_state` and lifting nothing when
-        # neither field is present. Tested against all four shapes before
-        # applying (jq 1.7.1):
+        # HOLE 2 IS NOT FIXED, AND THIS COMMENT CLAIMED IT WAS. Measured
+        # 2026-11-08 against a real Ironic API, after /code-review challenged it:
+        #
+        #   GET /v1/nodes          -> 7 fields:
+        #     instance_uuid, links, maintenance, name, power_state,
+        #     provision_state, uuid
+        #     target_power_state ABSENT
+        #   GET /v1/nodes/<id>     -> 69 fields, target_power_state present
+        #
+        # So `.target_power_state // .power_state` can never select the left
+        # side: findby only ever sees the abridged collection, where the field
+        # does not exist. The in-flight double-PUT this was written to prevent is
+        # still possible, and `additionalStatusFields: target_power_state` can
+        # never populate -- which the live measurement already showed, listing
+        # only node_id, power_state and uuid, and I read past it.
+        #
+        # The jq test below is the worse part: it was run on hand-written objects
+        # CONTAINING target_power_state, which the real findby response cannot
+        # produce. A test whose input the system cannot generate proves nothing
+        # about the system, and I wrote it specifically to validate this fix.
+        #
+        # The real fix is a `get` verb -- `GET /v1/nodes/{node_id}`, as
+        # restdefinition-node.yaml already has -- so that Observe reads the full
+        # 69-field object once the resource is known and the field is actually
+        # there. Not added yet: it changes which verb Observe uses for a kind
+        # that drives real power, so it is a decision rather than an edit.
+        #
+        # Kept below for the record, and NOT as evidence:
         #   {power_state: "power on", target_power_state: null}
         #     -> node_id, target="power on"      settled: equals spec, no call
         #   {power_state: "power off", target_power_state: "power on"}
