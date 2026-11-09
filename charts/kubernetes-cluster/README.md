@@ -46,7 +46,7 @@ other nodes:      wait for it → provision → kubeadm join
 | | Version | How this was established |
 |---|---|---|
 | Krateo control plane | `>= 2.5.1` | the `krateoSupportedVersion` the sibling blueprints of this product declare |
-| core-provider | `2.13.62` | the version this blueprint runs under today |
+| core-provider | `2.13.65` | the version this blueprint runs under today -- core-provider and chart-inspector are 2.13.65 (upgraded 2026-11-05, §9.20); the five generated cdc controllers still run `composition-dynamic-controller:2.13.62` until the next `make krateo-up` converges them |
 | oasgen-provider | `0.50.0` | provides the Ironic KOG resources underneath |
 | `baremetal-host` blueprint | `0.6.3` | the version this chart renders by default (`lifecycleApiVersion`) |
 | Ironic API microversion | `>= 1.83` | below it the node look-up rejects `include_children` with a `406` |
