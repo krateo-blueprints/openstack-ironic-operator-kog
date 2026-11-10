@@ -41,14 +41,40 @@ spec:
     # /v1/nodes items carry `name`, never `node_id` -- so there is no response
     # value to compare.
     #
-    # And the reason there is none is an omission, not a property of Ironic.
-    # oas/ironic-power.yaml documents the findby as "matched on node_id,
-    # lifted from `name` by a responseTransform" -- and NEITHER this
-    # RestDefinition nor restdefinition-provision.yaml has a responseTransform
-    # at all (restdefinition-node.yaml has four). The transform the document
-    # specifies was never written. If someone adds it, findby starts matching
-    # and this fire-once design changes behaviour: do not add it without
-    # re-reading the Pending-guard measurement below.
+    # And the reason there was none was an omission, not a property of Ironic:
+    # oas/ironic-power.yaml documented the findby as "matched on node_id,
+    # lifted from `name` by a responseTransform", and no responseTransform had
+    # ever been written here. RESOLVED 2026-11-07 -- the transform is now on the
+    # findby verb below, together with the second lift the chart also always
+    # assumed (`target` from `power_state`) and the microversion header that
+    # makes `include_children` real. The paragraph above describes why findby
+    # used to fail and is kept for that reason only; it no longer describes
+    # current behaviour.
+    #
+    # restdefinition-provision.yaml has no responseTransform. One was added there
+    # on 2026-11-07 by symmetry with this file and REVERTED the same day, because
+    # both halves were wrong for that kind: the identifier lift would have made
+    # provision's `create` -- its ONLY PUT-performing verb -- unreachable, and
+    # `target` holds VERBS there (manage/provide/active/deleted/inspect/clean)
+    # against `provision_state`'s STATES, so five of the six targets the charts
+    # render could never match. Its findby still never matching is what keeps
+    # that kind working. Do not re-add it by symmetry; read the block in that
+    # file first.
+    #
+    # SECOND, SEPARATE DEFECT in the same lift, also from /code-review and also
+    # measured: `target` and `power_state` are different value spaces, which is
+    # verbatim the reason the provision-side transform was reverted and which I
+    # never applied to power. oas/ironic-power.yaml documents PowerTarget as
+    # "power on | power off | rebooting | soft power off | soft rebooting", and
+    # `power_state` only ever holds "power on" or "power off". So a CR with
+    # target=rebooting, soft rebooting or soft power off can NEVER equal the
+    # lifted value: CompareExisting reports drift on every reconcile, `update`
+    # re-PUTs until rdc's maxDriftRepeats=5 brakes, and the CR then latches
+    # non-Ready and pins its composition at Ready=false.
+    #
+    # Latent only because charts/baremetal-host/templates/transition-power.yaml
+    # renders `ternary "power on" "power off"` and nothing else. The generated
+    # CRD accepts all five.
     #
     # The two superseded reasons, kept because the error has a shape worth
     # recognising:
@@ -88,49 +114,201 @@ spec:
     # steady-state observes report up-to-date. "Performing REST call" appears only 5
     # times, but that message's emission conditions are unknown, so this does NOT
     # license "steady-state observes skip the HTTP call".
-    # THE FIRE-ONCE DESIGN MAKES ITS PARENT COMPOSITION PERMANENTLY NOT-READY.
-    # Measured end to end 2026-11-07, and it resolves a question that was open
-    # for three days.
+    # CONVERGENT AS OF 2026-11-07, AND MEASURED. Everything this file used to say
+    # about a "fire-once" design is superseded by the verbs below -- kept short
+    # here rather than deleted, because the history is why the fix is shaped the
+    # way it is.
     #
-    # All six live NodePower CRs report:
-    #   Ready  = False, reason=Pending
-    #   Synced = True,  reason=ReconcileSuccess
-    #   status keys: ['conditions'] only
+    # Measured immediately after applying it, all six live NodePower CRs:
+    #   Ready = True, reason=Available          (observed, not latched)
+    #   status.node_id    = blade01 .. blade06  (lifted from `name`)
+    #   status.power_state = "power on"         (lifted, and compared)
+    #   status.uuid        = populated          (additionalStatusFields, finally)
+    #   spec.target == status.power_state  =>  no drift  =>  no PUT fired
     #
-    # `Pending` is the 202 guard this file relies on: it is what stops the PUT
-    # re-firing, and for a fire-once action there is nothing further to observe,
-    # so it is the TERMINAL state rather than a transient one.
+    # All six matched, including blade01/04/05/06, which are enclosure CHILDREN.
+    # `include_children` needs microversion >= 1.83 and children are absent from
+    # the collection without it.
     #
-    # core-provider's roll-up (childhealth.go at 2.13.59) classifies a child
-    # whose Ready is not True, with a reason other than Unavailable /
-    # AuthorizationDenied (failed) or ZeroEvidence / NotObserved (unevaluated),
-    # as CONVERGING -- and any converging child holds the parent at
-    # `Ready=False/Creating`. `Pending` is in that set. Measured consequence,
-    # with the parent's own message naming the child:
+    # THE STATIC HEADER BELOW IS REDUNDANT, MEASURED 2026-11-07. The microversion
+    # already reaches the wire from the GENERATED SPEC PROPERTY, which the CRD
+    # declares required with `default: "1.109"`, so every CR carries it without
+    # anyone setting it. One-variable test on `provision` (zero live CRs, static
+    # findby header removed in BOTH arms, probe `node_id` deliberately naming no
+    # existing node so `create` could only 404):
     #
-    #   baremetalhosts/lab-ha-cp-blade01: False/Creating
-    #     "1 of 4 managed children are not ready:
-    #      nodepowers/openstack/lab-ha-cp-blade01-88585z57-power"
+    #   spec X-OpenStack-Ironic-API-Version = "1.1"    -> findby 406
+    #       condition: "observe failed: unexpected status: 406"
+    #   spec X-OpenStack-Ironic-API-Version = "1.109"  -> findby SUCCEEDS
+    #       (then create -> 404 "Node ... could not be found", as intended)
     #
-    # So all six BaremetalHost compositions can never report Ready=True while
-    # they manage a NodePower. This is honest propagation, not a bug in
-    # core-provider and not a bug in the rdc -- it is a collision between two
-    # correct designs: an action CR whose terminal state is `Pending`, and a
-    # composition that requires every child Ready.
+    # The only difference was the spec value, so the property ships as a header.
+    # oasgen #304 is about the CONFIGURATION-sourced header, which is a
+    # different path and really is dropped -- I had generalised it to this one.
     #
-    # Also note `additionalStatusFields: [uuid, power_state, target_power_state]`
-    # below produces NOTHING: status carries only `conditions`. That follows from
-    # the same never-match -- with no observed external resource there is no
-    # response to lift fields from. Coherent, but it means the CR holds no
-    # evidence of what it did.
+    # Keeping the static header anyway, as belt-and-braces: it pins the version
+    # regardless of what a CR carries, and a future CR that sets the property
+    # low would otherwise silently lose the child nodes. But it is NOT what made
+    # the six match, and this file claimed it was.
     #
-    # DO NOT "fix" this by rendering the NodePower outside the composition, or by
-    # dropping it from the chart. That hides the collision instead of resolving
-    # it. The open question is upstream and has been put to oasgen-provider:
-    # for a fire-once action CR with a 202 and nothing to observe, what is the
-    # intended terminal Ready? If `Pending` is intended-terminal, then no
-    # composition managing such a CR can ever be Ready, and that needs saying
-    # somewhere both components can see it.
+    # A CLAIM MADE HERE AND RETRACTED THE SAME DAY: that without the header the
+    # transform "would have matched 2 of 6 while looking like it worked". Not
+    # measured, and not possible. restdefinition-provision.yaml records the
+    # 2026-11-04 measurement: `include_children` without a microversion returns
+    # 406 "The minimal required API version should be 1.83". A 406 returns NO
+    # nodes, so the outcome would have been 0 of 6 WITH AN ERROR. Three things
+    # changed in one edit here -- transform, headers, update verb -- and 6 of 6
+    # is a measurement of the bundle, not of any member.
+    #
+    # A SECOND MECHANISM WAS WRITTEN HERE AND IS ALSO WRONG. It said: this findby
+    # ran with `include_children` and no microversion for days while the rdc
+    # logged 318 "External resource is up to date" and 5 errors (all DNS), so a
+    # 406 must have been on the wire each time and the not-found-plus-`Pending`
+    # path folded it into a benign state.
+    #
+    # Refuted by the oasgen-provider session, from code: `IsNotFoundError` is
+    # STRICTLY 404, so a 406 cannot reach the `Pending` guard at all -- it falls
+    # through to the error path, is logged at Error and returned to the runtime.
+    # Two declarations WOULD produce that folding -- `notFoundCodes` (remaps a
+    # declared status to a 404) and `tolerateCodes` (turns a declared status into
+    # a success with no body, which reads as up-to-date, no `Pending` needed) --
+    # and NEITHER IS DECLARED ANYWHERE in this repo's manifests, oas or charts.
+    # Grepped 2026-11-07 with a positive control.
+    #
+    # RESOLVED, and by the FIRST explanation rather than a third one. The lead
+    # that looked promising -- "Performing REST call" appearing 5 times in a
+    # 335-line log covering 323 observes -- dissolved too: that string is an
+    # ERROR message, emitted at seven `log.Error` sites in restResources.go, so
+    # 5 occurrences are the 5 DNS failures and its ABSENCE means the other ~318
+    # calls SUCCEEDED. The per-request line is `"Performing FindBy API call"` at
+    # Debug (restResources.go:448), so a log above Debug never contained the
+    # number being counted. Reported from code by the oasgen-provider session.
+    #
+    # With that, nothing exotic is needed and the original account holds:
+    #   findby was issued and returned 200 with a list of nodes;
+    #   no item carried `node_id`, because no responseTransform existed;
+    #   an unmatched findby is an ABSENCE, which with `Pending` set takes the
+    #     exists-and-up-to-date branch;
+    #   318 times, 0 creates, no errors.
+    # Every one of my embellishments was about WHY findby did not match -- first
+    # a suppressed spec property, then a silently-dropped query parameter, then a
+    # folded 406 -- and the plain answer was the one proved by the fix: there was
+    # no transform, so there was no `node_id` to compare.
+    #
+    # STILL UNMEASURED, and independent of the above: whether Ironic honoured
+    # `include_children` without a microversion on this cluster. It cannot have
+    # affected the 318, because nothing matched regardless of which nodes came
+    # back. The one-variable test on `provision` (zero live CRs: transform
+    # without the header, one throwaway CR, observe; then add the header and
+    # observe again) answers it, and the 2026-11-04 406 recorded in
+    # restdefinition-provision.yaml is evidence about THAT kind's path on THAT
+    # day, not about this one.
+    #
+    # WHAT IT REPLACED, in one paragraph. findby never matched, because the
+    # responseTransform that charts/baremetal-host/templates/transition-power.yaml
+    # has always described was never written. oasgen's latch then took over --
+    # restResources.go: not-found + a `Pending` condition makes Observe report
+    # "exists and up to date" WITHOUT having observed anything -- so nothing
+    # re-fired, `Ready` could never be True, and additionalStatusFields could
+    # never populate. One mechanism served the re-fire guard and destroyed
+    # observability, and the second was the price of the first. Measured in that
+    # state: 323 observes, 318 "up to date", 0 creates, and six CRs latched at
+    # Ready=False/Pending indefinitely.
+    #
+    # It also ran upward: core-provider's roll-up counts a `Pending` child as
+    # converging, so every BaremetalHost composition reported
+    # Ready=False/Creating permanently, naming the power CR. That is now filed as
+    # oasgen-provider#509 for the general case -- a kind that genuinely cannot be
+    # observed still needs an answer. This kind did not need one: it has a
+    # desired field and an observable one, so it was an ordinary resource all
+    # along and the latch was hiding that.
+    #
+    # The trade accepted knowingly: NodePower is now CONVERGENT. A blade powered
+    # off out-of-band will be powered back on, because that is drift. That is the
+    # stated intent -- "the whole point of the chart is continuous power
+    # enforcement" -- and it is why the suppression had to move from a latch to a
+    # comparison.
+    # THE UPDATE VERB IS NOW EXERCISED, 2026-11-08, on an ISOLATED cluster with a
+    # FAKE Ironic. /code-review was right that nothing had executed it: the
+    # measurement that certified this change records zero PUTs, so six CRs at
+    # Ready=True proved only that findby matches. The lab cluster's Ironic is a
+    # real one behind a hand-managed EndpointSlice (172.19.74.1) with
+    # driver=redfish nodes, so drift was NOT created there.
+    #
+    # Setup: kind cluster `ironic-arms`, oasgen + rdc 0.54.1, the in-cluster fake
+    # Ironic (enabled_power_interfaces = fake), one node created through the
+    # BaremetalNode CR -- not by curl -- which Ironic reported as
+    # power_state=None, target_power_state=None, provision_state=enroll.
+    #
+    # WHAT WORKED, each from a primary source rather than from a green condition:
+    #   create: PUT /v1/nodes/quickstart-node/states/power -> 202, in IRONIC's own
+    #           API log, exactly once. Node went to power_state='power on'.
+    #   update: a second CR with spec.target='power off' against an observed
+    #           'power on'. The rdc's own op label says `update` (1), NOT create;
+    #           additionalStatusFields populated (node_id, power_state, uuid), so
+    #           findby MATCHED and the transform's node_id lift works; the PUT
+    #           count went 1 -> 2; and IRONIC's node reached power_state='power
+    #           off'. Drift detection and correction both work end to end.
+    #
+    # WHAT DOES NOT, AND IT MATTERS: after the update's 202 the CR stays
+    # Ready=False/Pending with status.power_state STALE at 'power on' while the
+    # node is 'power off'. In a ~2 minute window the rdc logged exactly one event
+    # for that CR -- `event:update`, "Successfully requested update of external
+    # resource" -- and no observe after it. So Ready never returned to True
+    # within the window. Whether it converges on a longer resync is UNMEASURED;
+    # do not assume either way.
+    #
+    # The consequence for the composition roll-up, stated plainly because I got
+    # this wrong earlier: the six live CRs report Ready=True only because they
+    # were ALREADY converged when first observed -- target == observed, no call.
+    # A CR that actually has work to do ends at Pending, so the BaremetalHost
+    # composition goes back to Ready=False/Creating for as long as that lasts.
+    # Convergent power fixed observation and drift DETECTION; it did not fix what
+    # happens to Ready after a write.
+    #
+    # oasgen-provider#509 tracks this, and it is OPEN again -- re-opened on
+    # Diego's call with the measurement above attached (verified here:
+    # `state=OPEN reason=REOPENED`, not taken from a relay; it had been closed
+    # NOT_PLANNED at 2026-11-07T18:14:11Z and this file said so for an hour).
+    #
+    # The closure was correct for the case as then understood: its title still
+    # reads "no live instance: the reported case was a missing responseTransform",
+    # and that case was mine and did dissolve. The update-path measurement is a
+    # different instance, which is why the premise no longer holds. A retitle is
+    # with Diego too -- "fire-once" and "no live instance" are both now wrong, and
+    # nobody is editing that title unilaterally; a previous relay about it already
+    # cost one restoration.
+    #
+    # THE CREATE-RETRY HAZARD IS REAL, confirmed from rdc source by the
+    # oasgen-provider session after this test could not reproduce it.
+    #
+    # My fake Ironic ACCEPTED a power-on for a node in `enroll` with a 202, so the
+    # latch engaged and no retry occurred. A real Ironic rejects that
+    # ("can not be performed on node ... while it is in state enroll"), and their
+    # reading of the code says what happens then:
+    #
+    #   a non-404 EXISTENCE failure  -> returns an error, no create is dispatched
+    #   a create that IS dispatched
+    #     and fails 400/409          -> error -> ReconcileError -> requeue ->
+    #                                   retried, WITH NO COUNTER AND NO TERMINAL
+    #                                   STATE
+    #   maxDriftRepeats = 5          -> covers UPDATES ONLY; there is no
+    #                                   equivalent for creates
+    #
+    # So on a real Ironic this re-fires indefinitely. The asymmetry is the finding:
+    # a 403 brakes PERMANENTLY (suppressing the verb from one response) while a
+    # 400/409 does not brake at all -- too aggressive on one status, too permissive
+    # on every other.
+    #
+    # THIS REPO IS THE INPUT THAT PRODUCES IT: charts/baremetal-host renders
+    # NodePower as soon as `spec.online` is set, which can precede `manageable`.
+    # And it cannot be gated here, because gating would need the node's
+    # provision_state at RENDER time -- the chart-render-time observation this
+    # project forbids, and which the old rename scheme was removed for using.
+    # So the brake belongs upstream. Not filed as a defect: it is read from code
+    # and predicted, not measured, and a prediction should not be filed as one.
+    # If a real Ironic in `enroll` is ever reached and it does re-fire, that is
+    # the measurement and it gets filed then.
     identifiers:
       - node_id
     additionalStatusFields:
@@ -141,6 +319,134 @@ spec:
       - action: findby
         method: GET
         path: /v1/nodes
+        # The microversion, as a STATIC PER-VERB header. Not via the
+        # Configuration: oasgen generates that property as `header` (singular,
+        # from the OAS "in" value) while rest-dynamic-controller looks up
+        # `headers` (plural), so the lookup misses and the header is dropped
+        # with no error -- oasgen #304. Static per-verb headers take a
+        # different code path and do ship, which is why restdefinition-node.yaml
+        # carries this on all five of its verbs and its findby really does
+        # return 17 nodes.
+        #
+        # Required here for two separate reasons, added 2026-11-07:
+        #  1. `include_children=true` below needs microversion >= 1.83. Without
+        #     a microversion Ironic negotiates its MINIMUM (1.1) and the four
+        #     blades that are enclosure CHILDREN -- blade01, 04, 05, 06 -- are
+        #     simply absent from the only response the matcher sees. The
+        #     transform below would then match 2 of 6 and look like it worked.
+        #  2. Node lookup by name needs >= 1.5, and `name` is what the
+        #     transform lifts.
+        headers:
+          - name: X-OpenStack-Ironic-API-Version
+            value: "1.109"
+        # THE TRANSFORM THE DESIGN HAS ALWAYS ASSUMED, written 2026-11-07.
+        #
+        # charts/baremetal-host/templates/transition-power.yaml has described
+        # this since the CR was given a stable name: "its findby lifts the
+        # node's observed power state onto `target`, so RDC compares desired
+        # against actual every reconcile and calls update whenever they
+        # diverge." It was never implemented. Measured consequence before this:
+        # 323 observes, 318 "up to date", 0 creates, no status fields, and six
+        # CRs latched at Ready=False/Pending forever.
+        #
+        # TWO lifts are needed and only one is obvious:
+        #  - `node_id` from `name`, so findby matches at all. `isInResource`
+        #    compares a value taken FROM THE RESPONSE against spec/status, and
+        #    Ironic's node objects carry `name`, never `node_id` -- so without
+        #    this there is nothing to compare and the match cannot succeed.
+        #  - `target` from `power_state`, so DRIFT is visible.
+        #    comparison.CompareExisting walks the SPEC's keys and looks each one
+        #    up in the response; `target` is absent from a node object, so it
+        #    would be skipped outright and no divergence could ever be seen.
+        #    Lifting it is what turns "blade is off, spec says power on" into a
+        #    difference.
+        #
+        # Applied per list item, before matching, so the input is one node
+        # object. Guarded on each field: a node may legitimately have a null
+        # `name`, and adding a null key is worse than adding none.
+        # REVISED 2026-11-07 after /code-review found two holes in the first
+        # version, which was:
+        #   (if .name then .node_id = .name else . end)
+        #   | (if .power_state then .target = .power_state else . end)
+        #
+        # HOLE 1 -- a node with NO power observation was matched but not
+        # compared. `power_state` is null in `enroll`, and before the first BMC
+        # sync. The old guard still lifted `node_id`, so findby MATCHED
+        # (ResourceExists=true, so `create` unreachable) while skipping the
+        # `target` lift -- and CompareExisting skips a spec key absent from the
+        # response, so it reported no difference. Result: up-to-date, no create,
+        # no update, and `spec.target` never driven. The guard's rationale was
+        # right for `name` (null means "skip this item") and backwards for
+        # `power_state` (null means "never observed", which is exactly when the
+        # PUT must fire).
+        #
+        # HOLE 2 -- an in-flight transition looked like drift. After a 202 Ironic
+        # sets `target_power_state` and leaves `power_state` at the OLD value
+        # until the BMC confirms, seconds to a minute on real Redfish. Lifting
+        # `power_state` then compares stale-actual against desired, sees
+        # divergence, and fires a SECOND PUT into a node Ironic has locked --
+        # 409, which is not a 404 so it cannot reach the Pending branch and
+        # surfaces as an error and a Ready=false blip on every reconcile until
+        # the BMC settles.
+        #
+        # HOLE 2 IS NOT FIXED, AND THIS COMMENT CLAIMED IT WAS. Measured
+        # 2026-11-08 against a real Ironic API, after /code-review challenged it:
+        #
+        #   GET /v1/nodes          -> 7 fields:
+        #     instance_uuid, links, maintenance, name, power_state,
+        #     provision_state, uuid
+        #     target_power_state ABSENT
+        #   GET /v1/nodes/<id>     -> 69 fields, target_power_state present
+        #
+        # So `.target_power_state // .power_state` can never select the left
+        # side: findby only ever sees the abridged collection, where the field
+        # does not exist. The in-flight double-PUT this was written to prevent is
+        # still possible, and `additionalStatusFields: target_power_state` can
+        # never populate -- which the live measurement already showed, listing
+        # only node_id, power_state and uuid, and I read past it.
+        #
+        # The jq test below is the worse part: it was run on hand-written objects
+        # CONTAINING target_power_state, which the real findby response cannot
+        # produce. A test whose input the system cannot generate proves nothing
+        # about the system, and I wrote it specifically to validate this fix.
+        #
+        # The real fix is a `get` verb -- `GET /v1/nodes/{node_id}`, as
+        # restdefinition-node.yaml already has -- so that Observe reads the full
+        # 69-field object once the resource is known and the field is actually
+        # there. Not added yet: it changes which verb Observe uses for a kind
+        # that drives real power, so it is a decision rather than an edit.
+        #
+        # Kept below for the record, and NOT as evidence:
+        #   {power_state: "power on", target_power_state: null}
+        #     -> node_id, target="power on"      settled: equals spec, no call
+        #   {power_state: "power off", target_power_state: "power on"}
+        #     -> node_id, target="power on"      in flight: equals spec, no call
+        #   {power_state: null, target_power_state: null}
+        #     -> UNCHANGED, no node_id           never observed: no match,
+        #                                        create fires, PUT happens
+        #   {name: null, ...}
+        #     -> UNCHANGED                       unnamed node skipped
+        # findby lifts node_id, and ONLY when Ironic has actually observed a
+        # power state. Two separate reasons, both measured:
+        #
+        # It does not lift `target`: the collection has 7 fields and
+        # target_power_state is not one of them, and lifting `target` from
+        # `power_state` is actively wrong -- `target` accepts five values (power
+        # on, power off, rebooting, soft power off, soft rebooting) while
+        # power_state holds two, so three would show permanent drift.
+        # Comparison belongs on the `get` verb, which sees all 69 fields.
+        #
+        # And it REFUSES TO MATCH a node with power_state null, which is the
+        # state of a freshly enrolled node. Measured 2026-11-08 on the isolated
+        # cluster with the guard absent: findby matched, `get` had nothing to
+        # lift `target` from, an absent key reads as "no difference", no PUT
+        # fired, and the CR reported **Ready=True/Available** with status holding
+        # only node_id and uuid -- a FALSE GREEN claiming convergence while the
+        # node was unpowered. Not matching instead means ResourceExists=false and
+        # `create` drives the state, which is the only outcome that actually
+        # powers the node.
+        responseTransform:
+          inline: 'if (.name and .power_state) then .node_id = .name else . end'
         # v2026-11-04: Ironic's node COLLECTION omits child nodes unless asked.
         # Measured: GET /v1/nodes -> 3 nodes; ?include_children=true -> 17.
         # blade01/04/05/06 are children of an enclosure and are ABSENT without
@@ -152,9 +458,70 @@ spec:
           - name: include_children
             value: "true"
         identifiersMatchPolicy: OR
+      # THE GET VERB, added 2026-11-08 because findby cannot see what the
+      # comparison needs. Measured: GET /v1/nodes returns 7 fields and no
+      # target_power_state; GET /v1/nodes/<id> returns 69 and does. restResources
+      # picks `get` for a known resource and `findby` before it is known, so this
+      # is the verb that decides drift once a CR has been observed once -- and it
+      # is the shape restdefinition-node.yaml has used all along.
+      #
+      # Both lifts belong here: node_id so the comparison addresses the right
+      # fields, and target from target_power_state when a transition is in
+      # flight, falling back to power_state when it is not. That fallback is
+      # what makes an in-flight 202 read as already-converging instead of as
+      # fresh drift.
+      - action: get
+        method: GET
+        path: /v1/nodes/{node_id}
+        headers:
+          - name: X-OpenStack-Ironic-API-Version
+            value: "1.109"
+        responseTransform:
+          inline: 'if .name then .node_id = .name else . end | if (.target_power_state // .power_state) then .target = (.target_power_state // .power_state) else . end'
+        requestFieldMapping:
+          - inPath: node_id
+            inCustomResource: spec.node_id
       - action: create
         method: PUT
         path: /v1/nodes/{node_id}/states/power
+        headers:
+          - name: X-OpenStack-Ironic-API-Version
+            value: "1.109"
+        # The SAME body pinning as `update` below, added 2026-11-07. /code-review
+        # pointed out that only `update` had it, and the two cannot both be
+        # right: if Ironic really rejects a body carrying node_id,
+        # configurationRef and the microversion -- which is why update pins it --
+        # then this fallback would 400 at exactly the moment it is the only path
+        # left, and `create` has fired zero times ever, so nothing would surface
+        # it. Pinning both is the consistent reading.
+        requestTransform:
+          inline: '{target: .target} + (if .timeout then {timeout: .timeout} else {} end)'
+        requestFieldMapping:
+          - inPath: node_id
+            inCustomResource: spec.node_id
+      # THE VERB THE CHART'S "the update RDC already performs" REFERS TO.
+      # It did not exist until 2026-11-07, so that sentence performed nothing
+      # and no power drift was ever corrected.
+      #
+      # Same endpoint as `create`, which reads oddly and is correct: Ironic has
+      # no create/update distinction for power, only "drive to this state".
+      # `create` is kept rather than deleted because findby can still fail to
+      # match -- a node absent from the collection, or renamed in Ironic -- and
+      # that path must still drive the state rather than do nothing.
+      #
+      # requestTransform pins the body instead of trusting RDC's diff to contain
+      # exactly the right keys. Ironic's power endpoint takes {"target": ...}
+      # plus an optional timeout and rejects a body with foreign fields, and the
+      # spec also carries node_id, configurationRef and the microversion, none
+      # of which belong in it.
+      - action: update
+        method: PUT
+        path: /v1/nodes/{node_id}/states/power
+        headers:
+          - name: X-OpenStack-Ironic-API-Version
+            value: "1.109"
+        requestTransform:
+          inline: '{target: .target} + (if .timeout then {timeout: .timeout} else {} end)'
         requestFieldMapping:
           - inPath: node_id
             inCustomResource: spec.node_id

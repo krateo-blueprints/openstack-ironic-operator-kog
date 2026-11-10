@@ -46,7 +46,7 @@ other nodes:      wait for it → provision → kubeadm join
 | | Version | How this was established |
 |---|---|---|
 | Krateo control plane | `>= 2.5.1` | the `krateoSupportedVersion` the sibling blueprints of this product declare |
-| core-provider | `2.13.62` | the version this blueprint runs under today |
+| core-provider | `2.13.65` | the version this blueprint runs under today -- core-provider and chart-inspector are 2.13.65 (upgraded 2026-11-05, §9.20); the five generated cdc controllers still run `composition-dynamic-controller:2.13.62` until the next `make krateo-up` converges them |
 | oasgen-provider | `0.50.0` | provides the Ironic KOG resources underneath |
 | `baremetal-host` blueprint | `0.6.3` | the version this chart renders by default (`lifecycleApiVersion`) |
 | Ironic API microversion | `>= 1.83` | below it the node look-up rejects `include_children` with a `406` |
@@ -59,20 +59,65 @@ Register `baremetal-host` **first**, then this one:
 helm pull oci://ghcr.io/krateo-blueprints/charts/baremetal-host --version 0.6.3
 kubectl apply -f compositiondefinition.yaml     # from inside that chart
 
-helm pull oci://ghcr.io/krateo-blueprints/charts/kubernetes-cluster --version 0.14.0
+helm pull oci://ghcr.io/krateo-blueprints/charts/kubernetes-cluster --version 0.15.1
 kubectl apply -f compositiondefinition.yaml     # from inside this chart
 ```
 
-The chart version *is* the served apiVersion: `0.14.0` is served as
-`composition.krateo.io/v0-14-0`, and registering a version stops the previous one
+The chart version *is* the served apiVersion: `0.15.1` is served as
+`composition.krateo.io/v0-15-1`, and registering a version stops the previous one
 being served. `lifecycleApiVersion` must name the registered `baremetal-host`
 version; left empty it uses the one this chart was released against
 (`v0-6-3`).
 
+### Migrating a live cluster to a new chart version, measured
+
+> The worked example below is the **0.14.0 → 0.15.0** migration as measured on
+> 2026-11-08, and its version numbers are deliberately left alone: it is a dated
+> record, not a template. The current version is above.
+
+Investigated 2026-11-08 before touching anything, because `lab-ha` is a live
+3CP/3worker cluster. The risk is **not** where I assumed it was.
+
+**What is NOT a problem.** The CRD's storage version is `vacuum`, not the chart
+version, and `spec.conversion.strategy` is `None`. So the stored object is
+version-neutral: serving it under a new version name needs no data conversion,
+and the stored spec of a v0-14-0 CR contains nothing that v0-15-0 would reject
+(`nodeAccess` is new and optional, and is simply absent).
+
+**What IS the coupling: the label.** A live composition carries
+`krateo.io/composition-version: v0-14-0`, and the per-version controller selects
+on it. Register v0-15-0 and a `kubernetesclusters-v0-15-0-controller` appears
+selecting `v0-15-0` — which matches nothing until the existing CR's label moves.
+That, not data migration, is what leaves a cluster unreconciled.
+
+**And the ordering trap, which bites first.** The chartrepo serves what
+`make chart-host` last packaged. After bumping the chart in git, the repo's
+CompositionDefinition asks for `kubernetes-cluster-0.15.0.tgz` while the pod
+still serves only `0.14.0` — so applying the CD first gives chart-inspector a
+404 and the composition reports `reason=Unavailable` wrapping
+`500 ... failed to fetch ... 404`. Measured in exactly that state on
+2026-11-08: CD manifest at 0.15.0, chartrepo holding 0.14.0 only. This is the
+`rendered vs stored` trap: the repo declared a version the cluster did not
+serve.
+
+So the sequence is:
+
+1. `make chart-host` — packages 0.15.0 and MERGES it in, so 0.14.0 stays served
+   and a rollback has something to roll back to.
+2. Confirm the pod serves both (the target's `hack/chartrepo-wait.py` step does
+   this, and a re-run's `rollout status` does not).
+3. Apply the CompositionDefinition. v0-15-0 becomes served, v0-14-0 stops.
+4. Move the existing CR's `krateo.io/composition-version` label, or recreate the
+   CR. Until then the new controller selects nothing.
+
+**Rollback:** revert the CompositionDefinition to 0.14.0. Because the chartrepo
+merges rather than replaces, `kubernetes-cluster-0.14.0.tgz` is still being
+served, so this is clean — which is the second reason step 1 comes first.
+
 A three-node control plane with three workers:
 
 ```yaml
-apiVersion: composition.krateo.io/v0-14-0
+apiVersion: composition.krateo.io/v0-15-1
 kind: KubernetesCluster
 metadata:
   name: lab-ha

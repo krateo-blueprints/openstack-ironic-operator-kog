@@ -447,6 +447,29 @@ The decoded server URL is `https://<cp-data-ip>:6443`. Anyone with network acces
 
 ### Fallback — SSH-tunnel from a workstation that only reaches OOB
 
+> **You need `nodeAccess` set for this to work, from chart 0.15.0 onwards.**
+> Until 0.14.0 every node was provisioned with an unlocked `ironic` account,
+> the password `baremetal` and `ssh_pwauth: true`, hardcoded — so `ssh
+> ironic@...` below simply worked, and that is exactly why it was a defect.
+> 0.15.0 is default-safe: with `nodeAccess` unset the account is **locked** and
+> password authentication is **off**, so both commands in this section fail with
+> no way in. Set one of:
+>
+> ```yaml
+> nodeAccess:
+>   sshAuthorizedKeys:
+>     - "ssh-ed25519 AAAA... operator@workstation"   # preferred
+> ```
+>
+> ```yaml
+> nodeAccess:                      # lab only; rotate after
+>   password: "<choose one>"
+>   allowPasswordAuth: true        # BOTH are required
+> ```
+>
+> These apply at provisioning time, via cloud-init. An already-provisioned node
+> is not changed by editing them.
+
 ```sh
 ssh -L 6443:192.168.0.206:6443 ironic@<cp-OOB-ip>
 
@@ -493,9 +516,9 @@ When a symptom survives one chart cut, the next move is **diagnostics on the liv
 
 Concretely: SSH into the CP, run the relevant `grep`/`journalctl`/`crictl` commands, read the output. The 11-second etcd kill that started this whole journey was visible from `grep cgroupDriver` + `grep SystemdCgroup` in under a minute — we'd burned nine chart cuts speculating before doing that. Don't repeat that mistake.
 
-### Three traps that report success
+### Four traps that report success
 
-Both of these cost most of a day, and both share a shape: **the layer you are watching reports success while the thing you care about has failed.**
+Each of these cost most of a day, and all share a shape: **the layer you are watching reports success while the thing you care about has failed.**
 
 **Ironic `active` is not "the node booted".** It means Ironic wrote a disk image, which it did. Whether cloud-init then ran, got a route, installed packages or reached `kubeadm init` is invisible from Ironic — and invisible from the cluster, because a node whose cloud-init aborted publishes nothing, which is indistinguishable from a node whose cloud-init is still running. Port probes do not disambiguate it either: an installed-but-unconfigured kubelet listens on nothing, exactly like an uninstalled one. The only instrument that answers is the blade's own `/var/log/install-k8s.log`.
 
@@ -513,6 +536,40 @@ in "<unicode string>", line 903, column 3:   try:
 49,704 bytes of user-data, attached to the node, entirely inert. The tell is **sshd offering only `publickey`** long after deploy while the NICs are up: network stage yes, config stage no.
 
 `baremetal-host` ≥ 0.6.2 fails the render when `configDrive.userData` does not parse, naming the node and quoting the parser. Keep that guard. And when editing an embedded script, keep every line indented inside its block — a single-line `python3 -c` instead of a multi-line one, as the node-uuid lookup already does.
+
+**A served CRD version with no controller accepts your object and reconciles nothing.**
+
+`KubernetesCluster.spec.lifecycleApiVersion` pins the apiVersion the parent renders its
+`BaremetalHost` children at. core-provider deploys exactly **one** controller per
+CompositionDefinition, at the chart's *current* version. When the pin goes stale — `v0-6-2`
+while the installed chart is `0.6.3` — the CRD still **serves** `v0-6-2`, because old versions
+stay served. So the object validates, `kubectl apply --dry-run=server` accepts it, and it is
+created successfully.
+
+Then nothing happens. No helm release, no `BaremetalNode`, no error, no event, no failed
+condition, nothing red anywhere. Measured 2026-11-10: a newly added worker sat inert for
+**45 minutes** before we concluded it never would reconcile.
+
+**Fixing the pin is not sufficient, and this is the part that will catch you.**
+`krateo.io/composition-version` is stamped onto the object **at creation**. Moving the
+parent's pin leaves the existing child still labelled with the dead version and still inert —
+so the fix looks applied and changes nothing. Recovery is two steps:
+
+1. correct `spec.lifecycleApiVersion` to the served-and-controlled version, then
+2. **delete the inert child** so the parent re-renders it.
+
+After that it enrolled normally: 723s from delete to `active`, through the full
+`enroll → manageable → available → deploying → active` walk.
+
+> **Served and controlled are different populations.** `kubectl get crd -o jsonpath=…versions`
+> tells you what is served. Only the Deployment list tells you what is *controlled*. No API
+> joins the two, which is why this is invisible from the client side.
+
+If you build a check for this, scope it to **resource** kinds. The `<Kind>Configuration` CRDs
+are served and intentionally uncontrolled — they are resolved through `configurationRef`
+rather than reconciled — so a naive "every served version must have a controller" assertion
+flags them as broken and points the operator at the harmless half. Thanks to
+`openstack-nova-operator-kog` for measuring that distinction on their own corpus.
 
 ### Never drive a destructive one-shot from observed state
 

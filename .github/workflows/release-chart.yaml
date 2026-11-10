@@ -31,6 +31,9 @@ env:
 
 jobs:
   publish:
+    # Gated on the credential check above, so a release is all-or-nothing: see
+    # the comment on blueprints-token-preflight for why this inverted.
+    needs: blueprints-token-preflight
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -115,16 +118,25 @@ jobs:
 
   # A missing token otherwise surfaces from inside the reusable workflow, where
   # the message is about an unauthenticated git push rather than about what is
-  # actually wrong. This says it here, and does not run until the OCI push --
-  # the source of truth -- has succeeded.
+  # actually wrong. This says it here instead.
   #
-  # It is expected to PASS with no setup: krateo-blueprints is an Organisation
-  # (not a user account, as an earlier version of this comment wrongly claimed)
-  # and RELEASE_FEED_TOKEN is an org secret at visibility=all. The step now
-  # reports WHICH token it resolved, so a green preflight still says which
-  # credential a release used.
+  # RUNS BEFORE THE GHCR PUSH, inverted 2026-11-07. It used to carry
+  # `needs: publish` with the stated reason that it "does not run until the OCI
+  # push -- the source of truth -- has succeeded", so a credential problem could
+  # not block the real artifact. That reasoning is coherent and it is wrong under
+  # the org publishing standard, which rule 1 states as: a chart that is in GHCR
+  # and not in the index IS NOT PUBLISHED, because the Marketplace installs from
+  # the index and nothing re-resolves it against GHCR. Checking after the push
+  # is precisely how you reach that half-published state -- version in GHCR,
+  # absent from the index -- and tag 0.3.0 did exactly that: `publish`
+  # succeeded, both charts landed at 0.14.0 / 0.6.3, and the channel job then
+  # died on a 401.
+  #
+  # So the invariant is both or neither, and the cost is accepted: with no valid
+  # token a release now produces NOTHING, not even the OCI artifact. Raised by
+  # the openstack-as-a-service session against rule 7; being written into the
+  # standard as charts#9.
   blueprints-token-preflight:
-    needs: publish
     runs-on: ubuntu-latest
     steps:
       # PRESENCE IS NOT VALIDITY, and this step learned that the expensive way.
@@ -135,15 +147,17 @@ jobs:
       # not a preflight; it is a reassurance.
       - name: A publish token must be reachable AND authenticate
         env:
-          GH_TOKEN: ${{ secrets.CHARTS_PUBLISH_TOKEN || secrets.RELEASE_FEED_TOKEN }}
-          HAVE_REPO_SECRET: ${{ secrets.CHARTS_PUBLISH_TOKEN != '' }}
+          # Must be the SAME token the publish call uses. When these diverge the
+          # preflight validates a credential the publish will not send, which is
+          # the presence-is-not-validity defect this job already learned once.
+          GH_TOKEN: ${{ secrets.CHARTS_PUBLISH_TOKEN }}
         run: |
           set -euo pipefail
           if [ -z "${GH_TOKEN}" ]; then
-            echo "::error::No publish token is reachable. Set a repository secret CHARTS_PUBLISH_TOKEN (a CLASSIC PAT with the 'repo' scope; classic tokens have no granular contents:write), or restore the organisation secret RELEASE_FEED_TOKEN. See docs/MARKETPLACE.md."
+            echo "::error::CHARTS_PUBLISH_TOKEN is not set. It is now the ONLY credential this release uses for the channel (org publishing standard rule 7) -- the RELEASE_FEED_TOKEN fallback was removed deliberately. Set the ORGANISATION secret CHARTS_PUBLISH_TOKEN at visibility=all: a CLASSIC PAT with the 'repo' scope, since classic tokens have no granular contents:write. See docs/MARKETPLACE.md."
             exit 1
           fi
-          if [ "${HAVE_REPO_SECRET}" = "true" ]; then which=CHARTS_PUBLISH_TOKEN; else which=RELEASE_FEED_TOKEN; fi
+          which=CHARTS_PUBLISH_TOKEN
           echo "resolved: $which"
           # The publisher writes Releases on THIS repo and gh-pages on
           # krateo-blueprints/charts. A read of each is the cheapest thing that
@@ -151,10 +165,44 @@ jobs:
           # limit is deliberate -- a preflight should not make writes.
           for repo in "${GITHUB_REPOSITORY}" krateo-blueprints/charts; do
             if ! gh api "repos/$repo" --jq .full_name >/dev/null 2>&1; then
-              echo "::error::$which is set but does not authenticate against $repo. The channel publish will fail with 'HTTP 401: Bad credentials' after the OCI push has already succeeded. Rotate that token, or set a valid CHARTS_PUBLISH_TOKEN on this repository. See docs/MARKETPLACE.md."
+              echo "::error::$which is set but does not authenticate against $repo ('HTTP 401: Bad credentials'). Nothing has been published yet -- this job now runs before the GHCR push. Rotate it. See docs/MARKETPLACE.md."
               exit 1
             fi
           done
+          # AND IT MUST SURVIVE BEING PUT IN A URL. Added 2026-11-07 after tag
+          # 0.3.1: this preflight passed, `publish` pushed both charts to GHCR,
+          # and the publisher then died on
+          #   fatal: unable to access 'https://github.com/krateo-blueprints/charts/':
+          #          URL rejected: Malformed input to a URL function
+          # because it clones with the token in the userinfo of
+          #   https://x-access-token:${GH_TOKEN}@github.com/<index repo>
+          # `gh api` sends the token as an Authorization HEADER, where trailing
+          # whitespace or a newline is tolerated; curl rejects the same bytes
+          # inside a URL. So the token was PRESENT, AUTHENTICATED, and unusable.
+          #
+          # Presence is not validity, and validity in one transport is not
+          # validity in another. This step had already learned the first half the
+          # expensive way; this is the second.
+          case "${GH_TOKEN}" in
+            *[[:space:]]*)
+              echo "::error::$which contains whitespace or a newline. It authenticates as a header but git rejects it inside a clone URL ('Malformed input to a URL function'), which is how the publisher uses it. Recreate the secret with no trailing newline -- printf '%s' instead of echo, and no copy-paste line break."
+              exit 1 ;;
+          esac
+          # THE git ls-remote GATE WAS REMOVED, 2026-11-08. It embedded the
+          # token in a clone URL and refused the release if that failed -- which
+          # was exactly right against publisher 1.0.0, and is STRICTER THAN THE
+          # TRUTH against 1.0.1: that version puts no token in any URL and
+          # authenticates git through gh's credential helper instead (measured:
+          # `x-access-token` appears zero times at 36ea357). So a token that is
+          # fine for the helper but not URL-safe would have been refused here,
+          # producing a release that yields nothing -- not even the OCI artifact,
+          # since `publish` depends on this job. /code-review caught that the
+          # justification had been fixed upstream by the same commit that wrote
+          # it.
+          #
+          # The whitespace check above stays: it is the ACTUAL failure mode tag
+          # 0.3.1 hit, it is cheap, and it is true regardless of which transport
+          # the publisher uses.
           echo "$which authenticates against both repositories"
 
   # Republishes the same bytes into the Marketplace's blueprints channel. The
@@ -163,24 +211,54 @@ jobs:
   # `make check-blueprints` fails the build if it goes missing.
   publish-blueprints-channel:
     needs:
+      # `publish` already depends on blueprints-token-preflight, so naming it
+      # here too would be redundant rather than safer.
       - publish
-      - blueprints-token-preflight
-    uses: krateo-blueprints/charts/.github/workflows/publish-chart.yaml@main
+    # Pinned by FULL COMMIT SHA, with the version in the comment, per the org
+    # publishing standard (krateo-blueprints/charts PUBLISHING.md rule 9). NOT a
+    # moving major tag such as @1: whoever can move that tag could run code with
+    # CHARTS_PUBLISH_TOKEN in every caller at once, which is a supply-chain
+    # property rather than a convenience one.
+    #
+    # Verified before pinning, not taken on report:
+    #   git ls-remote .../charts 'refs/tags/1.0.1^{}' -> 36ea357cb0fe4b49628cc984d9939babf0049d03
+    # (This block described 1.0.0 / a2d63ba for a while after the pin moved to
+    #  1.0.1 in fd45819, whose subject was about the chartrepo ConfigMap. A
+    #  reader auditing the supply-chain pin would have read a verification of a
+    #  SHA that was not in use. /code-review caught it. When Dependabot advances
+    #  this pin, this record has to move with it.)
+    # and at that SHA the publisher really does contain #6 and #7 --
+    # `RELEASES_BASE` is hardcoded to the CHARTS repo's own releases
+    # (github.com/krateo-blueprints/charts/releases/download), with zero
+    # occurrences derived from `inputs.source_repo`, and the served-index check
+    # runs `env -u GH_TOKEN helm pull --repo`, which strips the token so the pull
+    # is genuinely anonymous.
+    #
+    # .github/dependabot.yml advances this; a SHA pin with nothing advancing it
+    # is worse than @main because it looks deliberate while going stale.
+    uses: krateo-blueprints/charts/.github/workflows/publish-chart.yaml@36ea357cb0fe4b49628cc984d9939babf0049d03 # 1.0.1
     with:
       source_repo: ${{ github.repository }}
       git_tag: ${{ github.ref_name }}
       channel: blueprints
       artifact: charts-dist-blueprints
     secrets:
-      # Same resolution the three sibling blueprint repos use
-      # (krateo-aws/azure/gcp-blueprint, .github/workflows/release-tag.yaml):
-      # a repository secret if one exists, otherwise the ORGANISATION secret
-      # RELEASE_FEED_TOKEN, which is visibility=all and therefore already
-      # reachable here. Verified 2026-11-06 rather than assumed: none of the
-      # three siblings holds a repo-level secret, and krateo-aws-blueprint run
-      # 37742845675 shows `publish-blueprints / publish` CONCLUDED SUCCESS --
-      # the job itself, not merely a green run with the job skipped.
-      PUBLISH_TOKEN: ${{ secrets.CHARTS_PUBLISH_TOKEN || secrets.RELEASE_FEED_TOKEN }}
+      # ONE TOKEN, NO FALLBACK -- standard rule 7. The `|| secrets.RELEASE_FEED_TOKEN`
+      # fallback that used to be here is gone on purpose: RELEASE_FEED_TOKEN is
+      # for the release-notes cross-org feed and is not an index credential, and
+      # falling back to it is how a release could publish with a token nobody
+      # intended. It is also dead (401 on tag 0.3.0).
+      #
+      # CONSEQUENCE, accepted: with no valid token a release produces NOTHING,
+      # not even the OCI artifact, because `publish` depends on
+      # blueprints-token-preflight. This comment used to say the release
+      # "reaches GHCR and then fails at the preflight" -- which described the
+      # ordering before d3bd4a3 inverted it, and contradicted the job comment
+      # 100 lines above on the exact half-published question the inversion was
+      # made to settle. /code-review caught it, and a reader lands on this
+      # `secrets:` block precisely when the token is the question, which is the
+      # worst place for a stale answer.
+      PUBLISH_TOKEN: ${{ secrets.CHARTS_PUBLISH_TOKEN }}
 
   # Fetch whatever URL the index ACTUALLY advertises, with no credentials. This
   # is the only check in this pipeline that uses the CONSUMER's credentials
@@ -216,8 +294,21 @@ jobs:
       - name: The URL the index advertises must be fetchable with no credentials
         run: |
           set -euo pipefail
-          # PyYAML is normally present on the runner; do not assume it.
-          python3 -c "import yaml" 2>/dev/null || pip install --quiet pyyaml
+          # PyYAML is needed only by hack/verify-channel-entry.py, to parse the
+          # 1.6 MB channel index -- the chart versions below use awk instead.
+          #
+          # The fallback had to change. `pip install pyyaml` on a runner with an
+          # externally-managed Python exits non-zero
+          # (error: externally-managed-environment) and, under `set -e`, fails
+          # this step with a message about pip rather than about a missing
+          # dependency -- killing the only consumer-credentials check in the
+          # pipeline. It had never run, because the image ships PyYAML, so the
+          # broken branch was invisible. /code-review caught it.
+          if ! python3 -c "import yaml" 2>/dev/null; then
+            pip install --quiet --break-system-packages pyyaml \
+              || pip install --quiet --user pyyaml \
+              || { echo "::error::PyYAML is unavailable and could not be installed; hack/verify-channel-entry.py needs it to parse the channel index"; exit 1; }
+          fi
           # An ARRAY, expanded quoted. An unquoted "$pairs" string happens to
           # work in bash and silently does not in zsh, where the whole string
           # arrives as one argv entry -- and this script's argparse ACCEPTED
@@ -226,7 +317,11 @@ jobs:
           # on which shell splits what.
           pairs=()
           for chart in kubernetes-cluster baremetal-host; do
-            ver="$(python3 -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))['version'])" "charts/$chart/Chart.yaml")"
+            # awk, the idiom the Makefile already uses -- no YAML parser needed
+            # for a top-level scalar. Verified to give the same answer as the
+            # yaml read for both charts before switching.
+            ver="$(awk '/^version:/{print $2; exit}' "charts/$chart/Chart.yaml")"
+            [ -n "$ver" ] || { echo "::error::no version: line in charts/$chart/Chart.yaml"; exit 1; }
             pairs+=("$chart=$ver")
           done
           python3 hack/verify-channel-entry.py "${pairs[@]}"

@@ -788,6 +788,33 @@
       },
       "title": "CNCF conformance runner",
       "description": "Install the CNCF conformance test runner onto the node that bootstraps the cluster, so a reimage does not silently take it away again."
+    },
+    "nodeAccess": {
+      "type": "object",
+      "title": "Node access",
+      "description": "How to reach a provisioned node. Default-safe: with nothing set the `ironic` account is locked and SSH password authentication is off. Password login requires both a password and allowPasswordAuth.",
+      "properties": {
+        "sshAuthorizedKeys": {
+          "type": "array",
+          "title": "SSH authorized keys",
+          "description": "Public keys added to the `ironic` user. The preferred way in.",
+          "items": {
+            "type": "string",
+            "title": "Public key",
+            "description": "One SSH public key, e.g. `ssh-ed25519 AAAA... operator@host`."
+          }
+        },
+        "password": {
+          "type": "string",
+          "title": "Node password",
+          "description": "Plaintext password for the `ironic` user. Ignored unless Allow password auth is also enabled. Lab use; rotate after."
+        },
+        "allowPasswordAuth": {
+          "type": "boolean",
+          "title": "Allow password auth",
+          "description": "Must be enabled AND a password supplied before any password login is rendered into cloud-init."
+        }
+      }
     }
   }
 }

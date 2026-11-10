@@ -6,10 +6,24 @@ The consumer of that index is anonymous: the Krateo portal's Marketplace and
 release-chart.yaml authenticates, so none of them can see the failure this one
 is for -- a publish that concludes SUCCESS and leaves a card whose chart 404s.
 
-That was real, not hypothetical. The reusable publisher builds each index
-entry's URL from the CALLER repository, and this repository is private, so its
-release assets are not anonymously fetchable. Measured 2026-11-07: an anonymous
-fetch of a published sibling's asset returns 200; a private repo's cannot.
+WHY THIS EXISTS, with the wrong reason removed. It was written on the premise
+that "this repository is private, so its release assets are not anonymously
+fetchable". THAT WAS FALSE -- `origin` is
+krateo-blueprints/openstack-ironic-operator-kog, which is PUBLIC; `gh` had
+resolved a different repo via an `upstream` remote. The premise is retracted in
+docs/MARKETPLACE.md and the gate built on it was deleted.
+
+The check survives its own justification, and 2026-11-07 proved why. Tag 0.3.1
+had a token that was present AND authenticated as a header, and the publish
+still failed because the token was unusable inside a URL. Tag 0.3.2 then
+succeeded, and this script read the result independently of the job that
+produced it:
+
+    kubernetes-cluster 0.14.0 -> .../charts/releases/download/... http=200
+    baremetal-host     0.6.3  -> .../charts/releases/download/... http=200
+
+The durable point is the one the false premise was reaching for: every other
+check in that pipeline authenticates, and the consumer does not.
 
 This script asserts nothing about WHICH host the index names. It reads the URL
 the index actually advertises and fetches that, so it stays correct across
@@ -52,7 +66,13 @@ def load_index(src):
         body = open(src, "rb").read()
     doc = yaml.safe_load(body)
     if not isinstance(doc, dict) or "entries" not in doc:
-        raise SystemExit(f"::error::{src} is not a Helm index (no 'entries' key)")
+        # RuntimeError, NOT SystemExit. SystemExit derives from BaseException, so
+        # `except Exception` around the caller did not catch it and the retry
+        # loop -- whose whole purpose is the lagging-Pages case -- terminated on
+        # attempt 1 of 10. A Pages deploy serving a holding page answers 200 with
+        # an HTML body, which parses to a str and lands exactly here. Found by
+        # /code-review.
+        raise RuntimeError(f"{src} is not a Helm index (no 'entries' key)")
     return doc
 
 
@@ -65,10 +85,28 @@ def advertised_url(index, chart, version):
 
 
 def head_status(url):
+    """A real HEAD, with a GET fallback.
+
+    This used to call fetch(), which does r.read() on the whole body just to
+    look at r.status -- 80 KB for kubernetes-cluster, per attempt. Some servers
+    refuse HEAD (405/501), so fall back rather than reporting a refusal as a
+    missing asset.
+    """
+    req = urllib.request.Request(url, method="HEAD",
+                                 headers={"User-Agent": "verify-channel-entry"})
     try:
-        status, _ = fetch(url)
-        return status
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return r.status
     except urllib.error.HTTPError as e:
+        if e.code in (405, 501):
+            try:
+                status, _ = fetch(url)
+                return status
+            except urllib.error.HTTPError as e2:
+                return e2.code
+            except Exception as e2:  # noqa: BLE001
+                print(f"  transport error on GET fallback: {e2}", file=sys.stderr)
+                return 0
         return e.code
     except Exception as e:  # noqa: BLE001 - any transport failure is a failure
         print(f"  transport error: {e}", file=sys.stderr)
@@ -99,19 +137,52 @@ def main():
             )
         wanted.append((name, ver))
 
+    # ONE index fetch per attempt, checked against every outstanding pair. It
+    # used to be one fetch per pair per attempt -- two charts x 10 attempts = 20
+    # downloads and 20 parses of a 1.6 MB document -- and the two waits were
+    # SEQUENTIAL, so a pair absent for all 10 attempts made the next pair start
+    # its own full wait. /code-review caught both.
+    found = {}
+    outstanding = list(wanted)
+    for i in range(a.attempts):
+        try:
+            index = load_index(a.index)
+        except Exception as e:  # noqa: BLE001 - RuntimeError, transport, parse
+            print(f"  index unreadable ({e})", file=sys.stderr)
+            index = None
+        if index is not None:
+            still = []
+            for name, ver in outstanding:
+                url = advertised_url(index, name, ver)
+                if url:
+                    found[(name, ver)] = url
+                else:
+                    still.append((name, ver))
+            outstanding = still
+        if not outstanding:
+            break
+        if i + 1 < a.attempts:
+            time.sleep(a.sleep)
+
+    # The asset gets the SAME retry budget as the index. It used to get exactly
+    # one shot: the loop above broke as soon as every pair was present in the
+    # index, then head_status ran once. But the release asset is a SEPARATE write
+    # from the gh-pages index write, so the lag the index retry exists for
+    # applies to it too -- and a 404 seconds after publication was reported as
+    # "in the index but its .tgz is not anonymously fetchable", a hard failure in
+    # the only consumer-credentials check in the pipeline. /code-review caught it.
+    def status_with_retry(url):
+        code = head_status(url)
+        for _ in range(a.attempts - 1):
+            if code == 200:
+                return code
+            time.sleep(a.sleep)
+            code = head_status(url)
+        return code
+
     failed = False
     for name, ver in wanted:
-        url = None
-        for i in range(a.attempts):
-            try:
-                url = advertised_url(load_index(a.index), name, ver)
-            except Exception as e:  # noqa: BLE001
-                print(f"  index unreadable ({e})", file=sys.stderr)
-                url = None
-            if url:
-                break
-            if i + 1 < a.attempts:
-                time.sleep(a.sleep)
+        url = found.get((name, ver))
         if not url:
             print(
                 f"::error::{name} {ver} is not in {a.index} after "
@@ -120,7 +191,7 @@ def main():
             )
             failed = True
             continue
-        code = head_status(url)
+        code = status_with_retry(url)
         print(f"{name} {ver} -> {url}  http={code}")
         if code != 200:
             print(

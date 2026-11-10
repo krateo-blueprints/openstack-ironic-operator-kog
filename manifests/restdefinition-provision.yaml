@@ -94,9 +94,89 @@ spec:
           - name: include_children
             value: "true"
         identifiersMatchPolicy: OR
+        # The microversion, static and per-verb. BELT-AND-BRACES, not the thing
+        # that makes `include_children` work -- measured here 2026-11-07 with a
+        # one-variable test on this very kind, static header removed in both
+        # arms, probe node_id naming no existing node:
+        #
+        #   spec X-OpenStack-Ironic-API-Version = "1.1"    -> findby 406
+        #   spec X-OpenStack-Ironic-API-Version = "1.109"  -> findby succeeds
+        #
+        # So the GENERATED SPEC PROPERTY ships as a header. The CRD declares it
+        # required with `default: "1.109"`, so every CR carries it unasked. The
+        # 2026-11-04 406 recorded below was real and is consistent: the OAS did
+        # not declare the property then, so nothing was sent and Ironic
+        # negotiated its minimum. Declaring it is what fixed that; this header
+        # only guarantees the version if a CR sets the property low.
+        #
+        # oasgen #304 concerns the CONFIGURATION-sourced header, a different
+        # path that really is dropped. Do not generalise it to this one.
+        headers:
+          - name: X-OpenStack-Ironic-API-Version
+            value: "1.109"
+        # NO responseTransform HERE, AND THE ONE ADDED 2026-11-07 WAS REVERTED THE
+        # SAME DAY. It lifted `node_id` from `name` and `target` from
+        # `provision_state`, by symmetry with restdefinition-power.yaml. Both
+        # halves were wrong for this kind, and /code-review caught it before any
+        # NodeProvision CR existed to be broken by it.
+        #
+        # 1. THE IDENTIFIER LIFT DISABLES THE ONLY WORKING VERB. `create` is the
+        #    sole verb here that performs PUT /v1/nodes/{node_id}/states/provision.
+        #    A matching findby means ResourceExists=true on the first Observe, so
+        #    `create` is never called and NO provision transition fires at all --
+        #    deploy, undeploy, manage, provide, inspect and clean would all become
+        #    silent no-ops. Power survives the same lift only because it has an
+        #    `update` verb pointing at its endpoint; this kind deliberately does
+        #    not, because a provision drift correction would redeploy a machine.
+        #
+        # 2. `target` AND `provision_state` ARE DIFFERENT VALUE SPACES.
+        #    oas/ironic-provision.yaml:108 defines target as
+        #    "manage | provide | active | deleted | inspect | rebuild | clean"
+        #    -- VERBS. `provision_state` holds STATES: manageable, available,
+        #    active. Only `active` coincides. The charts render six targets
+        #    (active, clean, deleted, inspect, manage, provide), so five could
+        #    never equal the lifted value, and with no `update` verb that phantom
+        #    drift is permanent -- latching every CR non-Ready and pinning the
+        #    BaremetalHost composition at Ready=false. Precisely the failure this
+        #    branch had just removed from the power kind.
+        #
+        # So observability for THIS kind cannot be bought with an identifier
+        # lift. It needs a different shape -- a `get` verb so existence does not
+        # depend on findby matching, or lifting the observed state into a field
+        # that is NOT the desired-state field. Neither is attempted here.
+      # NO `update` VERB, ON PURPOSE -- and this is the one asymmetry with
+      # restdefinition-power.yaml that must not be "fixed" for consistency.
+      #
+      # Power is safe to converge: a blade found off when `target` says on gets
+      # powered on, and the worst case is a machine running that someone wanted
+      # off. Provision is not. `target` here takes values like `active`,
+      # `deleted` and `manage`, and driving to `active` from `available` is a
+      # DEPLOY -- it writes an image and WIPES THE DISK. Ironic also drops a
+      # node back to `available` by itself after a failed deploy (which is why
+      # `last_error` is in restdefinition-node.yaml's additionalStatusFields),
+      # so an automatic drift correction here would retry a destructive
+      # operation precisely when it had just failed, in a loop.
+      #
+      # So nothing acts on drift here. And to be exact about what that costs,
+      # because this comment claimed the opposite: with no responseTransform this
+      # kind's findby NEVER MATCHES, so `additionalStatusFields` NEVER POPULATE --
+      # provision_state, target_provision_state and uuid stay empty for the life
+      # of every CR. restdefinition-power.yaml records the measurement that
+      # proves it: an unmatched findby plus a `Pending` condition reports
+      # up-to-date without having observed anything, 323 observes, 0 creates, no
+      # status fields. /code-review caught the claim.
+      #
+      # So do NOT write a composition template against status.provision_state on
+      # a NodeProvision CR. The charts read provision_state off the
+      # BaremetalNode CR, which has a working responseTransform, and that is why
+      # nothing has broken. Decided by the user 2026-11-07 when offered the
+      # convergent option.
       - action: create
         method: PUT
         path: /v1/nodes/{node_id}/states/provision
+        headers:
+          - name: X-OpenStack-Ironic-API-Version
+            value: "1.109"
         requestFieldMapping:
           - inPath: node_id
             inCustomResource: spec.node_id

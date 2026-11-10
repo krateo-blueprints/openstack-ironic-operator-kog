@@ -115,10 +115,13 @@ version lacks field X; switch to a newer one (see [docs/api.md](docs/api.md)).
 
 ## Marketplace blueprints
 
-Two of the charts here are this repository's Krateo Marketplace blueprints.
-**Neither is in the [`blueprints` channel](https://krateo-blueprints.github.io/charts/blueprints)
-yet** — the channel publish fails with `HTTP 401: Bad credentials` and is waiting
-on a valid token ([docs/MARKETPLACE.md](docs/MARKETPLACE.md)):
+Two of the charts here are this repository's Krateo Marketplace blueprints, and
+**both are live in the
+[`blueprints` channel](https://krateo-blueprints.github.io/charts/blueprints)**
+as of release `0.3.2` on 2026-11-07 — measured at `http=200` from the channel's
+own index, which had not moved since 2026-10-09
+([docs/MARKETPLACE.md](docs/MARKETPLACE.md) records the before/after and the two
+failed tags it took):
 
 | Chart | Card | What it does |
 |---|---|---|
@@ -128,7 +131,12 @@ on a valid token ([docs/MARKETPLACE.md](docs/MARKETPLACE.md)):
 Register `baremetal-host` **first** — `kubernetes-cluster` renders its resources.
 
 `baremetal-discovery` and `baremetal-lifecycle` are the superseded split that
-`baremetal-host` absorbed and are not published as blueprints. One caveat a
+`baremetal-host` absorbed and are not published as blueprints.
+**`baremetal-lifecycle` is deprecated as of 2026-11-08** (`deprecated: true` in
+its `Chart.yaml`, so `helm install` warns) and is no longer packaged by
+`make chart-host`: its `transition-power.yaml` still documents the fire-once
+NodePower contract that convergent power replaced, and it omits
+`spec.configurationRef`, which the generated kind marks required. One caveat a
 reader needs: `baremetal-lifecycle` **0.3.1 is in the channel** — published from
 here on or before 2026-08-19 — and it is the only entry from this repo there.
 Measured 2026-11-07 against the live index, with `baremetal-lifecycle` as the
@@ -155,7 +163,8 @@ what the channel gate checks, and the one-time token setup the publish needs.
 Deep-dive references: [KUBERNETES-CLUSTER.md](docs/KUBERNETES-CLUSTER.md),
 [USER-GUIDE.md](docs/USER-GUIDE.md), [VS-METAL3.md](docs/VS-METAL3.md),
 [E2E.md](docs/E2E.md), [ORPHAN-RECOVERY.md](docs/ORPHAN-RECOVERY.md),
-[RUNBOOK-ETCD-RESTORE.md](docs/RUNBOOK-ETCD-RESTORE.md).
+[RUNBOOK-ETCD-RESTORE.md](docs/RUNBOOK-ETCD-RESTORE.md),
+[DEMO.md](docs/DEMO.md).
 
 ## Develop & release
 
