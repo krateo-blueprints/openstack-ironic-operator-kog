@@ -37,10 +37,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install helm
-        uses: azure/setup-helm@v4
+        uses: azure/setup-helm@v5
         with:
           version: ${{ env.HELM_VERSION }}
 
@@ -110,7 +110,7 @@ jobs:
           ls -1 blueprints-dist/
 
       - name: Upload the blueprint tarballs for the channel publisher
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: charts-dist-blueprints
           path: blueprints-dist/*.tgz
@@ -290,7 +290,7 @@ jobs:
     needs: publish-blueprints-channel
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: The URL the index advertises must be fetchable with no credentials
         run: |
           set -euo pipefail
