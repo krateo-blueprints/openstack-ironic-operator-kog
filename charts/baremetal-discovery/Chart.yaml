@@ -2,8 +2,13 @@ apiVersion: v2
 name: baremetal-discovery
 description: Discovery composition for Ironic bare-metal nodes. Creates a Node CR + drives manage + inspect via KOG NodeProvisions, then surfaces inventory (cpus/memory/disks/NICs + capabilities) in the Node CR's status. Output is consumed as INPUT to baremetal-lifecycle (the operator/policy reads inventory and writes a lifecycle spec). No ports created here, no provide/deploy - this composition only discovers.
 type: application
-version: 0.1.1
+version: 0.1.2
 appVersion: "1.0"
+home: https://github.com/krateo-blueprints/openstack-ironic-operator-kog
+sources:
+  - https://github.com/krateo-blueprints/openstack-ironic-operator-kog
+  - https://docs.openstack.org/ironic/latest/
+icon: "https://raw.githubusercontent.com/krateo-blueprints/openstack-ironic-operator-kog/1516dd678f3c0760557bd1f142db0a67f81b8abd/branding/krateo-akmon-mark.svg"
 keywords:
   - ironic
   - bare-metal
