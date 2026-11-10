@@ -101,7 +101,26 @@ components:
       name: X-OpenStack-Ironic-API-Version
       in: header
       required: false
-      description: Ironic API microversion (required for writes). Set via PortConfiguration.
+      # NOT supplied via PortConfiguration, despite what this description used to
+      # say. oasgen emits this parameter as `header` (SINGULAR, from the OAS `in`
+      # value) while rest-dynamic-controller looks up `headers` (PLURAL), so the
+      # lookup misses and a value set in the Configuration is dropped with NO
+      # error -- the request simply goes out without the header, and Ironic then
+      # negotiates its MINIMUM microversion (1.1) rather than failing.
+      #
+      # The microversion is pinned instead as a static per-verb `headers:` entry on
+      # every verb in manifests/restdefinition-port.yaml, which takes a different
+      # code path and does ship. Change it there, not here.
+      #
+      # Kept `required: false` with no default deliberately: a `default` in a
+      # generated CRD is materialised onto existing CRs by the apiserver and cannot
+      # be taken back, so it is only worth doing where the spec property is the
+      # delivery mechanism (ironic-provision.yaml, ironic-power.yaml), which here
+      # it is not.
+      description: >-
+        Ironic API microversion, required for writes. Delivered as a static
+        per-verb header by the RestDefinition, not through this parameter --
+        see the comment above before changing it.
       schema:
         type: string
   schemas:
