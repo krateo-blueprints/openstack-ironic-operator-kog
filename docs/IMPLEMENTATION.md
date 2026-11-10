@@ -1800,10 +1800,35 @@ became pullable. Verified on the four axes: compositions 4× `ReconcileSuccess`,
 per-CR conditions 6× `ReconcileSuccess`, controller restarts 0, helm revisions
 unchanged (63/72/76/82/53/63/32), six blades `active/power on`.
 
-The per-version cdc pods were **replaced** (new names, 0 restarts, ready). That
-is 2.13.65 adding a `readinessProbe` on `/readyz` to each generated cdc
-Deployment, which core-provider flagged as expected — so the restart-count axis
-reading zero *and* new pod names is the correct signature, not a crash.
+The per-version cdc pods were **replaced** (new names, 0 restarts, ready).
+
+**The explanation this section gave for that is FALSE, retracted 2026-11-09.**
+It said the replacement was 2.13.65 adding a `readinessProbe` on `/readyz` to
+each generated cdc Deployment. Measured against every ReplicaSet in
+`krateo-system`:
+
+```
+31 ReplicaSets for the per-version controllers, created 2026-11-04 .. 2026-11-07
+readinessProbe present: 0 of 31
+of which rendered AFTER the 2.13.65 upgrade (12:03Z on 11-05): 11, all without
+the 5 live Deployments: ready=1/1, no probes of any kind
+```
+
+Two of those Deployments (`baremetalhosts-v0-6-3`, `kubernetesclusters-v0-14-0`)
+were created fresh on 2026-11-07, i.e. rendered BY core-provider 2.13.65, and
+they carry no probe either. So the claim is not merely stale — 2.13.65 does not
+render a probe here at all, and the pod replacement at upgrade had some other
+cause that was never established.
+
+The claim was invented to explain an observation (new pod names with 0
+restarts), it sounded mechanistic, and nothing checked it. Worse, it was passed
+to the core-provider session as fact on 2026-11-09, which reasoned from it and
+predicted the 2.13.62 controllers would show `0/1 READY` failing a probe they
+could not answer. They asked for the measurement rather than taking it, which is
+the only reason it was caught. See
+[[reference_escalating-mechanisms-read-as-progress]] and
+[[reference_a-correction-can-be-the-error]]: the restart-count axis reading zero
+with new pod names is still the observation, and it still has no explanation.
 
 #### Probe 1 — recreated CR, empty status (the 2.13.62 defect)
 

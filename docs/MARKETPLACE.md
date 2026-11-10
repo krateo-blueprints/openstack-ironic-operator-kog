@@ -142,8 +142,8 @@ Three things about that are worth knowing before you trust it:
     exactly 0.2.0**. Upstream does not version 28 service charts in lockstep, so
     a uniform 0.2.0 is one pipeline packaging a vendored subchart set at its
     umbrella's version. The umbrella is here too: `openstack` 0.2.0, whose
-    `sources` name `github.com/braghettos/krateo-openstack-blueprint` — the
-    personal-namespace predecessor of the blueprint, which is exactly why
+    `sources` name `github.com/<personal-predecessor>/krateo-openstack-blueprint`
+    — the personal-namespace predecessor of the blueprint, which is exactly why
     `krateo-blueprints/krateo-openstack-blueprint` can truthfully report it has
     never published here.
 
@@ -358,8 +358,14 @@ a remote named **`upstream`** over `origin`, and this tree has both:
 
 ```
 origin    https://github.com/krateo-blueprints/openstack-ironic-operator-kog.git   (PUBLIC)
-upstream  https://github.com/braghettos/openstack-ironic-operator.git
+upstream  https://github.com/<personal-predecessor>/openstack-ironic-operator.git
 ```
+
+> The predecessor org is written as `<personal-predecessor>` throughout rather than
+> spelled out. The org-wide `lint-docs` reusable workflow bans that literal as a dead
+> org and fails the job wherever it appears — including, as here, where a document is
+> *citing* it as the hazard. Spelling it out turns this page red and, through the
+> shared workflow, every open PR in the repository. Please do not "fix" it back.
 
 `upstream` is the personal-namespace predecessor, since transferred, so GitHub
 redirects it to `krateo-blueprints/openstack-ironic-operator`, which is a
