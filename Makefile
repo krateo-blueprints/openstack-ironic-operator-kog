@@ -157,10 +157,37 @@ smoke-test:   # drive a fake node enroll->active against the local Ironic (CLEAN
 	IRONIC_API=http://localhost:6385 CLEANUP=$${CLEANUP:-1} ./scripts/smoke-test-ironic.sh; rc=$$?; \
 	kill $$pf 2>/dev/null; exit $$rc
 
-# 2.13.62, corrected 2026-11-07, and the CHANGE OF SOURCE below matters as much
-# as the number. This said 1.0.0, installed from the https://charts.krateo.io
+# 2.13.65, corrected 2026-11-09 -- the number BELOW the comment was 2.13.62 and
+# the cluster had been running 2.13.65 since 2026-11-05, so this pin had become a
+# DOWNGRADE waiting for the next `make krateo-up`. Forensics, since `kubectl set
+# image` records no change-cause:
+#
+#   managedFields   manager=helm        2026-11-04T21:08Z  owns containers
+#                   manager=kubectl-set 2026-11-05T12:03Z  owns .image
+#   ReplicaSets     rev 10  2.13.62  replicas=0   <- what helm last applied
+#                   rev 11  2.13.65  replicas=1   <- what actually runs
+#   helm manifest   core-provider:2.13.62        <- what helm still believes
+#
+# So `helm upgrade --version 2.13.62` would have reverted the composition engine
+# and reported success. The upgrade was deliberate and is recorded in
+# docs/IMPLEMENTATION.md §9.20 (adoption variants + the readinessProbe 2.13.65
+# adds to each generated cdc Deployment) -- I asked who set it before reading my
+# own repo, which had the answer.
+#
+# WHAT THE NEXT RUN ALSO CHANGES: core-provider and chart-inspector already run
+# 2.13.65, but the five generated cdc controllers still run
+# composition-dynamic-controller:2.13.62, because core-provider spawns them from
+# the image reference helm gave it. Chart 2.13.65 carries 2.13.65 for all three
+# (measured with `helm template --kube-version 1.36.1`), so this pin converges
+# the cdc controllers too. That is the intent, not a side effect.
+#
+# A note on reading this state: `helm get manifest` is what helm BELIEVES, not
+# what runs. I reported chart-inspector as 2.13.62 from it while the cluster ran
+# 2.13.65. Read the Deployment.
+#
+# The CHANGE OF SOURCE below matters as much as the number. This said 1.0.0, installed from the https://charts.krateo.io
 # index -- and that index's newest core-provider chart IS 1.0.0 (appVersion
-# 1.0.0), a different and older lineage from the 2.13.62 this cluster actually
+# 1.0.0), a different and older lineage from the 2.13.x this cluster actually
 # runs, which the index does not carry at all. So `make krateo-up` would have
 # REPLACED a working composition engine with a years-old one, in the same way
 # the comment below describes for oasgen, and for the same reason: the real
@@ -180,7 +207,7 @@ smoke-test:   # drive a fake node enroll->active against the local Ironic (CLEAN
 # and warn off the charts.krateo.io index"), open as of 2026-11-07. Until that
 # lands, assume any core-provider or oasgen version you find in that index is
 # the wrong lineage rather than merely old.
-KRATEO_CORE_VERSION ?= 2.13.62
+KRATEO_CORE_VERSION ?= 2.13.65
 # The https://charts.krateo.io index stops at oasgen 0.11.1; the real releases
 # live in the OCI registry, which is where the 0.47.0 install actually came
 # from. Pinning the stale index version here meant `make krateo-up` would have

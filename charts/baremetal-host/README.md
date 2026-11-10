@@ -29,7 +29,7 @@ registering → (inspecting → ready)? → available → (provisioning → prov
 | | Version | How this was established |
 |---|---|---|
 | Krateo control plane | `>= 2.5.1` | the `krateoSupportedVersion` the sibling blueprints of this product declare |
-| core-provider | `2.13.62` | the version this blueprint is running under today; the composition-adoption behaviour it depends on was probed on 2.13.62 and 2.13.65 |
+| core-provider | `2.13.65` | the version this blueprint is running under today; the composition-adoption behaviour it depends on was probed on both 2.13.62 and 2.13.65 (§9.17, §9.20). The generated cdc controllers still run 2.13.62 |
 | oasgen-provider | `0.50.0` | provides the Ironic KOG resources (`BaremetalNode`, `Port`, `NodeProvision`, `NodePower`) this chart renders |
 | Ironic API microversion | `>= 1.83` | below it the node look-up rejects `include_children` with a `406` |
 
