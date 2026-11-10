@@ -163,7 +163,8 @@ what the channel gate checks, and the one-time token setup the publish needs.
 Deep-dive references: [KUBERNETES-CLUSTER.md](docs/KUBERNETES-CLUSTER.md),
 [USER-GUIDE.md](docs/USER-GUIDE.md), [VS-METAL3.md](docs/VS-METAL3.md),
 [E2E.md](docs/E2E.md), [ORPHAN-RECOVERY.md](docs/ORPHAN-RECOVERY.md),
-[RUNBOOK-ETCD-RESTORE.md](docs/RUNBOOK-ETCD-RESTORE.md).
+[RUNBOOK-ETCD-RESTORE.md](docs/RUNBOOK-ETCD-RESTORE.md),
+[DEMO.md](docs/DEMO.md).
 
 ## Develop & release
 
