@@ -112,6 +112,21 @@ components:
       # every verb in manifests/restdefinition-port.yaml, which takes a different
       # code path and does ship. Change it there, not here.
       #
+      # MECHANISM CONFIRMED UPSTREAM, AND FIXED, 2026-11-10. The plural is in the
+      # POPULATOR, not the validator: builder.go `applyConfigSpec` calls
+      # process("headers", req.Headers) and process("cookies", req.Cookies) while
+      # path and query are singular and worked by coincidence. oasgen generates the
+      # Configuration schema from the OpenAPI location verbatim, and OpenAPI's
+      # locations are singular -- so every configurationFields header was generated
+      # into the CRD and then never applied. Fixed in oasgen 0.44.0 (#304), with
+      # 0.43.0 as the negative control, and 0.50.0 (#305/#392); tracked as #561.
+      #
+      # CONSEQUENCE FOR US, UNVERIFIED: both fixes shipped INSIDE the 2026-10-30 ..
+      # 2026-11-04 window when we hit this, and we now run 0.54.1, which contains
+      # them. So the static-header workaround below may no longer be necessary.
+      # Do NOT remove it on this note alone -- the test is to declare the header
+      # via PortConfiguration on a scratch node and confirm it reaches the wire.
+      #
       # Kept `required: false` with no default deliberately: a `default` in a
       # generated CRD is materialised onto existing CRs by the apiserver and cannot
       # be taken back, so it is only worth doing where the spec property is the
