@@ -50,10 +50,10 @@ After a chart is published, bump the matching `manifests/compositiondefinition-*
 
 | chart | version |
 |---|---|
-| `baremetal-host` | `0.4.5` |
-| `baremetal-lifecycle` | `0.3.1` |
+| `baremetal-host` | `0.6.3` |
+| `baremetal-lifecycle` | `0.3.3` |
 | `baremetal-discovery` | `0.1.1` |
-| `kubernetes-cluster` | `0.12.11` |
+| `kubernetes-cluster` | `0.15.1` |
 
 ## PR-time checks
 
