@@ -409,9 +409,16 @@ regenerate-crds-check:   # read the stored side only; change nothing
 	python3 -I scripts/regenerate-restdefinition-crds.py --kubectl "$(KUBECTL)" --check-only
 
 check-schema-warnings:   # read status.schemaWarnings off every LIVE RestDefinition
-	# NEEDS A LIVE CLUSTER, like regenerate-crds-check. Not a CI gate, and NOT yet in
-	# `make check` -- it currently FAILS with 9 real warnings (see docs/IMPLEMENTATION.md
-	# §9.13c). Wire it into `check` in the same commit that takes the count to zero.
+	# NEEDS A LIVE CLUSTER, like regenerate-crds-check, which is the ONLY reason it is
+	# not in `make check`. Its selftest is, and that runs offline.
+	#
+	# It now PASSES: actionable=0, blocked-upstream=5. It classifies each warning and
+	# fails only on ACTIONABLE ones, because a gate that fails forever on a defect
+	# someone else has to fix trains people to ignore it -- the same way a gate that is
+	# red on main does. And it prints its own BLIND SPOT on every run, including a
+	# passing one, so the reason zero is unreachable survives whoever knew it. That
+	# design is the nova session's; theirs announces "SKIPPED, and this is not a pass"
+	# rather than going quiet.
 	#
 	# This repo spent two days deriving by hand a rule that oasgen states in a warning,
 	# because docs/IMPLEMENTATION.md said twice that the warnings are emitted "as a
