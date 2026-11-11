@@ -22,3 +22,7 @@ manifests/kubernetescluster-*.yaml
 # in (the chart bakes ironicAuth.password into CP cloud-init by design).
 # Same reason kubernetescluster-ettore-lab.yaml is ignored.
 manifests/kubernetescluster-lab-ha.yaml
+
+# Python bytecode from scripts/ (the screens are run directly, never imported)
+__pycache__/
+*.pyc
