@@ -121,11 +121,25 @@ components:
       # into the CRD and then never applied. Fixed in oasgen 0.44.0 (#304), with
       # 0.43.0 as the negative control, and 0.50.0 (#305/#392); tracked as #561.
       #
-      # CONSEQUENCE FOR US, UNVERIFIED: both fixes shipped INSIDE the 2026-10-30 ..
-      # 2026-11-04 window when we hit this, and we now run 0.54.1, which contains
-      # them. So the static-header workaround below may no longer be necessary.
-      # Do NOT remove it on this note alone -- the test is to declare the header
-      # via PortConfiguration on a scratch node and confirm it reaches the wire.
+      # CONSEQUENCE FOR US, NOW VERIFIED (2026-11-11): both fixes shipped INSIDE
+      # the 2026-10-30 .. 2026-11-04 window when we hit this, and we run 0.54.1,
+      # which contains them. MEASURED on the live lab: with all four static
+      # per-verb headers removed from this RestDefinition and PortConfiguration
+      # set to a distinctive 1.95, the wire carried
+      #     X-Openstack-Ironic-Api-Version: 1.95   (x2, 0 406s)
+      # which can only have come from the Configuration. So the configurationFields
+      # route WORKS and the static-header workaround below is no longer required.
+      #
+      # It is kept anyway, deliberately: removing it changes how every port request
+      # is built, and a working belt-and-braces costs nothing. Remove it as its own
+      # change if you want the Configuration to be the single source, not as a side
+      # effect of something else.
+      #
+      # Note for whoever re-tests this: both sources normally declare the SAME value
+      # (1.109), so the wire cannot tell them apart and the test reads as passing
+      # whichever way it is wired. Make them DIFFER, or you measure nothing. A first
+      # attempt removing the header from only ONE verb was inconclusive, because the
+      # dump does not attribute a header to a verb and `get` still supplied its own.
       #
       # Kept `required: false` with no default deliberately: a `default` in a
       # generated CRD is materialised onto existing CRs by the apiserver and cannot
