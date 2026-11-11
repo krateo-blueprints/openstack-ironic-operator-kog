@@ -44,6 +44,51 @@ paths:
                     items:
                       $ref: '#/components/schemas/NodeState'
 
+  # ADDED 2026-11-11. This path was MISSING while restdefinition-power.yaml declared a
+  # `get` verb on it, so that verb could not resolve a schema and was inert. oasgen said
+  # so, in status.schemaWarnings, on the live object -- and nothing in this repo had ever
+  # read that field:
+  #
+  #   generation error: path '/v1/nodes/{node_id}' set in RestDefinition not found in OAS
+  #   validation error: could not extract base schema for action 'get':
+  #                     path '/v1/nodes/{node_id}' not found in OAS document   (x3)
+  #
+  # Why it matters more than a dangling verb. oasgen also warns, for this kind AND for
+  # provision, that the findby identifier can never match:
+  #
+  #   identifier "node_id" is absent from the items the findby response carries, so
+  #   findby cannot compare against it. no declared identifier is present in the findby
+  #   response, so findby can never match any item regardless of policy: it will report
+  #   not-found and the reconciler acts on not-found by CREATING
+  #
+  # That is the §9.14 blade06 NodePower wedge, stated by the tool. A working `get` is the
+  # fix -- it is exactly why restdefinition-port.yaml gained one (oasgen #378: a
+  # findby-addressed kind whose create was interrupted errors forever, because findby can
+  # never match a resource that does not exist). Here the fix pointed at a path the
+  # document did not contain, so the repair path was instrumented and could not fire.
+  #
+  # The parameter is `node_id`, NOT `uuid`: Ironic's node_ident accepts a UUID or a name,
+  # restdefinition-power.yaml maps `inPath: node_id` from `spec.node_id`, and
+  # oas/ironic-node.yaml spells the same endpoint `/v1/nodes/{uuid}` for its own kind.
+  # Two spellings of one Ironic endpoint across two documents is confusing but correct:
+  # each document's path must match what its own RestDefinition declares.
+  /v1/nodes/{node_id}:
+    parameters:
+      - $ref: '#/components/parameters/node_id'
+    get:
+      summary: Get a node by UUID or name, for the power kind's existence check
+      operationId: getNodeForPower
+      parameters:
+        - $ref: '#/components/parameters/X-OpenStack-Ironic-API-Version'
+      responses:
+        '200':
+          description: Node power state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/NodeState'
+        '404':
+          description: Node not found
   /v1/nodes/{node_id}/states/power:
     put:
       summary: Set power target (create = fire-once transition)
