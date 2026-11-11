@@ -1676,19 +1676,67 @@ on elapsed time — the signal my own writes cannot fake (§9.15).
 
 **Three incidental findings.**
 
-1. **The 0.43.0 chart's `rdc.image` split differs from 0.54.1's**, and copying the
-   newer `--set` flags builds a broken reference:
+1. **RETRACTED — there was no `rdc.image` split change and no hazard.** This section
+   first claimed the 0.43.0 chart's `rdc.image` split differed from 0.54.1's, and that
+   copying the newer `--set` flags would build
+   `ghcr.io/krateo-platformops/krateo-platformops/...`. **Both halves are wrong**, and
+   oasgen-provider caught it. Measured across three tags:
+
    ```
-   0.43.0   registry: ghcr.io                     repository: krateo-platformops/rest-dynamic-controller
-   0.54.1   registry: ghcr.io/krateo-platformops  repository: rest-dynamic-controller
+   chart default, 0.43.0   registry: ghcr.io   repository: krateo-platformops/rest-dynamic-controller
+   chart default, 0.54.1   registry: ghcr.io   repository: krateo-platformops/rest-dynamic-controller
+   chart default, 0.58.0   registry: ghcr.io   repository: krateo-platformops/rest-dynamic-controller
    ```
-   `make krateo-up` passes the 0.54.1 form, which at 0.43.0 yields
-   `ghcr.io/krateo-platformops/krateo-platformops/...`. Only the tag needs setting.
+
+   Identical at every tag. And the Makefile's own form is equivalent, not dangerous:
+
+   ```
+   chart default   ghcr.io            + krateo-platformops/rest-dynamic-controller
+   make krateo-up  ghcr.io/krateo-platformops + rest-dynamic-controller
+   -> 1 distinct resulting image: ghcr.io/krateo-platformops/rest-dynamic-controller
+   ```
+
+   `make krateo-up` sets **both** fields, so the chart's defaults never apply and the
+   version makes no difference. Copying those flags to 0.43.0 would have worked.
+
+   **Where the error came from, because the shape recurs.** I read the `--set` flags in
+   this repo's own Makefile and attributed them to the 0.54.1 *chart*, then compared
+   that against the 0.43.0 *chart's actual defaults* and called the difference a
+   version change. **I compared my own CLI override against their default and reported
+   it as a change between versions.** That is §9.x's "a difference between two counts is
+   not evidence until both selectors are stated", with values instead of counts: a
+   difference between two values is not evidence until both *sources* are stated. One
+   was a default, the other an override.
+
+   The one part that survives is narrow: at 0.43.0 only `rdc.image.tag` needs setting,
+   because the other two defaults are already correct. That was true of 0.54.1 as well.
 2. **An unauthenticated GHCR manifest probe cannot discriminate.** It returned HTTP
    **401 for 0.43.0, 0.44.0 and an impossible tag alike**, so it was discarded rather
    than reported as "present". Comparing 404 *bodies* against an impossible tag is
    the form that works.
-3. **`bash -n` is the gate, not a successful run.** A late syntax error in this
+3. **A zsh parameter modifier can silently read the WRONG FILE.** oasgen's first
+   sweep of their own chart returned empty at every tag — which read as "the chart does
+   not declare it" and was *consistent with my wrong claim*. The cause:
+
+   ```
+   t=0.43.0
+   "$t:helm/x"    ->  .elm/x          zsh applied the :h (head) modifier to $t
+   "${t}:helm/x"  ->  0.43.0:helm/x   correct
+   ```
+
+   zsh accepts history-style modifiers after a parameter expansion, so `$t:h` means
+   `${t:h}`. **Any `"$ref:path"` whose path begins with `h t r e s l u a A q Q` is
+   silently wrong** — `:helm/`, `:test/`, `:resources/`, `:apis/`, `:etc/`, `:lib/`.
+   This repo hit the same bug earlier the same day with `"$b:charts/..."`, where `:c`
+   was consumed.
+
+   Theirs errored because `.elm/...` does not exist. But `:t` yields a *basename*, so
+   `"$dir:test/x"` can resolve to a **real file somewhere else** and be read without
+   complaint. **A broken instrument and a false claim pointing the same way is the
+   worst case**, and only their control — a needle known present at every tag returning
+   0 — stopped it. Always brace: `"${t}:path"`.
+
+4. **`bash -n` is the gate, not a successful run.** A late syntax error in this
    script passed `--preflight-only` cleanly, because bash executes incrementally —
    it would have created the cluster and *then* died. Verified with a control: a
    deliberately broken copy is rejected by `bash -n`.
