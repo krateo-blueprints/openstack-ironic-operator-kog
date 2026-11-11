@@ -48,36 +48,25 @@ done
 PREFLIGHT_ONLY=0
 [ "${1:-}" = "--preflight-only" ] && { PREFLIGHT_ONLY=1; shift; }
 
-# POLICY GATE, 2026-11-11. Diego's directive, scope all sessions: stop using kind
-# clusters, use disposable GKE created per run and deleted-and-verified after; for
-# heavy local suites, a disposable Compute instance (snowplow is building a runner
-# that ships the repo at a SHA as a git BUNDLE, so no credentials reach the VM).
+# ON KIND, AND THE HISTORY, because it changed twice in one afternoon.
 #
-# The reason is measured, not stylistic: the shared laptop reached load 148, and that
-# contention crashlooped one cluster's kube-controller-manager 143 TIMES while every
-# object read stayed correct -- so it corrupted durations and garbage collection
-# invisibly, and two latency figures had already been handed to another session before
-# it was found. See docs/IMPLEMENTATION.md and the kcm-crashloop note.
+# 2026-11-11 ~16:40  A directive relayed from Diego via another session, scope stated
+#                    as ALL sessions: stop using kind, use disposable GKE per run; for
+#                    heavy local suites a disposable Compute instance. The shared
+#                    laptop had reached load 148. This script gained a hard refusal.
+# 2026-11-11 ~17:40  Diego, asked directly IN THIS SESSION whether to build a GKE
+#                    path: "you can keep kind." So the refusal is removed.
 #
-# This script creates a kind cluster, so it now refuses by default. `I_HAVE_NO_GKE=1`
-# exists to make a violation EXPLICIT rather than to permit it casually: if you set it,
-# you are asserting you have no disposable GKE available and have accepted the cost to
-# everyone else sharing the host.
-if [ "${I_HAVE_NO_GKE:-0}" != "1" ]; then
-  printf '%s\n' \
-    "REFUSED: this probe creates a KIND cluster, and kind is no longer the sanctioned" \
-    "         path (Diego, 2026-11-11, all sessions). Use a disposable GKE cluster," \
-    "         created per run and deleted-and-verified after; for a heavy local suite" \
-    "         ask snowplow for a disposable Compute instance." \
-    "" \
-    "         The arm itself is portable: it needs a Kubernetes cluster, oasgen at the" \
-    "         tag under test, one RestDefinition and the header-recording mock. Nothing" \
-    "         in it depends on kind." \
-    "" \
-    "         To run it on kind anyway: I_HAVE_NO_GKE=1 $0" \
-    "         That flag makes the violation explicit. It does not make it fine." >&2
-  exit 4
-fi
+# The exemption is what he said to this session. It is NOT a withdrawal of the
+# directive for anyone else -- other sessions should keep taking it from snowplow's
+# relay or from him. Do not infer scope from this comment.
+#
+# WHAT STAYS, and why it is the part that mattered anyway: the load guard below. The
+# real damage on this box was never kind as such -- it was contention crashlooping a
+# cluster's kube-controller-manager 143 TIMES while every object read stayed correct,
+# so durations and garbage collection broke invisibly and two latency figures reached
+# another session before anyone noticed. A ceiling on max(1m,5m,15m) addresses that;
+# a ban on kind only moves it.
 
 CLUSTER=${CLUSTER:-oasgen043-arm}
 KC="local/kubeconfig.${CLUSTER}"      # isolated: ~/.kube/config is never touched
