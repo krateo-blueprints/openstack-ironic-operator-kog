@@ -1620,6 +1620,79 @@ peer's `awk` comparison of a file against itself: **the instrument and the subje
 collapsed into one value.** Gate on the terminal state, never on the thing being
 measured.
 
+#### §9.13e — the 0.43.0 falsification arm: oasgen's #561 account SURVIVES
+
+Run 2026-11-11, 13:17Z → 13:36Z on a throwaway single-node kind cluster, deleted
+immediately afterwards. `scripts/probe-0430-config-header.sh` reproduces it.
+
+**What it tested, and why it was worth running.** The 0.54.1 measurement (§9.13b)
+settled the *practical* question: a Configuration-sourced microversion does reach
+the wire today. It did **not** test oasgen's *explanation* of why it used to be
+broken — that the generator emits `header` (singular, the OpenAPI `in` value) while
+rest-dynamic-controller reads `headers` (plural) in `builder.go applyConfigSpec`,
+fixed in 0.44.0 (#304). This arm runs the same experiment at 0.43.0, the last
+release before that fix, and **could have refuted them**.
+
+```
+ARM 1   Configuration-sourced, via the #304 shape, = 1.95
+        on the wire:  0        (the mock recorded NONE)
+        CR reached Observed=True/ResponseObtained, Ready=True/Available,
+                   Synced=True/ReconcileSuccess -- so it was not an error path
+
+ARM 2   static per-verb header on the SAME CR, = 1.77     [POSITIVE CONTROL]
+        on the wire:  2
+
+totals  1.95 -> 0     1.77 -> 2     NONE -> 2     5 requests
+```
+
+**The before/after across #304, one variable:**
+
+| | 0.43.0 (pre-fix) | 0.54.1 (post-fix) |
+|---|---|---|
+| Configuration-sourced value on the wire | **0** | **2** |
+| static per-verb value on the wire | 2 | works |
+
+So the **mechanism** is confirmed, not merely consistent with the symptom.
+
+**The schema was read and asserted, never guessed.** At 0.54.1 `spec.configuration`
+does not exist at all, and its 0.43.0 shape is the subject of the experiment.
+0.43.0 declares exactly the claimed shape:
+
+```
+spec.configuration.header.{create,delete,findby,get}.X-OpenStack-Ironic-API-Version
+                   ^^^^^^ SINGULAR
+```
+
+and the object stored the value back verbatim, which is asserted before the arm
+runs. **A guessed shape would have configured nothing, put nothing on the wire, and
+that reads as confirming the hypothesis** — the setup manufacturing the expected
+answer. The script aborts if the shape has moved.
+
+**The positive control is why arm 1 means anything.** "1.95 absent" is equally
+explained by *the Configuration route is inert* and by *my Configuration was wrong*.
+The static 1.77 arriving on the same CR, through the same mock, minutes later,
+discriminates them. Both arms gate on **the mock's request count increasing**, never
+on elapsed time — the signal my own writes cannot fake (§9.15).
+
+**Three incidental findings.**
+
+1. **The 0.43.0 chart's `rdc.image` split differs from 0.54.1's**, and copying the
+   newer `--set` flags builds a broken reference:
+   ```
+   0.43.0   registry: ghcr.io                     repository: krateo-platformops/rest-dynamic-controller
+   0.54.1   registry: ghcr.io/krateo-platformops  repository: rest-dynamic-controller
+   ```
+   `make krateo-up` passes the 0.54.1 form, which at 0.43.0 yields
+   `ghcr.io/krateo-platformops/krateo-platformops/...`. Only the tag needs setting.
+2. **An unauthenticated GHCR manifest probe cannot discriminate.** It returned HTTP
+   **401 for 0.43.0, 0.44.0 and an impossible tag alike**, so it was discarded rather
+   than reported as "present". Comparing 404 *bodies* against an impossible tag is
+   the form that works.
+3. **`bash -n` is the gate, not a successful run.** A late syntax error in this
+   script passed `--preflight-only` cleanly, because bash executes incrementally —
+   it would have created the cluster and *then* died. Verified with a control: a
+   deliberately broken copy is rejected by `bash -n`.
+
 ### §9.14 — the blade06 NodePower wedge, measured end to end
 
 My regeneration (§9.12) restarted the four rdc controllers, which re-entered the

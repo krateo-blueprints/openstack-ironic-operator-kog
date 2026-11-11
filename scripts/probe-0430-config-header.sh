@@ -201,26 +201,152 @@ echo "$MOCKLOG" | grep -q 'microversion=9.99' || { say "   ABORT: the mock did n
 echo "$MOCKLOG" | grep -q 'microversion=NONE' || { say "   ABORT: the mock did not record NONE for a header-less request"; exit 1; }
 say "   instrument verified: records a sent header AND records NONE. Both directions."
 
-say "== NEXT STEPS (not yet implemented -- see TODO) =="
-cat <<'TODO'
-   TODO, to be written before the next run:
-     1. helm install oasgen-provider-crds + oasgen-provider at $OASGEN_VER,
-        with rdc.image.tag=$OASGEN_VER
-     2. OAS configmap from oas/ironic-port.yaml with servers -> headermock
-     3. RestDefinition ironic-port with ALL static per-verb headers REMOVED and
-        configurationFields keeping X-OpenStack-Ironic-API-Version
-     4. PortConfiguration with spec.configuration setting the microversion to
-        $DISTINCT_CONFIG (1.95) -- the #304 `header` SINGULAR per-verb shape, which
-        is what 0.43.0 would have been given
-     5. one Port CR, force a reconcile, read the mock log
-     6. POSITIVE CONTROL IN THE SAME CLUSTER: re-apply the RestDefinition WITH a
-        static per-verb header of $DISTINCT_STATIC (1.77) and confirm 1.77 DOES
-        reach the wire. Without this arm, "1.95 absent" is indistinguishable from
-        "the controller never made a request", which is exactly the trap that
-        voided two arms of the credential probe this morning.
-     7. verdict:
-          1.95 absent AND 1.77 present -> oasgen's #561 account SURVIVES
-          1.95 present                 -> their account is WRONG, and say so
-          1.77 absent                  -> ARM VOID, the pipeline was never live
-TODO
+# ---------------------------------------------------------------- the arms -----
+say "== install oasgen $OASGEN_VER =="
+# ONLY the tag. The 0.43.0 chart's defaults are registry=ghcr.io and
+# repository=krateo-platformops/rest-dynamic-controller -- a DIFFERENT split from
+# 0.54.1, where the registry carries the org. Passing the 0.54.1 --set flags here
+# would build ghcr.io/krateo-platformops/krateo-platformops/rest-dynamic-controller.
+"${H[@]}" upgrade --install krateo-oasgen-provider-crds "$OCI/oasgen-provider-crds" \
+    -n krateo-system --create-namespace --version "$OASGEN_VER" --wait --timeout 5m 2>&1 | grep -E "^STATUS|Error" | sed 's/^/   /'
+"${H[@]}" upgrade --install krateo-oasgen-provider "$OCI/oasgen-provider" \
+    -n krateo-system --version "$OASGEN_VER" --set "rdc.image.tag=$OASGEN_VER" \
+    --wait --timeout 8m 2>&1 | grep -E "^STATUS|Error" | sed 's/^/   /'
+say "   provider image: $("${K[@]}" get deploy -n krateo-system -o jsonpath='{.items[0].spec.template.spec.containers[0].image}' 2>/dev/null)"
+
+say "== OAS configmap, servers -> the mock =="
+python3 - <<'PY'
+import yaml, pathlib
+d = yaml.safe_load(pathlib.Path("oas/ironic-port.yaml").read_text())
+d["servers"] = [{"url": "http://headermock.probe.svc.cluster.local:8080",
+                 "description": "header-recording mock"}]
+pathlib.Path("/tmp/arm043-port.yaml").write_text(yaml.safe_dump(d, sort_keys=False))
+PY
+"${K[@]}" create configmap port-oas -n "$NS" --from-file=port.yaml=/tmp/arm043-port.yaml \
+    --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null 2>&1 && say "   configmap ok"
+
+say "== RestDefinition with ALL static per-verb headers REMOVED =="
+python3 - <<'PY'
+import yaml, pathlib
+d = yaml.safe_load(pathlib.Path("manifests/restdefinition-port.yaml").read_text())
+d["metadata"].update(name="arm-port", namespace="probe")
+d["spec"]["oasPath"] = "configmap://probe/port-oas/port.yaml"
+d["spec"]["resourceGroup"] = "arm.ogen.krateo.io"
+removed = sum(1 for v in d["spec"]["resource"]["verbsDescription"] if v.pop("headers", None) is not None)
+cf = [c["fromOpenAPI"]["name"] for c in d["spec"]["resource"]["configurationFields"]]
+# ASSERT THE SETUP, because a setup that cannot produce the condition reports a pass.
+assert removed == 4, f"expected 4 static header blocks removed, got {removed}"
+assert "X-OpenStack-Ironic-API-Version" in cf, cf
+pathlib.Path("/tmp/arm043-rd.yaml").write_text(yaml.safe_dump(d, sort_keys=False))
+print(f"   removed {removed} static header blocks; configurationFields={cf}")
+PY
+[ $? -eq 0 ] || { say "   ABORT: the RestDefinition setup assertions failed"; exit 1; }
+"${K[@]}" apply -f /tmp/arm043-rd.yaml >/dev/null 2>&1
+for i in $(seq 1 40); do
+  r=$("${K[@]}" get restdefinitions.ogen.krateo.io -n "$NS" arm-port -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null)
+  [ "$r" = "True" ] && { say "   RestDefinition Ready after $i polls"; break; }
+  sleep 8
+done
+[ "${r:-}" = "True" ] || { say "   ABORT: RestDefinition never became Ready"; exit 1; }
+
+say "== READ the generated Configuration schema and ASSERT its shape =="
+# Never guess this. At 0.54.1 `spec.configuration` does not exist at all, and the
+# 0.43.0 shape IS the subject of the experiment. A guessed shape configures nothing,
+# puts nothing on the wire, and that reads as CONFIRMING the hypothesis -- the setup
+# manufacturing the expected answer. So assert the shape, and abort if it moved.
+"${K[@]}" get crd portconfigurations.arm.ogen.krateo.io -o json 2>/dev/null > /tmp/arm043-cfgcrd.json
+# `||` must sit on the heredoc's COMMAND line, not after the terminator. Putting it
+# after `PY` is a syntax error -- and bash executes incrementally, so the script runs
+# normally until it REACHES the error. A late syntax error in a script that creates a
+# cluster means it creates the cluster and then dies. `bash -n` is the gate; a
+# successful --preflight-only run is not.
+python3 - /tmp/arm043-cfgcrd.json <<'PY' || { say "   ABORT: the Configuration schema is not the #304 shape; the arm would be vacuous"; exit 1; }
+import sys, json
+v = json.load(open(sys.argv[1]))["spec"]["versions"][0]
+sp = v["schema"]["openAPIV3Schema"]["properties"]["spec"]["properties"]
+assert "configuration" in sp, "no spec.configuration at this version: %s" % sorted(sp)
+h = sp["configuration"]["properties"]
+assert "header" in h, "expected the SINGULAR header key (the #304 shape), got %s" % sorted(h)
+verbs = sorted(h["header"]["properties"])
+print("   spec.configuration.header per-verb keys: %s" % verbs)
+assert "findby" in verbs, verbs
+PY
+
+say "== PortConfiguration: #304 shape, 'header' SINGULAR, per verb, = $DISTINCT_CONFIG =="
+"${K[@]}" create secret generic ironic-token -n "$NS" --from-literal=token=dummy \
+    --dry-run=client -o yaml | "${K[@]}" apply -f - >/dev/null 2>&1
+"${K[@]}" apply -f - >/dev/null 2>&1 <<EOF
+apiVersion: arm.ogen.krateo.io/v1alpha1
+kind: PortConfiguration
+metadata: {name: arm-endpoint, namespace: $NS}
+spec:
+  authentication:
+    apiKey:
+      header: X-Auth-Token
+      tokenRef: {name: ironic-token, namespace: $NS, key: token}
+  configuration:
+    header:
+      findby: {X-OpenStack-Ironic-API-Version: "$DISTINCT_CONFIG"}
+      get:    {X-OpenStack-Ironic-API-Version: "$DISTINCT_CONFIG"}
+      create: {X-OpenStack-Ironic-API-Version: "$DISTINCT_CONFIG"}
+      delete: {X-OpenStack-Ironic-API-Version: "$DISTINCT_CONFIG"}
+EOF
+STORED=$("${K[@]}" get portconfigurations.arm.ogen.krateo.io -n "$NS" arm-endpoint -o jsonpath='{.spec.configuration}' 2>/dev/null)
+say "   stored back: ${STORED:0:120}..."
+case "$STORED" in *"$DISTINCT_CONFIG"*) ;; *) say "   ABORT: the Configuration did not store $DISTINCT_CONFIG -- it was pruned"; exit 1;; esac
+
+reqs () { "${K[@]}" logs -n "$NS" deploy/headermock --tail=-1 2>/dev/null | grep -c '^HDR'; }
+hdrs () { "${K[@]}" logs -n "$NS" deploy/headermock --tail=-1 2>/dev/null | grep -c "microversion=$1"; }
+PV=$("${K[@]}" get crd ports.arm.ogen.krateo.io -o jsonpath='{.spec.versions[0].name}' 2>/dev/null)
+
+say "== ARM 1: one Port CR, gated on the MOCK BEING CALLED, never on elapsed time =="
+B1=$(reqs)
+"${K[@]}" apply -f - >/dev/null 2>&1 <<EOF
+apiVersion: arm.ogen.krateo.io/$PV
+kind: Port
+metadata: {name: arm-one, namespace: $NS}
+spec:
+  address: "aa:bb:cc:dd:ee:01"
+  node_uuid: "22222222-2222-2222-2222-222222222222"
+  pxe_enabled: true
+  configurationRef: {name: arm-endpoint, namespace: $NS}
+EOF
+for i in $(seq 1 45); do [ "$(reqs)" -gt "$B1" ] && break; sleep 4; done
+[ "$(reqs)" -gt "$B1" ] || { say "   ARM VOID: the controller never called the mock"; exit 3; }
+sleep 15
+say "   arm 1 microversions:"; "${K[@]}" logs -n "$NS" deploy/headermock --tail=-1 2>/dev/null | grep '^HDR' | tail -n "$(( $(reqs) - B1 ))" | awk '{print $NF}' | sort | uniq -c | sed 's/^/      /'
+
+say "== ARM 2 (POSITIVE CONTROL): static per-verb header = $DISTINCT_STATIC on the SAME CR =="
+B2=$(reqs)
+python3 - "$DISTINCT_STATIC" <<'PY'
+import yaml, pathlib, sys
+d = yaml.safe_load(pathlib.Path("/tmp/arm043-rd.yaml").read_text())
+for v in d["spec"]["resource"]["verbsDescription"]:
+    v["headers"] = [{"name": "X-OpenStack-Ironic-API-Version", "value": sys.argv[1]}]
+pathlib.Path("/tmp/arm043-rd-static.yaml").write_text(yaml.safe_dump(d, sort_keys=False))
+PY
+"${K[@]}" apply -f /tmp/arm043-rd-static.yaml >/dev/null 2>&1
+"${K[@]}" patch ports."$PV".arm.ogen.krateo.io -n "$NS" arm-one --type=merge -p '{"spec":{"extra":{"arm":"static"}}}' >/dev/null 2>&1
+for i in $(seq 1 45); do [ "$(reqs)" -gt "$B2" ] && break; sleep 4; done
+A2=$(reqs); sleep 10
+say "   arm 2 microversions:"; "${K[@]}" logs -n "$NS" deploy/headermock --tail=-1 2>/dev/null | grep '^HDR' | tail -n "$(( $(reqs) - B2 ))" | awk '{print $NF}' | sort | uniq -c | sed 's/^/      /'
+
+say "============== VERDICT =============="
+C=$(hdrs "$DISTINCT_CONFIG"); T=$(hdrs "$DISTINCT_STATIC")
+echo "   Configuration-sourced $DISTINCT_CONFIG on the wire: $C"
+echo "   static per-verb       $DISTINCT_STATIC on the wire: $T"
+echo "   NONE: $(hdrs NONE)    total requests: $(reqs)"
+if [ "$A2" -le "$B2" ]; then
+  echo "   ARM 2 VOID: no request during the static arm, so 'absent' means nothing."
+elif [ "$T" -eq 0 ]; then
+  echo "   ARM VOID: the STATIC header never reached the wire either, so the pipeline"
+  echo "             was never live and arm 1 proves nothing."
+elif [ "$C" -gt 0 ]; then
+  echo "   *** oasgen's #561 ACCOUNT IS WRONG: $DISTINCT_CONFIG reached the wire at $OASGEN_VER. ***"
+else
+  echo "   oasgen's #561 account SURVIVES: $DISTINCT_CONFIG absent while the static"
+  echo "   $DISTINCT_STATIC reached the wire ($T times), so the Configuration route was"
+  echo "   genuinely inert at $OASGEN_VER."
+fi
+
 say "== cleanup is deliberate, not automatic: kind delete cluster --name $CLUSTER =="
