@@ -1466,6 +1466,75 @@ generated for the two probes; deleting the RestDefinitions removed the two
 `portgroups.*` CRDs and left both `portgroupconfigurations.*` behind, with no
 `deletionTimestamp` and no finalizers. Harmless here (no CRs, no controller), but it
 is residue that accumulates.
+#### §9.13c — the power `get` verb addressed a path its own OAS did not declare
+
+**Found by reading `status.schemaWarnings`, a field nothing in this repo had ever
+read.** §9.13 says twice that these warnings live only in a one-hour Event and that
+"no condition carries them". Both wrong: `status.schemaWarnings` is a shipped status
+field, written on **every** render unconditionally, so it persists and it clears when
+the cause is fixed. It was holding **nine** warnings across three definitions.
+
+```
+ironic-node             0
+ironic-node-power       6      <- including the severe one
+ironic-node-provision   2
+ironic-port             1
+```
+
+**The defect.** `restdefinition-power.yaml` declares `get GET /v1/nodes/{node_id}`.
+`oas/ironic-power.yaml` declared only `/v1/nodes` and
+`/v1/nodes/{node_id}/states/power`. Verified against the **live ConfigMap oasgen
+actually reads**, not just the repo file (same sha256). So:
+
+```
+generation error: path '/v1/nodes/{node_id}' set in RestDefinition not found in OAS
+validation error: could not extract base schema for action 'get':
+                  path '/v1/nodes/{node_id}' not found in OAS document       (x3)
+```
+
+The verb could not resolve a schema. It was inert.
+
+**Why that is worse than a dangling verb.** oasgen states the consequence outright,
+for power *and* provision:
+
+> identifier `"node_id"` is absent from the items the findby response carries, so
+> findby cannot compare against it. **no declared identifier is present in the findby
+> response, so findby can never match any item regardless of policy: it will report
+> not-found and the reconciler acts on not-found by creating**
+
+That is §9.14's wedge, named by the tool. A working `get` is the fix — it is exactly
+why `restdefinition-port.yaml` gained one (oasgen #378). Here the fix pointed at a
+missing path, so **the repair path was instrumented and could not fire**. See the
+`instrumentation-on-the-unbreakable-path` note; this is a second instance.
+
+**The fix and its measurement.** Added `/v1/nodes/{node_id}` with a `get` returning
+`NodeState`, using the `node_id` parameter component the document already had.
+
+```
+oasHash        f4d3e4ce1999… -> aa97592fed4a…        (so it DID re-render)
+warnings       6 -> 2
+cleared        the path-missing error + all three base-schema errors
+remaining      the two findby/identifier warnings, as predicted -- they are
+               structural: /v1/nodes returns `name` and `uuid`, never `node_id`
+conditions     Ready=True reason=Available, Synced=True reason=ReconcileSuccess
+```
+
+**Safety, which is the part worth copying.** All 32 CRs across all four kinds were
+captured by **uid** before the change and diffed after:
+
+```
+nodepowers 8   baremetalnodes 8   ports 16   nodeprovisions 0
+diff of (kind, name, uid, Ready) before vs after:   EMPTY
+```
+
+Nothing recreated, nothing dropped out of Ready, CRD still serves `v1-0-0`. Name
+matching would have hidden a delete-and-recreate; uid matching cannot.
+
+**What is still open.** The two remaining warnings say findby can never match on this
+kind. With a working `get` the existence question now has a direct answer, which is
+the Port design and the backstop that matters. Making findby itself correct means
+changing `identifiers` to something `/v1/nodes` actually returns — a larger change,
+not attempted here.
 
 ### §9.14 — the blade06 NodePower wedge, measured end to end
 
