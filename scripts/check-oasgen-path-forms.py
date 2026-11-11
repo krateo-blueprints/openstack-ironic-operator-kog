@@ -48,10 +48,20 @@ SKIP = re.compile(r"^(.*transform|jq|script|.*body)$", re.I)
 #   foo.0.bar     the dotted index
 #   foo['0']      the quoted bracket index
 #
-# A BARE `foo[0]` is NOT flagged: against an ARRAY it is unchanged and sits in the
-# differential test's agree list. Against a map it is refused, but which one it is
-# cannot be decided from the text. My first version flagged every bare bracket and
-# would have raised false alarms on four corpora.
+# The full set, from #544's author:
+#
+#   REFUSED     a.0       against an ARRAY
+#   REFUSED     a['0']    against an ARRAY
+#   REFUSED     a[0]      against a MAP
+#   UNCHANGED   a[0]      against an ARRAY        <- the normal, correct form
+#   UNCHANGED   a['0']    against a MAP
+#   UNCHANGED   plain map traversal, [?key=value] predicates
+#
+# A RestDefinition does not carry the schema, so array-vs-map is not decidable from
+# path text. A bare `foo[0]` is therefore NOT a finding -- it needs a schema check,
+# which is a different job. My first version flagged every bare bracket and would
+# have raised false alarms on five corpora, including `spec.credentials[0]`, which
+# is in #544's own agree list.
 DOTTED = re.compile(r"(^|\.)\d+(\.|$)")              # foo.0.bar  foo.0  0.bar
 QUOTED = re.compile(r"\[\s*['\"]\d+['\"]\s*\]")      # foo['0']  foo["0"]
 
@@ -114,10 +124,15 @@ spec:
       - spec.nested['1'].address       # MUST FIRE   quoted bracket
       - status.items[0].uuid           # must NOT    bare bracket, undecidable
       - spec.plain.name                # must NOT    no index
+      - spec.credentials[0].valueSecretRef.name
+      #   ^ must NOT. This exact path is in #544's own AGREE list and appears across
+      #     five corpora. Flagging it is what turns a screen into a source of false
+      #     work, so it is pinned here as a regression row rather than left implied.
     additionalStatusFields:
       - status.a.2.b                   # MUST FIRE
       - "1.109"                        # must NOT    a microversion, not a path
       - "2.72"                         # must NOT    a microversion
+      - "2.1"                          # must NOT    a microversion (nova's)
       #   ^ QUOTED deliberately. Unquoted, YAML types these as floats and they never
       #     reach is_version() at all -- the negative case would pass because the
       #     value was not a string, not because the guard works. A control that
@@ -167,11 +182,19 @@ if __name__ == "__main__":
     # Assert what must NOT have fired. A control that only checks the planted hits
     # cannot catch an over-broad pattern -- which is exactly what the bare-bracket
     # rule was.
-    for forbidden in ["status.items[0].uuid", "status.projects[0].id",
-                      "spec.secrets[0].key", "items[0].n", "1.109", "2.72",
-                      "/v2.1/flavors", "spec.plain.name"]:
+    MUST_STAY_SILENT = ["status.items[0].uuid", "status.projects[0].id",
+                        "spec.secrets[0].key", "items[0].n", "1.109", "2.72", "2.1",
+                        "/v2.1/flavors", "spec.plain.name",
+                        "spec.credentials[0].valueSecretRef.name"]
+    for forbidden in MUST_STAY_SILENT:
         assert not any(forbidden == v for v in hits.values()), \
             f"FALSE ALARM: pattern fired on {forbidden!r}, which #544 does not refuse"
+    # Both counts must be NON-ZERO (oasgen's idea). A suite of silent rows passes
+    # trivially against a checker that never fires, and a suite of firing rows passes
+    # against one that fires on everything. Asserting both directions are exercised is
+    # what makes the pair meaningful.
+    assert len(hits) > 0, "no must-fire row fired: the checker may never fire at all"
+    assert len(MUST_STAY_SILENT) > 0, "no must-stay-silent rows: over-breadth untested"
     print("  control PASSES -- the walk reaches every container and skips jq\n")
 
     print("=== REAL CORPUS ===")
