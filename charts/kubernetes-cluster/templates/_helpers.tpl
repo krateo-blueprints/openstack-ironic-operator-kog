@@ -833,9 +833,22 @@ __CONFIGDRIVE_HASH_SENTINEL__
         "$AUTH_URL/v3/auth/tokens" 2>/dev/null \
         | grep -i 'x-subject-token' | awk '{print $2}' | tr -d '\r')
       if [ -n "$TOKEN" ]; then
+        # MICROVERSION: 1.109 in all six curl calls in this file, unified 2026-11-11.
+        # Three of them carried 1.81 and three carried 1.109, with no comment saying
+        # why, while BOTH groups hit the same /v1/nodes family to read and write
+        # `extra`. Nothing depended on the difference -- `extra` has existed since
+        # 1.1 -- so this was a latent trap rather than a live bug, and the trap is
+        # that Ironic answers a too-low microversion by SILENTLY SERVING AN OLDER API
+        # rather than by failing. A future change in one of the 1.81 paths that
+        # needed a newer field would have 406'd, or worse, quietly read a 2014 shape.
+        #
+        # 1.109 is what every RestDefinition in manifests/ pins, so the chart and the
+        # operator now agree on one number. If this ever needs to be configurable,
+        # make it one value -- not six literals -- because six literals is how the
+        # split happened.
         EP=$(curl -sS --max-time 15 \
           -H "X-Auth-Token: $TOKEN" \
-          -H "X-OpenStack-Ironic-API-Version: 1.81" \
+          -H "X-OpenStack-Ironic-API-Version: 1.109" \
           "$IRONIC_URL/v1/nodes/$BOOTSTRAP" 2>/dev/null \
           | python3 -c "import sys,json; print((json.load(sys.stdin).get('extra') or {}).get(sys.argv[1]) or '')" "$KEY" 2>/dev/null)
         if [ -n "$EP" ]; then
@@ -1033,13 +1046,13 @@ __CONFIGDRIVE_HASH_SENTINEL__
       | grep -i 'x-subject-token' | awk '{print $2}' | tr -d '\r')
     test -n "$TOKEN"
     UUID=$(curl -sS -H "X-Auth-Token: $TOKEN" \
-      -H "X-OpenStack-Ironic-API-Version: 1.81" \
+      -H "X-OpenStack-Ironic-API-Version: 1.109" \
       "$IRONIC_URL/v1/nodes/$HN" \
       | python3 -c "import sys,json; print(json.load(sys.stdin).get('uuid',''))")
     test -n "$UUID"
     curl -sS -X PATCH \
       -H "X-Auth-Token: $TOKEN" \
-      -H "X-OpenStack-Ironic-API-Version: 1.81" \
+      -H "X-OpenStack-Ironic-API-Version: 1.109" \
       -H "Content-Type: application/json-patch+json" \
       -d "[{\"op\":\"add\",\"path\":\"/extra/deployed_configdrive_hash\",\"value\":\"$HASH\"}]" \
       "$IRONIC_URL/v1/nodes/$UUID"
