@@ -18,15 +18,21 @@ spec:
       - name
     additionalStatusFields:
       - uuid
-    excludedSpecFields:
-      - uuid
+    # NO excludedSpecFields, and NO X-Ironic-Endpoint configurationField. Both were
+    # here and both were inert; removing them clears two of the eight
+    # `reason=SchemaWarnings` generation errors this repo was shipping.
+    #
+    #   excludedSpecFields: [uuid] -- oasgen builds the spec from the *Create* schema,
+    #     and `uuid` is absent from every *Create schema in oas/. So it excluded a field
+    #     that was never in the spec. `uuid` is surfaced via additionalStatusFields.
+    #   X-Ironic-Endpoint -- declared in ZERO OAS documents. Measured with a control:
+    #     the same grep hits X-OpenStack-Ironic-API-Version 6x in oas/ironic-port.yaml.
+    #
+    # The microversion configurationField below is NOT dead: it is a real OAS parameter,
+    # and the route was measured working on rdc 0.54.1 -- a Configuration set to a
+    # distinctive 1.95 reached the wire twice, 0 406s. That run was on Port; the other
+    # three kinds share the mechanism, not the measurement. Do not remove it with these.
     configurationFields:
-      - fromOpenAPI:
-          name: X-Ironic-Endpoint
-          in: header
-        fromRestDefinition:
-          actions:
-            - "*"
       - fromOpenAPI:
           name: X-OpenStack-Ironic-API-Version
           in: header

@@ -20,14 +20,20 @@ spec:
         name: ironic-keystone-token
         namespace: openstack
         key: token
-  # Only verbs declared by restdefinition-port.yaml are accepted here. Port has findby/
-  # create/delete (no `get`: GET /v1/ports/{uuid} is addressed by uuid, which we don't have
-  # at observe-time; the RestDef relies on findby on MAC to resolve the port).
-  # spec.configuration REMOVED 2026-11-08, same reason as
-  # nodeconfiguration-ironic.yaml: it carried the #304 shape -- `header`
-  # SINGULAR, per verb -- which rest-dynamic-controller never reads, because it
-  # looks up `headers` plural. Inert, and restdefinition-port.yaml carries the
-  # working mechanism (static per-verb `headers:`).
+  # Only verbs declared by restdefinition-port.yaml are accepted here. Port has
+  # findby/create/delete AND `get` -- CORRECTED 2026-11-11, the `get` on
+  # /v1/ports/{uuid} was declared 2026-11-04 and this comment still denied it. It is
+  # addressed from status.uuid, not at first observe; findby on the MAC is what
+  # resolves a port that has no uuid yet.
+  #
+  # spec.configuration REMOVED 2026-11-08 because it carried the #304 shape --
+  # `header` SINGULAR, per verb. CORRECTED 2026-11-11: the claim that
+  # rest-dynamic-controller "never reads" it was true when written and is now false.
+  # Fixed in 0.44.0 (#304) and 0.50.0 (#305/#392), control 0.43.0, and MEASURED on
+  # rdc 0.54.1 -- a PortConfiguration set to a distinctive 1.95 reached the wire
+  # twice, 0 406s. So the route works; restdefinition-port.yaml pins the microversion
+  # statically by choice, because nothing renders this file and a hand-applied
+  # singleton can be forgotten.
   #
   # /code-review predicted `make restdef-up` would now DIE here, since the node
   # and power Configuration CRDs accept only `spec.authentication`. Measured

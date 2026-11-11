@@ -31,13 +31,17 @@ spec:
         name: ironic-keystone-token
         namespace: openstack
         key: token
-  # spec.configuration REMOVED 2026-11-07. It carried the #304 shape --
-  # `header` SINGULAR, per verb -- which rest-dynamic-controller never reads: it
-  # looks up `headers` plural, so the lookup missed and every microversion in
-  # here was dropped with no error. restdefinition-node.yaml has carried that
-  # explanation for a while and the working mechanism alongside it: static
-  # per-verb `headers:` on each verb, which take a different code path and do
-  # ship.
+  # spec.configuration REMOVED 2026-11-07. It carried the #304 shape -- `header`
+  # SINGULAR, per verb -- and at the rdc of the day the lookup missed, dropping every
+  # microversion in here with no error.
+  #
+  # CORRECTED 2026-11-11: "which rest-dynamic-controller never reads" is no longer
+  # true. Fixed in 0.44.0 (#304) and 0.50.0 (#305/#392), control 0.43.0, and MEASURED
+  # on rdc 0.54.1 -- a Configuration set to a distinctive 1.95 reached the wire twice,
+  # 0 406s (full run in oas/ironic-port.yaml). The removal stands on its own: the
+  # Configuration CRD oasgen 0.54.1 generates declares only `spec.authentication`, so
+  # the field was also un-appliable. restdefinition-node.yaml carries the static
+  # per-verb `headers:` that pin the version, now by choice rather than necessity.
   #
   # It is now also UN-APPLIABLE, which is how it was finally noticed. The
   # Configuration CRD oasgen 0.54.1 generates declares only `spec.authentication`,

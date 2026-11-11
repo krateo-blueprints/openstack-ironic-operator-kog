@@ -9,10 +9,15 @@
 #   NodePower "blade01-...-power-on-from-off" is invalid: spec.configurationRef: Required value
 # which surfaces as a Helm render failure on the composition, not as an auth error.
 #
-# No spec.configuration block here: the microversion is pinned as a static per-verb header
-# on each RestDefinition instead. spec.configuration.header can never work -- oasgen emits
-# the property as `header` while RDC reads `headers`, so the lookup silently misses
-# (oasgen #304). Static headers take a different, working code path.
+# No spec.configuration block here: the microversion is pinned as a static per-verb
+# header on each RestDefinition instead. CORRECTED 2026-11-11: this said
+# spec.configuration.header "can never work", on oasgen #304 (`header` emitted,
+# `headers` read). That was true when written and is FIXED -- 0.44.0 (#304), 0.50.0
+# (#305/#392), control 0.43.0 -- and MEASURED on rdc 0.54.1, where a Configuration set
+# to a distinctive 1.95 reached the wire twice with 0 406s. Static headers are now the
+# choice, not the only option: nothing renders this file, so a hand-applied singleton
+# can be forgotten and Ironic answers a missing microversion by serving its 1.1
+# minimum rather than by failing. Full run in oas/ironic-port.yaml.
 ---
 apiVersion: baremetal.ogen.krateo.io/v1alpha1
 kind: NodePowerConfiguration

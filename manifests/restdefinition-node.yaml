@@ -51,11 +51,21 @@ spec:
     # generating one). We DROP the excludedSpecFields entry for it so callers can pin a UUID
     # via spec.uuid — required when other Nodes reference this one via parent_node and we
     # need stable IDs across re-enroll. status.uuid still mirrors what Ironic returned.
-    # The microversion is NOT a configurationField. It cannot be: oasgen generates the
-    # Configuration property as `header` (singular, taken from the OAS "in" value) while
-    # rest-dynamic-controller looks up `headers` (plural), so the lookup misses and the
-    # headers are dropped with no error. Confirmed upstream as oasgen #304; `path` and
-    # `query` match and work, `header` and `cookie` cannot.
+    # The microversion is NOT a configurationField. CORRECTED 2026-11-11: that is a
+    # DELIBERATE choice, not an impossibility. This file used to say "it cannot be",
+    # because oasgen emitted the Configuration property as `header` (singular, from the
+    # OAS "in" value) while rest-dynamic-controller read `headers` (plural) and the
+    # lookup missed with no error -- oasgen #304. True when written, and FIXED upstream
+    # in 0.44.0 (#304) and 0.50.0 (#305/#392), with 0.43.0 as the negative control.
+    #
+    # MEASURED on rdc 0.54.1: with the static per-verb headers removed and a
+    # Configuration set to a distinctive 1.95, the wire carried 1.95 twice with 0 406s.
+    # The full run is in oas/ironic-port.yaml -- one place, not seven.
+    #
+    # Static per-verb headers stay because NO CHART RENDERS A Configuration CR. Every
+    # *Configuration here is a hand-applied singleton in manifests/, so a
+    # Configuration-only route can be forgotten at install time, and Ironic answers a
+    # missing microversion by silently serving its 1.1 minimum rather than by failing.
     #
     # Measured here before the cause was known: X-Auth-Token reached the wire (proving the
     # Configuration resolves and spec.authentication applies) while
