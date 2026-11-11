@@ -39,6 +39,15 @@ for b in kind kubectl helm docker python3; do
   command -v "$b" >/dev/null || { echo "PRECHECK FAILED: $b not on PATH"; exit 1; }
 done
 
+# --preflight-only runs every guard and STOPS before `kind create`. Added after I
+# tested the guards by running the script and piping to `head`, which stopped it only
+# because the closed pipe raised SIGPIPE -- and once it did NOT stop in time and
+# created a real cluster I then had to delete, while a peer had a prior claim on the
+# box. A script that creates infrastructure needs a way to exercise its refusals that
+# does not depend on a signal arriving fast enough.
+PREFLIGHT_ONLY=0
+[ "${1:-}" = "--preflight-only" ] && { PREFLIGHT_ONLY=1; shift; }
+
 CLUSTER=${CLUSTER:-oasgen043-arm}
 KC="local/kubeconfig.${CLUSTER}"      # isolated: ~/.kube/config is never touched
 CTX="kind-${CLUSTER}"
@@ -60,16 +69,43 @@ say "== preflight =="
 # locale: `39,41` parsed as `39`. Harmless far from the ceiling and a silent
 # misread next to it. `sysctl -n vm.loadavg` is no help: it prints `{ 39,41 ... }`
 # with the same locale comma.
-LOAD=$(uptime | sed 's/.*averages*: *//' | awk '{print $1}')
-LOAD=${LOAD%,}        # en_US prints "2.50," -- strip the LIST separator first
-LOAD=${LOAD/,/.}      # it_IT prints "39,41" -- then the DECIMAL comma
+# GATE ON THE 15-MINUTE AVERAGE, not the 1-minute one. Caught by the installer
+# session 2026-11-11: my first version read the 1-min figure, which is the noisiest
+# of the three and the one most likely to be a TROUGH BETWEEN BURSTS. It reported
+# 21.2 -- below the ceiling -- while two other control planes sat at 97.7% and
+# 92.96% and the 15-min figure was 24.4, i.e. AT the ceiling.
+#
+# This run lasts 15-20 minutes, so the 15-minute average is the matching timescale:
+# the question is not "is the box quiet right now" but "has the box been quiet long
+# enough that it will probably stay quiet for the length of my run". Gating on the
+# 1-min figure answers the wrong question and answers it optimistically.
+#
+# Same shape as the defect this probe was written to avoid: the instrument chosen
+# determines the answer, and the convenient instrument said go.
+read -r L1 L5 L15 <<< "$(uptime | sed 's/.*averages*: *//' | awk '{print $1, $2, $3}')"
+norm () { local v="${1%,}"; printf '%s' "${v/,/.}"; }   # strip LIST sep, then DECIMAL comma
+L1=$(norm "$L1"); L5=$(norm "$L5"); L15=$(norm "$L15")
+# ...and gate on the MAXIMUM of the three, not on any single one. Gating on the
+# 15-min alone has the mirror-image defect of gating on the 1-min: it permits a
+# RISING load. My own test table caught it --
+#     1m=40.00  5m=30.00  15m=20.00  ->  PROCEED
+# which is a box that is busy NOW and was quiet an hour ago, i.e. exactly when not
+# to start. The max refuses both shapes: a trough between bursts (1m low, 15m high)
+# and a spike on a recently-quiet box (1m high, 15m low).
+# LC_ALL=C on BOTH the max and the comparison. Without it awk PRINTS the max with
+# a locale decimal comma ("25,27") and the comparison then re-parses that string --
+# which happens to work under it_IT, because its awk reads "25,27" as 25.27, and
+# TRUNCATES to 25 under C. A guard that is correct only because of the ambient
+# locale is the third locale defect in this one function; pin it instead of relying
+# on it.
+LOAD=$(LC_ALL=C awk -v a="$L1" -v b="$L5" -v c="$L15" 'BEGIN{m=a+0; if(b+0>m)m=b+0; if(c+0>m)m=c+0; printf "%.2f", m}')
 # Both must happen and in this order. Converting first turns "2.50," into "2.50."
 # which awk still reads as 2.50, so the comparison survives while the figure PRINTED
 # in the abort message is wrong -- and an abort message is exactly what someone
 # reasons from later.
-say "   1-min load: $LOAD  (ceiling $LOAD_CEILING)"
-awk -v l="$LOAD" -v c="$LOAD_CEILING" 'BEGIN{exit !(l+0>c+0)}' && {
-  say "   ABORT: load above the ceiling. Four other sessions share this box and a"
+say "   load 1-min=$L1  5-min=$L5  15-min=$L15   gating on MAX=$LOAD, ceiling $LOAD_CEILING"
+LC_ALL=C awk -v l="$LOAD" -v c="$LOAD_CEILING" 'BEGIN{exit !(l+0>c+0)}' && {
+  say "   ABORT: max load above the ceiling. Several sessions share this box and a"
   say "          kind create here would hurt them. Re-run when it drops, or pass"
   say "          LOAD_CEILING=<n> if you have decided otherwise."
   exit 2
@@ -79,6 +115,11 @@ say "   docker VM free: ${FREE}G"
 [ "${FREE:-0}" -lt 15 ] && { say "   ABORT: under 15G free on the shared Docker disk"; exit 2; }
 kind get clusters 2>/dev/null | grep -qx "$CLUSTER" && {
   say "   ABORT: cluster $CLUSTER already exists. Delete it deliberately first."; exit 2; }
+
+if [ "$PREFLIGHT_ONLY" = "1" ]; then
+  say "== --preflight-only: every guard passed, stopping before kind create =="
+  exit 0
+fi
 
 # ---------------------------------------------------------------- cluster ------
 say "== create the throwaway cluster (isolated kubeconfig) =="
