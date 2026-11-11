@@ -44,6 +44,20 @@ jobs:
         with:
           version: ${{ env.HELM_VERSION }}
 
+      # BEFORE anything is packaged or pushed. Added 2026-11-11 after tag 0.3.7
+      # published a broken `kubernetes-cluster` 0.15.2: its bundled
+      # compositiondefinition.yaml pinned version "0.15.1" while Chart.yaml said
+      # "0.15.2". The `publish-blueprints-channel` gate DID catch it --
+      #   kubernetes-cluster 0.15.2: its CompositionDefinition installs version '0.15.1'
+      # -- but that gate is a DEPENDENT JOB, so it runs after `helm push` has already
+      # succeeded. The artifact exists and cannot be withdrawn; 0.15.3 is the fix.
+      #
+      # `make check` catches it locally and is entirely offline, so there is no reason
+      # for it not to be the first thing this job does. The gate existed; it ran too
+      # late, and nobody had run the local one.
+      - name: standing screens must pass before anything is packaged or pushed
+        run: make check
+
       - name: helm lint (all charts)
         run: |
           for dir in charts/baremetal-discovery charts/baremetal-host charts/baremetal-lifecycle charts/kubernetes-cluster; do

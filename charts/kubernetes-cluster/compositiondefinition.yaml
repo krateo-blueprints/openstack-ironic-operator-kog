@@ -11,7 +11,7 @@
 # template -- nothing here is rendered, and Helm ignores it at install time.
 #
 # `version` must equal the chart version, because it IS the served apiVersion:
-# 0.15.1 -> composition.krateo.io/v0-15-1. `make check-blueprints` fails if the
+# 0.15.3 -> composition.krateo.io/v0-15-3. `make check-blueprints` fails if the
 # two drift.
 #
 # ORDER MATTERS. Register baremetal-host FIRST. This blueprint renders
@@ -28,8 +28,8 @@ metadata:
 spec:
   chart:
     url: oci://ghcr.io/krateo-blueprints/charts/kubernetes-cluster
-    version: "0.15.1"
+    version: "0.15.3"
     # Served from the Marketplace's classic Helm channel instead of OCI:
     #   url: https://krateo-blueprints.github.io/charts/blueprints
     #   repo: kubernetes-cluster
-    #   version: "0.15.1"
+    #   version: "0.15.3"

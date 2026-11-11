@@ -53,7 +53,20 @@ After a chart is published, bump the matching `manifests/compositiondefinition-*
 | `baremetal-host` | `0.6.3` |
 | `baremetal-lifecycle` | `0.3.3` |
 | `baremetal-discovery` | `0.1.2` |
-| `kubernetes-cluster` | `0.15.2` |
+| `kubernetes-cluster` | `0.15.3` |
+
+> **`kubernetes-cluster` 0.15.2 is published and must not be used.** Its bundled
+> `compositiondefinition.yaml` pins `version: "0.15.1"` while the chart is `0.15.2`, so a
+> consumer installing from it gets a CompositionDefinition that installs the previous chart.
+> The `publish-blueprints-channel` gate caught it — *"kubernetes-cluster 0.15.2: its
+> CompositionDefinition installs version '0.15.1'"* — but **after** `helm push` had already
+> succeeded in the same workflow, so the artifact exists. It is left immutable rather than
+> overwritten, for the reason this page gives below: a re-push changes bytes that consumers
+> already hold. `0.15.3` is the corrected release.
+>
+> The local gate `make check-blueprints` catches this before a tag, and it was not run.
+> `release-chart.yaml` now runs the whole `make check` suite as its first step, before
+> `helm package` and `helm push`, so the gate can no longer run too late to matter.
 
 ## PR-time checks
 
