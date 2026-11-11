@@ -408,6 +408,19 @@ regenerate-crds:   # force oasgen to re-read the OAS and rewrite the generated C
 regenerate-crds-check:   # read the stored side only; change nothing
 	python3 -I scripts/regenerate-restdefinition-crds.py --kubectl "$(KUBECTL)" --check-only
 
+check-schema-warnings:   # read status.schemaWarnings off every LIVE RestDefinition
+	# NEEDS A LIVE CLUSTER, like regenerate-crds-check. Not a CI gate, and NOT yet in
+	# `make check` -- it currently FAILS with 9 real warnings (see docs/IMPLEMENTATION.md
+	# §9.13c). Wire it into `check` in the same commit that takes the count to zero.
+	#
+	# This repo spent two days deriving by hand a rule that oasgen states in a warning,
+	# because docs/IMPLEMENTATION.md said twice that the warnings are emitted "as a
+	# Kubernetes Warning Event and NOWHERE ELSE" and that "no condition carries them".
+	# Both wrong: `status.schemaWarnings` is a shipped status field, written on EVERY
+	# render unconditionally, so it persists past the 1h event TTL and clears when the
+	# cause is fixed. Nothing here had ever read it.
+	python3 -I scripts/check-schema-warnings.py "$(KUBECTL)"
+
 check-oas-defaults:   # no OAS body schema may acquire the v1.26.x defaulting shape
 	# An OPTIONAL object property with a reachable defaulted descendant and no
 	# required properties of its own gains `default: {}` under plumbing v1.26.x.
