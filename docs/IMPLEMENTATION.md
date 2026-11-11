@@ -1400,6 +1400,73 @@ would not have needed to exist. Captured in `evidence/` before expiry.
 real and unfixed: removing the dead `excludedSpecFields` and `configurationFields`
 entries is correct but changes generated output, so it is a separate change.
 
+#### §9.13b — that separate change, made 2026-11-11, and what it actually does
+
+**Three corrections to the paragraph above, all measured on the live lab at oasgen
+0.54.1.** The headline one: **"eight errors" is a RENDER-time count, not a runtime
+one**, and the two halves behave completely differently.
+
+**1. `configurationFields` is IMMUTABLE once the CRD has been generated.** The
+removal cannot be applied to an existing RestDefinition at all:
+
+```
+kubectl apply --dry-run=server -f manifests/restdefinition-port.yaml
+  The RestDefinition "ironic-port" is invalid:
+  spec.resource.configurationFields: Invalid value: ConfigurationFields are
+  immutable, you cannot change them once the CRD has been generated
+```
+
+Refused by the real apply too; `generation` stayed at 7 and `resourceVersion` did
+not move. So removing `X-Ironic-Endpoint` in the manifest takes effect **only on a
+fresh install**. On this lab the dead entry is permanent, exactly like a generated
+CRD `default` (see the `crd-default-is-irreversible` note).
+
+**2. `excludedSpecFields` IS mutable, and removing it changes nothing observable.**
+Split into two arms, `excludedSpecFields` alone applied cleanly (`gen` 7 -> 8, the
+field absent from the live object afterwards). The warning count **before and after
+was 1, both naming only `X-Ironic-Endpoint`**. It never emitted a warning at 0.54.1:
+dead weight, but silent. The four `excludedSpecFields` entries in the render-time
+count of eight do not surface at runtime.
+
+**Net effect on this cluster: zero.** The warning that fires is the one that cannot
+be removed, and the one that can be removed was not firing.
+
+**3. The fresh-install half IS real, measured with a control in both arms.** Two
+RestDefinitions for the uninstalled PortGroup kind, differing only in that field,
+in separate `resourceGroup`s so neither was a mutation of the other (which the
+immutability above rules out):
+
+```
+pg-probe-a  WITH X-Ironic-Endpoint      2 schema warning(s)
+            -> the `uuid` fieldMapping warning  +  X-Ironic-Endpoint
+pg-probe-b  WITHOUT                     1 schema warning(s)
+            -> the `uuid` fieldMapping warning only
+```
+
+The `uuid` warning is the built-in positive control: it fires in **both** arms, so
+the emitter was live and the single-warning difference is the field under test.
+Both probes and all four generated CRDs were removed afterwards; CRD count returned
+to 17, its pre-probe value.
+
+**Two side-findings from the same run.**
+
+**`uuid` has a SECOND mechanism, and oasgen says so in a warning.** Earlier notes
+attributed `uuid`'s absence from the spec solely to it being missing from the
+`*Create` schema. 0.54.1 emits:
+
+> parameter "uuid" is omitted from the generated spec because verb "get" supplies
+> it with a request-direction fieldMapping (inPath, from "spec.name"), so it is not
+> the author's to set.
+
+Both are true for PortGroup, and the mapping suppression is the one the tool names.
+A second mechanism for one observation means the observation was under-checked.
+
+**Deleting a RestDefinition orphans its `*Configuration` CRD.** Four CRDs were
+generated for the two probes; deleting the RestDefinitions removed the two
+`portgroups.*` CRDs and left both `portgroupconfigurations.*` behind, with no
+`deletionTimestamp` and no finalizers. Harmless here (no CRs, no controller), but it
+is residue that accumulates.
+
 ### §9.14 — the blade06 NodePower wedge, measured end to end
 
 My regeneration (§9.12) restarted the four rdc controllers, which re-entered the

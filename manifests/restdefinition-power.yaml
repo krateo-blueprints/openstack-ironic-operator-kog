@@ -143,8 +143,12 @@ spec:
     #       (then create -> 404 "Node ... could not be found", as intended)
     #
     # The only difference was the spec value, so the property ships as a header.
-    # oasgen #304 is about the CONFIGURATION-sourced header, which is a
-    # different path and really is dropped -- I had generalised it to this one.
+    # oasgen #304 was about the CONFIGURATION-sourced header, a different path -- and
+    # CORRECTED 2026-11-11, "really is dropped" is no longer true. Fixed in 0.44.0
+    # (#304) and 0.50.0 (#305/#392), control 0.43.0, and measured on rdc 0.54.1: a
+    # Configuration set to a distinctive 1.95 reached the wire twice, 0 406s. The
+    # "I had generalised it" admission above still stands -- it was the right
+    # correction for the wrong reason.
     #
     # Keeping the static header anyway, as belt-and-braces: it pins the version
     # regardless of what a CR carries, and a future CR that sets the property
@@ -319,14 +323,15 @@ spec:
       - action: findby
         method: GET
         path: /v1/nodes
-        # The microversion, as a STATIC PER-VERB header. Not via the
-        # Configuration: oasgen generates that property as `header` (singular,
-        # from the OAS "in" value) while rest-dynamic-controller looks up
-        # `headers` (plural), so the lookup misses and the header is dropped
-        # with no error -- oasgen #304. Static per-verb headers take a
-        # different code path and do ship, which is why restdefinition-node.yaml
-        # carries this on all five of its verbs and its findby really does
-        # return 17 nodes.
+        # The microversion, as a STATIC PER-VERB header -- a deliberate choice.
+        # CORRECTED 2026-11-11: this used to say the Configuration route "misses
+        # and the header is dropped with no error -- oasgen #304". That was true
+        # when written and is FIXED (0.44.0 #304, 0.50.0 #305/#392, control
+        # 0.43.0); measured working on rdc 0.54.1 with a distinctive 1.95 on the
+        # wire. The static pin stays because no chart renders a Configuration CR --
+        # they are hand-applied singletons, so it cannot be forgotten.
+        # restdefinition-node.yaml carries it on all five of its verbs and its
+        # findby really does return 17 nodes.
         #
         # Required here for two separate reasons, added 2026-11-07:
         #  1. `include_children=true` below needs microversion >= 1.83. Without

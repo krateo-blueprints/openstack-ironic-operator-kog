@@ -21,15 +21,21 @@ spec:
     additionalStatusFields:
       - uuid
       - node_uuid
-    excludedSpecFields:
-      - uuid
+    # NO excludedSpecFields, and NO X-Ironic-Endpoint configurationField. Both were
+    # here and both were inert; removing them clears two of the eight
+    # `reason=SchemaWarnings` generation errors this repo was shipping.
+    #
+    #   excludedSpecFields: [uuid] -- oasgen builds the spec from the *Create* schema,
+    #     and `uuid` is absent from every *Create schema in oas/. So it excluded a field
+    #     that was never in the spec. `uuid` is surfaced via additionalStatusFields.
+    #   X-Ironic-Endpoint -- declared in ZERO OAS documents. Measured with a control:
+    #     the same grep hits X-OpenStack-Ironic-API-Version 6x in oas/ironic-port.yaml.
+    #
+    # The microversion configurationField below is NOT dead: it is a real OAS parameter,
+    # and the route was measured working on rdc 0.54.1 -- a Configuration set to a
+    # distinctive 1.95 reached the wire twice, 0 406s. That run was on Port; the other
+    # three kinds share the mechanism, not the measurement. Do not remove it with these.
     configurationFields:
-      - fromOpenAPI:
-          name: X-Ironic-Endpoint
-          in: header
-        fromRestDefinition:
-          actions:
-            - "*"
       - fromOpenAPI:
           name: X-OpenStack-Ironic-API-Version
           in: header
@@ -61,10 +67,19 @@ spec:
         path: /v1/ports
         identifiersMatchPolicy: OR
         headers:
-          # Pin the microversion as a STATIC per-verb header. It cannot come from
-          # configurationFields above: oasgen emits that property as `header`
-          # (singular, from the OAS `in` value) while rest-dynamic-controller reads
-          # `headers` (plural), so the lookup misses silently (oasgen #304).
+          # Pin the microversion as a STATIC per-verb header. DELIBERATE, not a
+          # necessity -- CORRECTED 2026-11-11. This used to read "it cannot come
+          # from configurationFields above", on oasgen #304 (`header` singular
+          # emitted, `headers` plural read). FIXED: 0.44.0 (#304), 0.50.0
+          # (#305/#392), control 0.43.0 -- and MEASURED on rdc 0.54.1, where a
+          # PortConfiguration set to a distinctive 1.95 reached the wire twice
+          # with 0 406s. The static pin stays because no chart renders a
+          # PortConfiguration; it is a hand-applied singleton, so a
+          # Configuration-only route can be forgotten at install time.
+          #
+          # TRAP: both routes normally declare the SAME value, so a test of this
+          # reads as passing whichever way it is actually wired. Only a value
+          # nothing else in the corpus could produce discriminates -- hence 1.95.
           #
           # With no microversion Ironic negotiates its MINIMUM, 1.1, and `pxe_enabled`
           # did not exist until 1.19 — so every port create came back 406 Not
@@ -76,10 +91,19 @@ spec:
         method: POST
         path: /v1/ports
         headers:
-          # Pin the microversion as a STATIC per-verb header. It cannot come from
-          # configurationFields above: oasgen emits that property as `header`
-          # (singular, from the OAS `in` value) while rest-dynamic-controller reads
-          # `headers` (plural), so the lookup misses silently (oasgen #304).
+          # Pin the microversion as a STATIC per-verb header. DELIBERATE, not a
+          # necessity -- CORRECTED 2026-11-11. This used to read "it cannot come
+          # from configurationFields above", on oasgen #304 (`header` singular
+          # emitted, `headers` plural read). FIXED: 0.44.0 (#304), 0.50.0
+          # (#305/#392), control 0.43.0 -- and MEASURED on rdc 0.54.1, where a
+          # PortConfiguration set to a distinctive 1.95 reached the wire twice
+          # with 0 406s. The static pin stays because no chart renders a
+          # PortConfiguration; it is a hand-applied singleton, so a
+          # Configuration-only route can be forgotten at install time.
+          #
+          # TRAP: both routes normally declare the SAME value, so a test of this
+          # reads as passing whichever way it is actually wired. Only a value
+          # nothing else in the corpus could produce discriminates -- hence 1.95.
           #
           # With no microversion Ironic negotiates its MINIMUM, 1.1, and `pxe_enabled`
           # did not exist until 1.19 — so every port create came back 406 Not
@@ -91,10 +115,19 @@ spec:
         method: DELETE
         path: /v1/ports/{uuid}
         headers:
-          # Pin the microversion as a STATIC per-verb header. It cannot come from
-          # configurationFields above: oasgen emits that property as `header`
-          # (singular, from the OAS `in` value) while rest-dynamic-controller reads
-          # `headers` (plural), so the lookup misses silently (oasgen #304).
+          # Pin the microversion as a STATIC per-verb header. DELIBERATE, not a
+          # necessity -- CORRECTED 2026-11-11. This used to read "it cannot come
+          # from configurationFields above", on oasgen #304 (`header` singular
+          # emitted, `headers` plural read). FIXED: 0.44.0 (#304), 0.50.0
+          # (#305/#392), control 0.43.0 -- and MEASURED on rdc 0.54.1, where a
+          # PortConfiguration set to a distinctive 1.95 reached the wire twice
+          # with 0 406s. The static pin stays because no chart renders a
+          # PortConfiguration; it is a hand-applied singleton, so a
+          # Configuration-only route can be forgotten at install time.
+          #
+          # TRAP: both routes normally declare the SAME value, so a test of this
+          # reads as passing whichever way it is actually wired. Only a value
+          # nothing else in the corpus could produce discriminates -- hence 1.95.
           #
           # With no microversion Ironic negotiates its MINIMUM, 1.1, and `pxe_enabled`
           # did not exist until 1.19 — so every port create came back 406 Not

@@ -109,8 +109,12 @@ spec:
         # negotiated its minimum. Declaring it is what fixed that; this header
         # only guarantees the version if a CR sets the property low.
         #
-        # oasgen #304 concerns the CONFIGURATION-sourced header, a different
-        # path that really is dropped. Do not generalise it to this one.
+        # oasgen #304 concerned the CONFIGURATION-sourced header, a different path.
+        # CORRECTED 2026-11-11: "really is dropped" is no longer true -- fixed in
+        # 0.44.0 (#304) and 0.50.0 (#305/#392), measured working on rdc 0.54.1
+        # (distinctive 1.95 on the wire, 0 406s). Still do not generalise either
+        # statement to this kind: here the value ships as a GENERATED SPEC
+        # PROPERTY with `default: "1.109"`, which is a third route again.
         headers:
           - name: X-OpenStack-Ironic-API-Version
             value: "1.109"
