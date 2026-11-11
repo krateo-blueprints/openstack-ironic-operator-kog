@@ -53,7 +53,7 @@ After a chart is published, bump the matching `manifests/compositiondefinition-*
 | `baremetal-host` | `0.6.3` |
 | `baremetal-lifecycle` | `0.3.3` |
 | `baremetal-discovery` | `0.1.2` |
-| `kubernetes-cluster` | `0.15.1` |
+| `kubernetes-cluster` | `0.15.2` |
 
 ## PR-time checks
 
