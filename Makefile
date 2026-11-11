@@ -421,6 +421,17 @@ check-schema-warnings:   # read status.schemaWarnings off every LIVE RestDefinit
 	# cause is fixed. Nothing here had ever read it.
 	python3 -I scripts/check-schema-warnings.py "$(KUBECTL)"
 
+check-schema-warnings-selftest:   # prove the schemaWarnings screen's controls can fire
+	# NEEDS NO CLUSTER, so this one IS in `make check`. It drives the screen's pure
+	# core with synthetic inputs and asserts that each of the three ways an empty
+	# result can be a lie actually VOIDs:
+	#   no RestDefinitions / no status.schemaWarnings field / no status.generatorBuild
+	# plus that a clean corpus still passes and warnings are still counted.
+	#
+	# Here because a check that cannot fail reports success, and the live screen's
+	# own controls are the part nothing else exercises.
+	python3 -I scripts/check-schema-warnings.py --selftest
+
 check-oas-defaults:   # no OAS body schema may acquire the v1.26.x defaulting shape
 	# An OPTIONAL object property with a reachable defaulted descendant and no
 	# required properties of its own gains `default: {}` under plumbing v1.26.x.
@@ -487,7 +498,7 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 	python3 -I scripts/check-blueprint-metadata.py --self-test && \
 		python3 -I scripts/check-blueprint-metadata.py $(if $(BLUEPRINT_ONLINE),--online,)
 
-check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-blueprints   # every standing screen
+check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints   # every standing screen
 	@echo "all standing screens passed"
 
 chart-host-pinned:   # add the chart versions the LIVE CompositionDefinitions pin
