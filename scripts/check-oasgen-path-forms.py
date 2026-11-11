@@ -42,12 +42,32 @@ LEAF_KEYS = {
 # ANCHORED, not substring. jq bodies are false positives: `[0]` inside jq is legal.
 SKIP = re.compile(r"^(.*transform|jq|script|.*body)$", re.I)
 
-DOTTED = re.compile(r"(^|\.)\d+(\.|$)")  # foo.0.bar  foo.0  0.bar
-BRACKET = re.compile(r"\[\s*\d+\s*\]")   # foo[0]
+# SCOPE, corrected by oasgen-provider 2026-11-11. Only two forms are decidably
+# refused by #544:
+#
+#   foo.0.bar     the dotted index
+#   foo['0']      the quoted bracket index
+#
+# A BARE `foo[0]` is NOT flagged: against an ARRAY it is unchanged and sits in the
+# differential test's agree list. Against a map it is refused, but which one it is
+# cannot be decided from the text. My first version flagged every bare bracket and
+# would have raised false alarms on four corpora.
+DOTTED = re.compile(r"(^|\.)\d+(\.|$)")              # foo.0.bar  foo.0  0.bar
+QUOTED = re.compile(r"\[\s*['\"]\d+['\"]\s*\]")      # foo['0']  foo["0"]
+
+
+def is_version(s):
+    """A version is numeric in EVERY dot-separated segment; a path has non-numeric
+    ones. Without this, DOTTED flags `2.72` and `1.95` -- microversions, which both
+    this corpus and nova's carry."""
+    parts = s.split(".")
+    return len(parts) > 1 and all(p.isdigit() for p in parts)
 
 
 def offending(s):
-    return isinstance(s, str) and bool(DOTTED.search(s) or BRACKET.search(s))
+    if not isinstance(s, str) or is_version(s):
+        return False
+    return bool(DOTTED.search(s) or QUOTED.search(s))
 
 
 def walk(node, path, hits):
@@ -78,8 +98,10 @@ def scan(docs):
     return hits
 
 
-# Eight planted hits, one in every container that can hold a CR path, plus two jq
-# bodies that must NOT be flagged.
+# Every planted value is labelled. MUST-FIRE sits inside every container that can
+# hold a CR path -- never at the top level, because a control proves the instrument
+# fires where it is planted and nowhere else. MUST-NOT-FIRE covers the two false
+# alarms the scope correction removed (bare brackets, versions) plus jq bodies.
 CONTROL = """
 apiVersion: ogen.krateo.io/v1alpha1
 kind: RestDefinition
@@ -87,42 +109,53 @@ metadata:
   name: control
 spec:
   resource:
-    identifiers: ["spec.nested.0.address"]
-    additionalStatusFields: ["status.items[0].uuid"]
+    identifiers:
+      - spec.nested.0.address          # MUST FIRE   dotted
+      - spec.nested['1'].address       # MUST FIRE   quoted bracket
+      - status.items[0].uuid           # must NOT    bare bracket, undecidable
+      - spec.plain.name                # must NOT    no index
+    additionalStatusFields:
+      - status.a.2.b                   # MUST FIRE
+      - "1.109"                        # must NOT    a microversion, not a path
+      - "2.72"                         # must NOT    a microversion
+      #   ^ QUOTED deliberately. Unquoted, YAML types these as floats and they never
+      #     reach is_version() at all -- the negative case would pass because the
+      #     value was not a string, not because the guard works. A control that
+      #     passes for the wrong reason is not a control.
     dependentLookups:
       - name: domain
         parameters:
-          - inCustomResource: spec.domains.0.name
+          - inCustomResource: spec.domains.0.name       # MUST FIRE
       - name: project
         parameters:
-          - inCustomResource: status.projects[0].id
+          - inCustomResource: status.projects[0].id     # must NOT  bare bracket
     fieldMapping:
-      - inCustomResource: spec.plain.0.name
+      - inCustomResource: spec.plain.0.name             # MUST FIRE
         resolver:
           secretRef:
-            nameFromCustomResource: spec.secrets.0.name
-            keyFromCustomResource: spec.secrets[0].key
+            nameFromCustomResource: spec.secrets.0.name # MUST FIRE
+            keyFromCustomResource: spec.secrets[0].key  # must NOT  bare bracket
           when:
-            customResourceFieldPresent: spec.flags.0.enabled
+            customResourceFieldPresent: spec.flags.0.enabled   # MUST FIRE
     verbsDescription:
       - action: get
+        path: /v2.1/flavors            # must NOT (and not a walked key anyway)
         requestFieldMapping:
           - inPath: uuid
-            inCustomResource: status.ports.0.uuid
-        responseTransform: '.items[0].uuid'
-        requestBody: '{"n": .items[0].n}'
+            inCustomResource: status.ports.0.uuid       # MUST FIRE
+        responseTransform: '.items[0].uuid'             # must NOT  jq body
+        requestBody: '{"n": .items[0].n}'               # must NOT  jq body
 """
 
-# 9, counted off the plants one by one after the screen reported 9 and this said 8.
-# The screen was right and the expectation was wrong -- `spec.plain.0.name` gained an
-# index when the control was rewritten. Enumerated, not adjusted to match the output:
-#   identifiers[0]  additionalStatusFields[0]
-#   dependentLookups[0] dependentLookups[1]
+# 8 MUST-FIRE plants, enumerated rather than read off the output:
+#   identifiers: spec.nested.0.address, spec.nested['1'].address
+#   additionalStatusFields: status.a.2.b
+#   dependentLookups[0].parameters[0].inCustomResource
 #   fieldMapping[0].inCustomResource
-#   resolver.secretRef.nameFromCustomResource  .keyFromCustomResource
+#   resolver.secretRef.nameFromCustomResource
 #   resolver.when.customResourceFieldPresent
 #   verbsDescription[0].requestFieldMapping[0].inCustomResource
-EXPECTED = 9
+EXPECTED = 8
 
 if __name__ == "__main__":
     print(f"=== POSITIVE CONTROL (must be exactly {EXPECTED}; the two jq bodies must NOT appear) ===")
@@ -131,7 +164,14 @@ if __name__ == "__main__":
         print(f"  HIT  {where} = {hits[where]}")
     print(f"  total = {len(hits)}  (expected {EXPECTED})")
     assert len(hits) == EXPECTED, f"SCREEN IS BROKEN: control gave {len(hits)}, not {EXPECTED}"
-    assert not any("items[0].n" in v for v in hits.values()), "jq body leaked into results"
+    # Assert what must NOT have fired. A control that only checks the planted hits
+    # cannot catch an over-broad pattern -- which is exactly what the bare-bracket
+    # rule was.
+    for forbidden in ["status.items[0].uuid", "status.projects[0].id",
+                      "spec.secrets[0].key", "items[0].n", "1.109", "2.72",
+                      "/v2.1/flavors", "spec.plain.name"]:
+        assert not any(forbidden == v for v in hits.values()), \
+            f"FALSE ALARM: pattern fired on {forbidden!r}, which #544 does not refuse"
     print("  control PASSES -- the walk reaches every container and skips jq\n")
 
     print("=== REAL CORPUS ===")
