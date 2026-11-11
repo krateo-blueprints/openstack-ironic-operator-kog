@@ -79,6 +79,20 @@ DISTINCT_STATIC=1.77                  # only a static per-verb header can produc
 # ONE string, used by the sender AND the filter, so the two cannot drift apart. If
 # they drift, the probe's own traffic is counted as the controller's.
 PROBE_UA="probe-0430-selftest"
+# The caller the mock SHOULD see besides the probe. rest-dynamic-controller sets no
+# User-Agent on vendor requests, so net/http fills in Go's default at write time --
+# `Go-http-client/1.1` over HTTP/1.1, `Go-http-client/2.0` if a connection ever
+# negotiates h2. Established by the nova session from source (restclient.go: 0 hits
+# for user-agent against 27 Header and 4 Authorization references as controls), not
+# measured, so treat a mismatch as something to look at rather than as fact.
+#
+# DELIBERATELY A PATTERN, AND DELIBERATELY NOT AN IDENTITY CHECK. The string is Go's
+# default rather than anything rdc chose, so a Go version bump or a transport change
+# alters it and nothing upstream would flag that. Asserting it really asserts "the
+# caller is a Go client that set no UA". Hence the failure wording below is
+# "unexpected caller", not "wrong User-Agent" -- so a Go bump reads as a thing to
+# investigate rather than as a product defect.
+EXPECTED_CALLER_RE="^Go-http-client/"
 LOAD_CEILING=${LOAD_CEILING:-25}
 
 K=(kubectl --kubeconfig "$KC" --context "$CTX")
@@ -353,6 +367,20 @@ attribution () {
   if [ "${distinct}" -gt 1 ]; then
     say "   WARNING: more than one non-probe caller reached the mock. Every count above"
     say "            mixes them, so attribute by the ua column before drawing a verdict."
+  fi
+  # Now the assertion the caller column makes possible: is each non-probe caller the
+  # one we expect? A bare count cannot ask this.
+  local unexpected
+  unexpected=$(notmine | awk '{for(i=1;i<=NF;i++){split($i,a,"=");if(a[1]=="ua")print a[2]}}' \
+               | sort -u | grep -vE "${EXPECTED_CALLER_RE}" || true)
+  if [ -n "${unexpected}" ]; then
+    say "   UNEXPECTED CALLER(S) -- not matching ${EXPECTED_CALLER_RE}:"
+    printf '      %s\n' ${unexpected}
+    say "   Something other than rest-dynamic-controller reached the mock, OR rdc's"
+    say "   default Go User-Agent changed. Both are worth looking at; neither is"
+    say "   automatically a product defect. Attribute before trusting any count."
+  else
+    say "   every non-probe caller matches ${EXPECTED_CALLER_RE} -- attribution is sound"
   fi
 }
 PV=$("${K[@]}" get crd ports.arm.ogen.krateo.io -o jsonpath='{.spec.versions[0].name}' 2>/dev/null)
