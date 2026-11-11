@@ -61,6 +61,40 @@ spec:
       - action: findby
         method: GET
         path: /v1/nodes
+        # ADDED 2026-11-11, mirroring restdefinition-power.yaml's findby. WITHOUT this
+        # transform findby could never match, and oasgen says so in
+        # status.schemaWarnings -- a field nothing in this repo had read until today:
+        #
+        #   identifier "node_id" is absent from the items the findby response carries,
+        #   so findby cannot compare against it. no declared identifier is present in
+        #   the findby response, so findby can never match any item regardless of
+        #   policy: it will report not-found and the reconciler acts on not-found by
+        #   CREATING
+        #
+        # /v1/nodes returns NodeState -- [name, provision_state, target_provision_state,
+        # uuid] -- and never `node_id`, which is the sole declared identifier. The
+        # transform manufactures it from `.name` BEFORE matching: oasgen-provider
+        # confirmed from source that `normalizeItems` applies the verb's
+        # responseTransform per item and hands the transformed items to the matcher
+        # (restclient.go:711), with the comment "Put every item into the CR's shape
+        # BEFORE comparing against the CR".
+        #
+        # WHY THIS KIND AND NOT power: power has carried the equivalent transform all
+        # along, which is why its 8 CRs are Ready while the same warning fires on both.
+        # Provision had none. The warning was a false positive on power and literally
+        # true here -- same text, opposite truth, and oasgen's generator is blind to
+        # responseTransform entirely (filed as oasgen #575).
+        #
+        # WHY IT MATTERS MORE HERE THAN ON POWER. Provision declares only findby and
+        # create -- NO `get`. Power has a `get` (fixed in PR #30) that answers the
+        # existence question directly and backstops a findby miss; provision has no
+        # such backstop, so a miss goes straight to `create`, which for this kind is
+        # PUT /v1/nodes/{node_id}/states/provision -- a real provision transition on a
+        # live node. Nobody noticed because provision holds ZERO CRs while all eight
+        # blades are `active`; the kind only gets CRs during a transition, so the wedge
+        # was armed for the next one rather than absent.
+        responseTransform:
+          inline: if (.name and .provision_state) then .node_id = .name else . end
         # include_children REMOVED 2026-11-04. It is correct and it will come
         # back, but it cannot work yet and was failing silently.
         #
