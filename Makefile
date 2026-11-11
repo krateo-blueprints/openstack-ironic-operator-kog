@@ -423,6 +423,23 @@ check-oas-defaults:   # no OAS body schema may acquire the v1.26.x defaulting sh
 	# found the only field instances anyone has (2 of 35).
 	python3 -I scripts/check-defaulted-optional-objects.py
 
+check-path-forms:   # no RestDefinition uses the dotted-index path form oasgen 0.57.0 drops
+	# oasgen #544 drops `foo.0.bar` and `foo[0]` in any JSONPath that reads INTO the
+	# custom resource. A RestDefinition carrying one stops resolving after the bump.
+	#
+	# This is a STANDING check, not a one-off reading, because the exposure arrives
+	# with a NEW verb or a new dependentLookup, not with the upgrade.
+	#
+	# Two defects in the screen itself were caught by its own positive control, and
+	# both would have produced a clean nobody had measured:
+	#   1. a SUBSTRING exclusion for jq bodies matched `verbsDescription`
+	#      ("De-script-ion"), hiding every requestFieldMapping in the repo;
+	#   2. the key list omitted `dependentLookups`, which is its own field on
+	#      spec.resource, so the walk never reached the lookup subtree.
+	# The control therefore plants a hit INSIDE every container, never at the top
+	# level: a control proves the instrument fires where it is planted, nowhere else.
+	python3 -I scripts/check-oasgen-path-forms.py manifests/restdefinition-*.yaml tests/identifier-arms/restdefinitions.yaml
+
 check-blueprints:   # the two Marketplace blueprints would publish AND render a usable form
 	# Three of the nine checks reproduce the publisher's own channel gate
 	# (krateo-blueprints/charts publish-chart.yaml): values.schema.json and
@@ -457,7 +474,7 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 	python3 -I scripts/check-blueprint-metadata.py --self-test && \
 		python3 -I scripts/check-blueprint-metadata.py $(if $(BLUEPRINT_ONLINE),--online,)
 
-check: check-examples check-mapping-sources check-oas-defaults check-blueprints   # every standing screen
+check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-blueprints   # every standing screen
 	@echo "all standing screens passed"
 
 chart-host-pinned:   # add the chart versions the LIVE CompositionDefinitions pin
