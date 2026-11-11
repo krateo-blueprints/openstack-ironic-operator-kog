@@ -1536,6 +1536,90 @@ the Port design and the backstop that matters. Making findby itself correct mean
 changing `identifiers` to something `/v1/nodes` actually returns — a larger change,
 not attempted here.
 
+#### §9.13d — oasgen 0.54.1 -> 0.57.0, measured; and two of the three checks were wrong
+
+Run 2026-11-11. **Deliberately not `make krateo-up`**, which would also have moved
+core-provider to `KRATEO_CORE_VERSION` and made nothing attributable. Only the two
+oasgen releases were upgraded; core-provider was held at chart 2.13.62 throughout.
+
+```
+build stamp     4/4 EXACTLY 0.57.0-cb969ddcecee7f5d83cd4d575861e5ef82068f06
+                so `github.sha` resolves to the COMMIT, not the annotated tag
+                object -- the two differ for this tag
+32 CRs by uid   IDENTICAL   nodepowers 8, baremetalnodes 8, ports 16, provisions 0
+9 CRD schemas   IDENTICAL   hashed per version; the only CRD that moved is
+                            restdefinitions.ogen.krateo.io itself, upgraded by the chart
+rdc images      all four rolled 0.54.1 -> 0.57.0, ServiceAccounts UNCHANGED
+provider pod    0 restarts (the outgoing 0.54.1 pod had 6 over 3d15h)
+```
+
+**#571 ("stop self-provisioning per-CR secretRef RBAC", BREAKING) does not bite an
+upgrade.** This corpus authenticates entirely through a `tokenRef`, so it looked like
+the dangerous one. Measured: **8 authsecret Role+RoleBinding objects before, 8 after,
+identical.** Three reasons, which together are the migration rule:
+
+1. the existing Roles and RoleBindings carry **`ownerReferences: NONE`**, so nothing
+   garbage-collects them when the behaviour that created them stops;
+2. the ServiceAccount names are **generator-derived** (`<plural>-<group>-v1alpha1`) and
+   0.57.0 does not touch the generator, so the bindings still match their subjects;
+3. 0.57.0 still logs `Role successfully installed` per definition, so whatever #571
+   stopped is narrower than per-definition auth RBAC.
+
+So it bites a **fresh install**, not an upgrade. oasgen is putting that scope in the
+release notes; the word BREAKING on its own cost twenty minutes of mapping the RBAC
+chain before touching anything.
+
+**Check that was wrong #1: `Applied CRD` does not exist on the upgrade path.**
+Guidance received was *"a kind with 'Applying' and no 'Applied' is a failed apply"*.
+Measured `Applying CRD: 4, Applied CRD: 0` — four failed applies, apparently. The
+control saved it: lines containing `Applied` **in any form** = 0, and a frequency count
+of every distinct `msg` in the log shows no such message. Confirmed in source
+(oasgen **#583**): `Applied CRD` is inside `Create`, never reached on upgrade, and
+`generateAndApplyCRDs` returns with no success log at all. **The reliable marker is
+`Updated RestDefinition`**, logged only after the status write succeeds. And do not
+require `Applying Configuration CRD` in any detector — it sits inside
+`if cfgCRDU != nil`, so a kind with no `configurationFields` never emits it and the
+detector would report failure forever on a healthy kind.
+
+**Check that was wrong #2: the error key is `err`, not `error` — and both exist.**
+Four `Reconciler error` lines printed with blank messages until the full key set was
+dumped. Filed as oasgen **#583**, and the reason everyone reaches for the wrong one is
+that three independent sources say so:
+
+```
+log.Error(err, msg, ...)        -> "err"     from logr's slog bridge
+log.Info(msg, "error", err)     -> "error"   explicit kv, 95 sites across oasgen+rdc
+logr@v1.4.4 logr.go:153         -- documents "error"
+logr@v1.4.4 slogsink.go:45      -- errKey = "err"   <- what actually ships
+```
+
+**CORRECTED: those four errors are a real defect, not benign.** They were first
+recorded here as *"benign optimistic-concurrency conflict, retried"*. The retries do
+succeed, so the outcome is fine — but the cause is oasgen **#579** and it is
+**deterministic, not a race**: `Update` persists status itself, bumping the
+`resourceVersion` under the runtime still holding the same pointer, and
+provider-runtime's `statusUpdate` does not retry on conflict. One per definition,
+every time, by construction — four kinds here, 25 on a 25-kind corpus. Present at
+0.54.0 through 0.57.0, so not introduced by this release.
+
+```
+err = cannot update managed resource status: Operation cannot be fulfilled on
+      restdefinitions.ogen.krateo.io "ironic-node-power": the object has been
+      modified; please apply your changes to the latest version and try again
+```
+
+**And the mistake of mine that would have been the headline.** The "after" snapshot
+showed all four definitions at `Ready=False reason=Creating` with `Synced=True`. That
+was nearly reported as a 0.57.0 regression — and it is the exact shape another session
+was building an upstream argument about. It was transient: **the snapshot gate was
+"generatorBuild reports 0.57.0", which flips BEFORE a definition finishes becoming
+Available.** Re-read minutes later: 4/4 `Ready=True/Available`.
+
+That is the same error as the `resourceVersion` gate in §9.15 and the same shape as a
+peer's `awk` comparison of a file against itself: **the instrument and the subject
+collapsed into one value.** Gate on the terminal state, never on the thing being
+measured.
+
 ### §9.14 — the blade06 NodePower wedge, measured end to end
 
 My regeneration (§9.12) restarted the four rdc controllers, which re-entered the
