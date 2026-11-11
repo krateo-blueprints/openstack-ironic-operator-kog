@@ -76,6 +76,9 @@ OASGEN_VER=${OASGEN_VER:-0.43.0}
 OCI=oci://ghcr.io/krateo-platformops/charts
 DISTINCT_CONFIG=1.95                  # only the Configuration can produce this
 DISTINCT_STATIC=1.77                  # only a static per-verb header can produce this
+# ONE string, used by the sender AND the filter, so the two cannot drift apart. If
+# they drift, the probe's own traffic is counted as the controller's.
+PROBE_UA="probe-0430-selftest"
 LOAD_CEILING=${LOAD_CEILING:-25}
 
 K=(kubectl --kubeconfig "$KC" --context "$CTX")
@@ -165,7 +168,13 @@ class H(BaseHTTPRequestHandler):
         mv = self.headers.get("X-Openstack-Ironic-Api-Version")
         # ONE line per request, with the header value or the literal NONE. This is
         # the entire measurement; everything else is scaffolding.
-        print(f"HDR verb={verb} path={self.path} microversion={mv if mv else 'NONE'}", flush=True)
+        # ua is what makes a request ATTRIBUTABLE. Without it this probe cannot tell
+        # its own control curls from the controller's traffic, because both hit
+        # /v1/ports. The nova session found exactly that in their own probe: the one
+        # log line satisfying their control could have been their own request, while
+        # the verdict attributed the condition to a caller nothing proved had called.
+        ua = self.headers.get("User-Agent") or "-"
+        print(f"HDR verb={verb} path={self.path} microversion={mv if mv else 'NONE'} ua={ua}", flush=True)
         body = {"ports": [PORT]} if (verb == "GET" and self.path.rstrip("/").endswith("/v1/ports")) else PORT
         code = 201 if verb == "POST" else 200
         if verb == "DELETE":
@@ -212,14 +221,21 @@ EOF
 
 say "== MOCK CONTROL: it must record a header it is sent, and NONE when it is not =="
 "${K[@]}" -n "$NS" run mockcheck --rm -i --restart=Never --image=curlimages/curl:8.11.0 --quiet -- sh -c \
-  'curl -s -o /dev/null -H "X-OpenStack-Ironic-API-Version: 9.99" http://headermock.probe.svc.cluster.local:8080/v1/ports;
-   curl -s -o /dev/null http://headermock.probe.svc.cluster.local:8080/v1/ports' >/dev/null 2>&1
+  "curl -s -o /dev/null -A '${PROBE_UA}' -H 'X-OpenStack-Ironic-API-Version: 9.99' http://headermock.probe.svc.cluster.local:8080/v1/ports;
+   curl -s -o /dev/null -A '${PROBE_UA}' http://headermock.probe.svc.cluster.local:8080/v1/ports" >/dev/null 2>&1
 sleep 3
 MOCKLOG=$("${K[@]}" logs -n "$NS" deploy/headermock --tail=-1 2>/dev/null)
 echo "$MOCKLOG" | grep '^HDR' | tail -4 | sed 's/^/   /'
 echo "$MOCKLOG" | grep -q 'microversion=9.99' || { say "   ABORT: the mock did not record a header it was sent -- the instrument is broken"; exit 1; }
 echo "$MOCKLOG" | grep -q 'microversion=NONE' || { say "   ABORT: the mock did not record NONE for a header-less request"; exit 1; }
-say "   instrument verified: records a sent header AND records NONE. Both directions."
+# THE MARKER IS CHECKED FIRST, before any controller count is ever read. The nova
+# session's formulation, applied to an absence: if the marker never arrives, or the
+# parser stops matching, or the log rotated, then "0 controller requests" is printed
+# by an instrument that cannot see ANY request -- and the reassuring answer and the
+# broken-instrument answer are the same string.
+echo "$MOCKLOG" | grep -q "ua=${PROBE_UA}" || { say "   ABORT: the probe's OWN marker (ua=${PROBE_UA}) is absent from the log, so this"; say "          instrument cannot attribute anything and an absence would mean nothing"; exit 1; }
+say "   instrument verified: records a sent header, records NONE, AND carries the"
+say "   probe's own marker -- so a later 'zero controller requests' is a measurement."
 
 # ---------------------------------------------------------------- the arms -----
 say "== install oasgen $OASGEN_VER =="
@@ -315,8 +331,30 @@ STORED=$("${K[@]}" get portconfigurations.arm.ogen.krateo.io -n "$NS" arm-endpoi
 say "   stored back: ${STORED:0:120}..."
 case "$STORED" in *"$DISTINCT_CONFIG"*) ;; *) say "   ABORT: the Configuration did not store $DISTINCT_CONFIG -- it was pruned"; exit 1;; esac
 
-reqs () { "${K[@]}" logs -n "$NS" deploy/headermock --tail=-1 2>/dev/null | grep -c '^HDR'; }
-hdrs () { "${K[@]}" logs -n "$NS" deploy/headermock --tail=-1 2>/dev/null | grep -c "microversion=$1"; }
+# BOTH exclude the probe's own traffic by marker. Previously they counted every HDR
+# line, so an arm's gate was satisfiable by this script's own control curls -- it
+# happened not to be, only because those fire once before the baseline is taken.
+# That was ordering luck in the harness, not construction.
+notmine () { "${K[@]}" logs -n "$NS" deploy/headermock --tail=-1 2>/dev/null | grep '^HDR' | grep -v "ua=${PROBE_UA}"; }
+reqs () { notmine | wc -l | tr -d ' '; }
+hdrs () { notmine | grep -c "microversion=$1"; }
+attribution () {
+  # The ua is PRINTED, not merely filtered on. Tested 2026-11-12: an unmarked curl of
+  # my own (a readiness poll carrying curl's default UA) was attributed to the
+  # controller, and an attribution table without a ua column cannot show that. Any
+  # caller other than the controller must be VISIBLE here, not just excluded-or-not.
+  say "   ATTRIBUTION -- every request the probe did NOT make itself, BY CALLER:"
+  notmine | awk '{v="";p="";m="";u="";for(i=1;i<=NF;i++){split($i,a,"=");if(a[1]=="verb")v=a[2];if(a[1]=="path")p=a[2];if(a[1]=="microversion")m=a[2];if(a[1]=="ua")u=a[2]}print "      "v" "p" microversion="m" ua="u}' | sort | uniq -c | sed 's/^/   /'
+  local mine distinct
+  mine=$("${K[@]}" logs -n "$NS" deploy/headermock --tail=-1 2>/dev/null | grep -c "ua=${PROBE_UA}")
+  distinct=$(notmine | awk '{for(i=1;i<=NF;i++){split($i,a,"=");if(a[1]=="ua")print a[2]}}' | sort -u | wc -l | tr -d ' ')
+  say "   (the probe's own requests, excluded from every count above: ${mine})"
+  say "   distinct non-probe callers: ${distinct}"
+  if [ "${distinct}" -gt 1 ]; then
+    say "   WARNING: more than one non-probe caller reached the mock. Every count above"
+    say "            mixes them, so attribute by the ua column before drawing a verdict."
+  fi
+}
 PV=$("${K[@]}" get crd ports.arm.ogen.krateo.io -o jsonpath='{.spec.versions[0].name}' 2>/dev/null)
 
 say "== ARM 1: one Port CR, gated on the MOCK BEING CALLED, never on elapsed time =="
@@ -351,6 +389,7 @@ for i in $(seq 1 45); do [ "$(reqs)" -gt "$B2" ] && break; sleep 4; done
 A2=$(reqs); sleep 10
 say "   arm 2 microversions:"; "${K[@]}" logs -n "$NS" deploy/headermock --tail=-1 2>/dev/null | grep '^HDR' | tail -n "$(( $(reqs) - B2 ))" | awk '{print $NF}' | sort | uniq -c | sed 's/^/      /'
 
+attribution
 say "============== VERDICT =============="
 C=$(hdrs "$DISTINCT_CONFIG"); T=$(hdrs "$DISTINCT_STATIC")
 echo "   Configuration-sourced $DISTINCT_CONFIG on the wire: $C"
