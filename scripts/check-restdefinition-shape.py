@@ -575,6 +575,66 @@ def selftest():
         if not ok_at:
             failures.append("at 0.52.0 expected 0 C rows, got %s" % [r[1] for r in _at])
 
+    # THE C/E INVARIANT, asserted across every real document at three versions.
+    #
+    # Not an expectation per case -- an invariant, because the bug it catches passes
+    # every per-case arm. The openstack-nova-operator-kog session had the version
+    # rule in their E rows only, so below 0.52.0 their screen said the property was
+    # deleted (E, actionable) AND that the mapping reading it resolved fine (C,
+    # silent). Two checks, one fact, opposite answers in the same run -- and the
+    # SILENT one was the reassuring one.
+    #
+    # Direction matters. `C-leaves subset of E` would be WRONG: a C row also fires
+    # when an author names a field that simply does not exist, which E has no reason
+    # to report. The sound direction is the one that catches the divergence:
+    #
+    #     a SELF-REFERENCING param that E reports suppressed MUST produce a C row
+    #
+    # It holds structurally here because survival is computed once and B, C and E all
+    # consume it -- which is exactly the property a later refactor could remove
+    # without failing anything else.
+    try:
+        import yaml as _y, glob as _g, os as _o
+        _slugs = [_o.path.basename(f)[len("restdefinition-"):-len(".yaml")]
+                  for f in sorted(_g.glob("manifests/restdefinition-*.yaml"))]
+        assert _slugs, "no manifests found"
+    except Exception as _e:
+        cases.append(("C/E invariant across real documents", False))
+        failures.append("could not enumerate manifests (%s) -- VOID, not a pass" % _e)
+    else:
+        violations, checked = [], 0
+        for _ver in ((0, 50, 0), (0, 52, 0), (0, 59, 0)):
+            for _slug in _slugs:
+                try:
+                    _rd = _y.safe_load(open("manifests/restdefinition-%s.yaml" % _slug))
+                    _key = _rd["spec"]["oasPath"].rsplit("/", 1)[-1]
+                    _oasp = next(c for c in ("oas/" + _key.replace("_", "-"),
+                                             "oas/ironic-%s.yaml" % _slug) if _o.path.exists(c))
+                    _oas = _y.safe_load(open(_oasp))
+                    _rows = evaluate(_rd, _oas, _slug, _ver)
+                except Exception:
+                    continue
+                # which suppressed params were self-referencing?
+                _selfref = set()
+                for _v in (_rd["spec"]["resource"].get("verbsDescription") or []):
+                    for _m in (_v.get("requestFieldMapping") or []):
+                        _src = _m.get("inCustomResource", "")
+                        if _src.startswith("spec.") and _src.split(".")[-1] == _m.get("inPath"):
+                            _selfref.add(_m["inPath"])
+                _e_sup = {r[1] for r in _rows if r[0] == "E"} & _selfref
+                _c_leaves = {r[1].split("<-")[1].split(".")[-1]
+                             for r in _rows if r[0] == "C" and "<-spec." in r[1]}
+                checked += 1
+                for _pp in _e_sup - _c_leaves:
+                    violations.append("%s@%s: E says %s suppressed but C is SILENT"
+                                      % (_slug, ".".join(map(str, _ver)), _pp))
+        ok = not violations and checked > 0
+        cases.append(("C/E invariant: %d document-versions checked" % checked, ok))
+        if checked == 0:
+            failures.append("C/E invariant checked NOTHING -- VOID, not a pass")
+        for _v in violations:
+            failures.append("C/E invariant: " + _v)
+
     # the negative control: a clean document must produce NO actionable row
     clean = evaluate(rd(), BASE_OAS, "thing")
     clean_actionable = [r for r in clean if r[3]]
