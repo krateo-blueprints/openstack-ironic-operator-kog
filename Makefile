@@ -454,6 +454,27 @@ check-oas-defaults:   # no OAS body schema may acquire the v1.26.x defaulting sh
 	# found the only field instances anyone has (2 of 35).
 	python3 -I scripts/check-defaulted-optional-objects.py
 
+check-restdefinition-shape:   # every declared verb/identifier/mapping resolves against its OAS
+	# The two most expensive defects this repo has had were both a reference from one
+	# document to another that does not resolve, and both passed review:
+	#   power's `get` addressed a path the OAS never declared -- the verb was INERT, so
+	#     the repair path for a wedge was silent (a day of diagnosis; PR #30)
+	#   provision's `findby` matched on a field the Ironic collection does not return,
+	#     so findby could never match (PR #34, fixed with a responseTransform)
+	#
+	# NEEDS NO CLUSTER: it reads the manifests and the OAS documents and checks they
+	# meet. Three kinds in this repo (allocation, deploy-template, portgroup) ship and
+	# are exercised by nothing at all, so a static screen is the only thing that looks
+	# at them before a user does.
+	#
+	# It is NOT silent about what it cannot fail on. Three live kinds sit in a state
+	# caused by an upstream generation bug (a mapped path param's spec property is
+	# pruned), which is reported on every run and never fatal -- a gate that is red on
+	# main is not a gate. Those three rows are also ASSERTED to still match, so a
+	# refactor that stops reading the file cannot pass silently.
+	python3 -I scripts/check-restdefinition-shape.py --selftest && \
+		python3 -I scripts/check-restdefinition-shape.py
+
 check-path-forms:   # no RestDefinition uses the dotted-index path form oasgen 0.57.0 drops
 	# oasgen #544 drops `foo.0.bar` and `foo[0]` in any JSONPath that reads INTO the
 	# custom resource. A RestDefinition carrying one stops resolving after the bump.
@@ -505,7 +526,7 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 	python3 -I scripts/check-blueprint-metadata.py --self-test && \
 		python3 -I scripts/check-blueprint-metadata.py $(if $(BLUEPRINT_ONLINE),--online,)
 
-check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints   # every standing screen
+check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape   # every standing screen
 	@echo "all standing screens passed"
 
 chart-host-pinned:   # add the chart versions the LIVE CompositionDefinitions pin
