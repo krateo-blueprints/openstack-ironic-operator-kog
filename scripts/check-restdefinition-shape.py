@@ -113,11 +113,20 @@ KNOWN = {
         "upto": MIN_SELFREF_SURVIVES,
     },
     ("port", "E", "uuid"): {
-        "why": ("NOT self-referencing -- Port's delete maps uuid <- status.uuid, and "
-                "its get leaves {uuid} unmapped. Neither survival clause can apply at "
-                "ANY version, so this one does not retire. Port is addressed by "
-                "address, so it is inert rather than broken."),
-        "upto": None,   # applies at every version
+        "why": ("NOT self-referencing -- Port's delete AND get both map "
+                "uuid <- status.uuid, so clause 2 cannot apply, clause 3 has no "
+                "unmapped verb to fire on, and uuid is not in the create body. Absent "
+                "at every version, which is CORRECT: Ironic generates a Port's uuid "
+                "on POST, so no author could supply it.\n"
+                "THIS TEXT WAS WRONG UNTIL 2026-11-12. It read 'its get leaves "
+                "{uuid} unmapped. Neither survival clause can apply at ANY version' "
+                "-- while the live CRD said PRESENT and REQUIRED, because an unmapped "
+                "path param becomes a spec field (clause 3), which this model did not "
+                "have. Every NEW Port was being rejected. And it was the entry I had "
+                "declared could never retire. An exemption table is where an "
+                "incomplete model goes to hide: all three entries here were papering "
+                "over a missing clause."),
+        "upto": None,   # applies at every version, now that get is mapped
     },
 }
 
@@ -224,12 +233,27 @@ def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
     # wrong and produced 4 ACTIONABLE rows about kinds that have driven 8 blades for
     # weeks: C asks "does the mapping's source resolve", and if the property survives
     # then it plainly does. The version rule belongs in ONE place -- here.
+    # CLAUSE 3 FIRST, because it WINS over the mapped-verb suppression. A path
+    # parameter that ANY verb leaves unmapped becomes a spec property -- and a
+    # required one, since path params are required. Measured on Port at 0.59.0, which
+    # had BOTH an unmapped get and a status-mapped delete, and whose spec.uuid was
+    # PRESENT and required. Discriminator in the same run: mapping the get too made
+    # it ABSENT. tests/oasgen-generator/ironic_port_uuid_test.go.
+    unmapped_params = {}
+    for v in verbs:
+        mapped = {m.get("inPath") for m in (v.get("requestFieldMapping") or [])}
+        for pp in re.findall(r"\{(\w+)\}", v.get("path") or ""):
+            if pp not in mapped:
+                unmapped_params.setdefault(pp, v.get("action"))
+    for pp in unmapped_params:
+        spec.add(pp)
+
     suppressed_params = {}
     for v in verbs:
         for m in v.get("requestFieldMapping") or []:
             pp = m.get("inPath")
             if not pp or pp in spec:
-                continue                       # clause 1: declared in the create body
+                continue                       # clause 1 or 3 already rescued it
             src = m.get("inCustomResource", "")
             selfref = src.startswith("spec.") and src.split(".")[-1] == pp
             if selfref and version >= MIN_SELFREF_SURVIVES:
@@ -321,14 +345,23 @@ def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
                 out.append(("D", ident, "absent from the collection item and no responseTransform -- findby can NEVER match", True))
 
     # E -- unmapped path params become spec properties
-    for v in verbs:
-        mapped = {m.get("inPath") for m in (v.get("requestFieldMapping") or [])}
-        for pp in re.findall(r"\{(\w+)\}", v.get("path") or ""):
-            if pp in mapped or pp in spec:
-                continue
-            out.append(("E", pp, "path param is unmapped and absent from the create body, so it is "
-                                 "kept as spec.%s -- a field the API never returns" % pp, False))
-    # E simply reports what the survival pass above classified as suppressed.
+    # CLAUSE 3 IS A FINDING, NOT A NOTE, when nothing can supply the value. An
+    # unmapped path param becomes a REQUIRED spec property; if the create body does
+    # not declare it, no author can set it and the apiserver REJECTS every new CR.
+    # Measured on Port before this was fixed: "spec.uuid: Required value" on a
+    # chart-shaped Port, with the same CR carrying spec.uuid accepted as the control.
+    # 16 live Ports survived only because updates to an already-violating object pass.
+    body_declared = body_props(oas, create["path"], create["method"].lower()) if create else set()
+    for pp, action in sorted(unmapped_params.items()):
+        if pp in body_declared:
+            continue                           # clause 1: the author can set it
+        out.append(("E", pp, "path param is unmapped on verb %r, so it becomes a "
+                             "REQUIRED spec property -- and the create body does not "
+                             "declare it, so no author can supply it and the apiserver "
+                             "REJECTS every new CR. Map it, or declare it in the body"
+                             % action, True))
+
+    # E also reports what the survival pass above classified as suppressed.
     for pp, (src, selfref) in sorted(suppressed_params.items()):
         if selfref:
             msg = ("mapped path param is self-referencing but oasgen %s is below %s, "
@@ -526,7 +559,7 @@ def selftest():
     case("D rescued by transform", saved, thin, "D", False)
     # E: unmapped path param absent from the create body
     e = rd(); e["spec"]["resource"]["verbsDescription"][2].pop("requestFieldMapping")
-    case("E unmapped path param", e, BASE_OAS, "E", False, "is unmapped and absent")
+    case("E unmapped path param is ACTIONABLE", e, BASE_OAS, "E", True, "REQUIRED spec property")
     # VOID: no verbs at all
     v = rd(verbsDescription=[])
     case("VOID no verbs", v, BASE_OAS, "VOID", True)
@@ -556,7 +589,7 @@ def selftest():
     # CROSS-ASSERTIONS: each pair of branches must be DISTINGUISHABLE by message.
     # This is what kills the mutants; the per-case checks alone do not.
     for a, b in (("A inert path", "A inert method"),
-                 ("E unmapped path param", "E mapped param suppressed")):
+                 ("E unmapped path param is ACTIONABLE", "E mapped param suppressed")):
         ma, mb = set(msgs.get(a) or []), set(msgs.get(b) or [])
         ok = bool(ma) and bool(mb) and not (ma & mb)
         cases.append(("messages differ: %s vs %s" % (a, b), ok))
@@ -706,6 +739,39 @@ def selftest():
         failures.append("a mapping reading spec.nonesuch must yield an actionable C row "
                         "and NO suppressed-E row for 'nonesuch'; got C=%s E=%s"
                         % ([(r[1], r[3]) for r in c_rows], [r[1] for r in e_sup]))
+
+    # REGRESSION ARM for the live defect this check was added for. The real Port
+    # document with `get` UNMAPPED is the shape that shipped, and the apiserver
+    # rejected every new Port under it ("spec.uuid: Required value", with the same CR
+    # carrying spec.uuid accepted as the control). It must be ACTIONABLE here, and
+    # the fixed shape -- `get` mapped from status.uuid, as `delete` already was --
+    # must NOT be. Both arms over the real document, so neither can pass by fixture.
+    try:
+        import yaml as _y
+        _prd = _y.safe_load(open("manifests/restdefinition-port.yaml"))
+        _poas = _y.safe_load(open("oas/ironic-port.yaml"))
+    except Exception as _e:
+        cases.append(("Port regression arm", False))
+        failures.append("could not load the port documents (%s) -- VOID, not a pass" % _e)
+    else:
+        import copy as _c
+        # the fixed shape, as shipped
+        _fixed = [r for r in evaluate(_prd, _poas, "port", (0, 59, 0))
+                  if r[0] == "E" and r[1] == "uuid" and r[3]]
+        cases.append(("Port as shipped (get mapped): uuid NOT actionable", not _fixed))
+        if _fixed:
+            failures.append("the shipped Port shape produced an actionable uuid row: %s" % _fixed)
+        # the pre-fix shape: strip the get mapping back off
+        _broken = _c.deepcopy(_prd)
+        for _v in _broken["spec"]["resource"]["verbsDescription"]:
+            if _v.get("action") == "get":
+                _v.pop("requestFieldMapping", None)
+        _rows = [r for r in evaluate(_broken, _poas, "port", (0, 59, 0))
+                 if r[0] == "E" and r[1] == "uuid" and r[3]]
+        cases.append(("Port pre-fix (get unmapped): uuid IS actionable", bool(_rows)))
+        if not _rows:
+            failures.append("the PRE-FIX Port shape was NOT flagged -- this check cannot "
+                            "catch the defect it was written for")
 
     # the negative control: a clean document must produce NO actionable row
     clean = evaluate(rd(), BASE_OAS, "thing")
