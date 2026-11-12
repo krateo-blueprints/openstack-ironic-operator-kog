@@ -2674,12 +2674,39 @@ verification that samples earlier sees a partial result **that looks exactly lik
 bug**. Anyone checking "did any controller restart" would also have called it a pass
 at 1 of 7.
 
-**One more instrument note.** oasgen's suggested discriminator —
+**One more instrument note, and my first fix for it was wrong.** oasgen's suggested
+discriminator —
 `kubectl exec <provider-pod> -- grep -c PROBE_599 /tmp/assets/rdc-configmap/configmap.yaml`
-— cannot run: there is **no `grep` in the provider image**. It returned an OCI
-`executable file not found`, correctly reported as VOID rather than as a zero. The
-equivalent that needs no exec is reading the ConfigMap through the API:
-`kubectl get cm <release>-rdc-configmap -o yaml`.
+— cannot run: the provider is `gcr.io/distroless/static:nonroot` with
+`ENTRYPOINT ["/bin/manager"]`, so there is **no shell and no `grep`**. It returned an
+OCI `executable file not found`, reported as VOID rather than as a zero — and a
+shell-less image erroring where a `0` was expected is exactly the shape that turns an
+absence into a fact.
+
+**I proposed `kubectl get cm <release>-rdc-configmap -o yaml` as the exec-free
+equivalent. It is not equivalent, and oasgen caught it:**
+
+```
+kubectl get cm <release>-rdc-configmap   reads the ConfigMap OBJECT
+                                         -> updated IMMEDIATELY by helm upgrade
+the mounted /tmp/assets/... file         reads what the PROVIDER can see
+                                         -> lags by the kubelet sync, ~60-120 s
+```
+
+Those are the two ends of stage one, and the lag between them is the thing the check
+exists to measure. The object read is non-zero the instant `helm upgrade` returns, so
+it cannot distinguish "the value has not reached the provider yet" from "it has, and
+this RD has not reconciled". **A runnable check that answers a question nobody asked
+is worse than a VOID**, because it returns a confident number.
+
+The exec-free read of a distroless container's filesystem is an ephemeral container
+sharing its namespaces — `kubectl debug --target=<container> --image=busybox` and then
+`/proc/1/root/tmp/assets/...`. Untested here and untested by oasgen.
+
+**But do not reach for any of it first.** The procedure that worked needs no exec:
+**wait past ~5 minutes of real cluster UPTIME, then check every kind.** The file read
+is only for diagnosing a kind still missing the value *after* that wait — a genuine
+failure rather than an intermediate state.
 
 **And two of my own gates were weak enough to name.** The restart check broke out of
 its wait loop on the *first* pod change and then printed annotations, so it reported
