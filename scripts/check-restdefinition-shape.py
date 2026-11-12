@@ -147,6 +147,38 @@ def evaluate(rd, oas, slug):
     transform = (findby or {}).get("responseTransform")
     xf_text = str(transform) if transform else ""
 
+    def transform_supplies(ident):
+        """Does the findby responseTransform plausibly supply `ident`?
+
+        A HEURISTIC, and labelled as one in every row that uses it, because it
+        DOWNGRADES: a true answer turns an actionable finding into an informational
+        one. Getting it wrong in the permissive direction hides a findby that can
+        never match -- which is exactly the defect this screen exists to catch (#34).
+
+        It was a bare substring test (`ident in xf_text`) until 2026-11-12. That
+        works here only by luck of Ironic's payload shape: every identifier is flat
+        (`name`, `address`, `node_id`), so a substring cannot collide. The
+        openstack-nova-operator-kog session ported this screen and found the test
+        UNREACHABLE against Nova, whose payloads are enveloped -- a transform for a
+        dotted identifier references the LEAF (`{name: .flavors[0].name}`), so
+        `"status.server_group.id" in xf_text` is never true. Their D-rescued case
+        could not fire at all.
+
+        So: match the identifier's LEAF on a word boundary. Still a heuristic -- it
+        does not evaluate the jq -- but it fails in the direction that keeps a
+        finding actionable rather than silently informational.
+        """
+        if not xf_text:
+            return False
+        leaf = ident.split(".")[-1]
+        # `(?<!\w)`, NOT `(?<![\w.])`. A jq field reference is written `.node_id`, so
+        # excluding a preceding dot excludes the only form that actually occurs --
+        # which it did: the first version of this turned all four live transforms
+        # into "no transform supplies it" and made the screen RED ON MAIN with 4
+        # actionable rows. A word char before the leaf is the real collision case
+        # (`name` inside `hostname_suffix`), and `(?<!\w)` rejects exactly that.
+        return re.search(r"(?<!\w)%s(?!\w)" % re.escape(leaf), xf_text) is not None
+
     out = []
     # A -- the path and method must be declared
     for v in verbs:
@@ -161,8 +193,9 @@ def evaluate(rd, oas, slug):
     for ident in res.get("identifiers") or []:
         if ident in spec:
             continue
-        if ident in xf_text:
-            out.append(("B", ident, "not a spec field, but the findby responseTransform supplies it", False))
+        if transform_supplies(ident):
+            out.append(("B", ident, "not a spec field, but the findby responseTransform appears to "
+                                    "supply it (HEURISTIC: the jq is not evaluated)", False))
         else:
             out.append(("B", ident, "identifier is not a spec field and no transform supplies it", True))
 
@@ -185,8 +218,9 @@ def evaluate(rd, oas, slug):
         for ident in res.get("identifiers") or []:
             if ident in item:
                 continue
-            if ident in xf_text:
-                out.append(("D", ident, "absent from the collection item; the responseTransform manufactures it", False))
+            if transform_supplies(ident):
+                out.append(("D", ident, "absent from the collection item; the responseTransform appears "
+                                        "to manufacture it (HEURISTIC: the jq is not evaluated)", False))
             else:
                 out.append(("D", ident, "absent from the collection item and no responseTransform -- findby can NEVER match", True))
 
@@ -339,7 +373,12 @@ def selftest():
                                 % (name, want_check, want_msg, [r[2] for r in hit]))
         msgs[name] = [r[2] for r in hit]
         cases.append((name, ok))
-        if not ok and want_msg is None:
+        if not ok and not any(name in f for f in failures):
+            # EVERY false case must reach `failures`. It did not: this used to be
+            # `if not ok and want_msg is None`, so a case carrying a want_msg that
+            # failed the letter/actionability check was recorded False and counted
+            # zero. A mutant reverting the check-D guard then reported
+            # "15 cases, 0 failure(s)" with a case printed as FAIL above it.
             failures.append("%s: wanted check %s (actionable=%s), got %s"
                             % (name, want_check, want_actionable, [(r[0], r[1], r[3]) for r in got]))
 
@@ -381,6 +420,22 @@ def selftest():
     # E, the OTHER branch: a MAPPED path param suppressed from spec. Its message
     # must be the suppression one, not the "kept as a spec property" one.
     case("E mapped param suppressed", rd(), BASE_OAS, "E", False, "is suppressed from spec")
+
+    # The heuristic must fire on a LEAF reference, which is how a transform for a
+    # dotted identifier is actually written. nova's port proved the old substring
+    # test could not fire at all against enveloped payloads.
+    dotted = rd(identifiers=["thing.name"])
+    dotted["spec"]["resource"]["verbsDescription"][0]["responseTransform"] = \
+        {"inline": "{name: .things[0].name}"}
+    case("D dotted identifier rescued by leaf match", dotted, thin, "D", False, "HEURISTIC")
+
+    # ... and must NOT fire on a coincidental substring, which is the direction that
+    # would hide a real finding.
+    colliding = rd(identifiers=["name"])
+    colliding["spec"]["resource"]["verbsDescription"][0]["responseTransform"] = \
+        {"inline": "{hostname_suffix: .x}"}
+    case("D substring collision stays ACTIONABLE", colliding, thin, "D", True,
+         "no responseTransform")
 
     # CROSS-ASSERTIONS: each pair of branches must be DISTINGUISHABLE by message.
     # This is what kills the mutants; the per-case checks alone do not.
