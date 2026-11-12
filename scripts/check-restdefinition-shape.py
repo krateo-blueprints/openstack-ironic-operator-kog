@@ -302,6 +302,34 @@ def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
         # (`name` inside `hostname_suffix`), and `(?<!\w)` rejects exactly that.
         return re.search(r"(?<!\w)%s(?!\w)" % re.escape(leaf), xf_text) is not None
 
+    def findby_can_match():
+        """Can findby match an item, under its own identifiersMatchPolicy?
+
+        The inverse of check D, and NOT redundant with it: D asks the question
+        per identifier, to report one that cannot be read. This asks it of the
+        VERB -- whether a match is possible at all -- which is what decides
+        whether Observe can ever report the resource absent."""
+        if not findby:
+            return False
+        idents = res.get("identifiers") or []
+        if not idents:
+            return False
+        _w, fitem = response_item_props(oas, findby["path"],
+                                        (findby.get("method") or "get").lower())
+        have = [i for i in idents if i in fitem or transform_supplies(i)]
+        # OR matches on ANY identifier; anything else needs them all.
+        if (findby.get("identifiersMatchPolicy") or "AND").upper() == "OR":
+            return bool(have)
+        return len(have) == len(idents)
+
+    # AN ACTION-ONLY KIND: `create` is its sole effect, and Observe decides
+    # whether to dispatch it. No `get`, so existence is decided by findby
+    # (IsResourceKnown cannot build a get call, so Observe takes the findby
+    # path). No `update`, so a reported difference cannot drive the endpoint
+    # either. For such a kind the create is reached EXACTLY ONE WAY: Observe
+    # reporting the resource ABSENT.
+    action_only = bool(create) and "get" not in by_action and "update" not in by_action
+
     out = []
     # A -- the path and method must be declared
     for v in verbs:
@@ -341,8 +369,76 @@ def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
             if transform_supplies(ident):
                 out.append(("D", ident, "absent from the collection item; the responseTransform appears "
                                         "to manufacture it (HEURISTIC: the jq is not evaluated)", False))
+            elif action_only:
+                # NOT ACTIONABLE, AND THIS CHECK CAUSED A REAL REGRESSION BY
+                # BEING SO. For an action-only kind a never-matching findby is
+                # the OPERATING MECHANISM, not a defect: not-found is what
+                # dispatches the create, and the create is the whole effect.
+                #
+                # Measured: ironic-node-provision (findby + create, no get, no
+                # update) had this transform added on 2026-11-11 in 52ebe5d to
+                # satisfy this row and oasgen's identically-worded
+                # schemaWarning. It made findby match, so Observe reported
+                # exists-and-up-to-date and the PUT was never issued -- every
+                # provision transition a silent no-op, nodes stuck at `enroll`.
+                # The same transform had been reverted four days earlier in
+                # 40bf2ed, whose subject reads "the responseTransform I added
+                # today would have silently stopped every transition".
+                #
+                # So the row stays -- the identifier really is unreadable, and
+                # that really does cost observability (additionalStatusFields
+                # never populate) -- but it must not read as a defect to fix,
+                # because fixing it disables the kind. Check F is the finding
+                # for the other direction.
+                out.append(("D", ident, "absent from the collection item and no responseTransform, so findby "
+                                        "never matches -- which for this ACTION-ONLY kind is what DISPATCHES "
+                                        "the create. Not a defect: supplying it would make the create "
+                                        "unreachable (see F). The cost is observability, not function: "
+                                        "additionalStatusFields never populate", False))
             else:
                 out.append(("D", ident, "absent from the collection item and no responseTransform -- findby can NEVER match", True))
+
+    # F -- an action-only kind whose findby CAN match has an UNREACHABLE create
+    #
+    # unstructured-runtime pkg/controller/worker.go:964-997, which is the whole
+    # argument and the reason this precondition needs no qualifier:
+    #
+    #     if !observation.ResourceExists {        -> queues ctrlevent.Create
+    #     } else if !observation.ResourceUpToDate { -> queues ctrlevent.Update
+    #
+    # Create is queued ONLY on !ResourceExists. Nothing about ResourceUpToDate
+    # can ever produce one. So a matching findby -- which makes Observe return
+    # exists=true -- puts the create out of reach regardless of what the drift
+    # comparison then decides.
+    #
+    # WHY THAT MATTERS, because a peer review raised it and the answer changes
+    # the SYMPTOM but not the verdict (openstack-nova-operator-kog, 2026-11-12).
+    # They confirmed the mechanism on the `compareScope: updatable` path, where
+    # scopeFields is empty with no update verb so nothing is compared, and
+    # correctly flagged that no manifest here SETS compareScope -- we are on the
+    # default scope, where scopeFields = identifiers + additionalStatusFields and
+    # is non-empty, so drift IS compared. Their open question was whether F's
+    # precondition should therefore be "action-only AND updatable scope".
+    #
+    # It should not, and the two paths differ only in how the failure LOOKS:
+    #   comparison agrees   -> {exists: true, upToDate: true}, logged
+    #                          "External resource up-to-date". Silent no-op.
+    #                          This is what the lab actually showed, and it is
+    #                          expected: the status fields were just populated
+    #                          FROM the same response body being compared.
+    #   comparison disagrees -> upToDate=false queues an UPDATE, and with no
+    #                          update verb restResources.go:1414 logs
+    #                          "API action update not found". Still no PUT.
+    # Either way the create is unreachable, so the check keys on the verb set.
+    if action_only and findby_can_match():
+        out.append(("F", "create %s %s" % ((create.get("method") or "").upper(), create.get("path")),
+                    "UNREACHABLE: this kind has no `get` and no `update`, so its create is dispatched "
+                    "only when Observe reports the resource ABSENT -- but its findby CAN match "
+                    "(identifiers readable under policy %s), so Observe reports exists-and-up-to-date "
+                    "and the request is never issued. The kind reports Ready and performs NOTHING. "
+                    "Either drop the findby responseTransform that supplies the identifier, or give "
+                    "the kind a verb that acts on drift"
+                    % ((findby.get("identifiersMatchPolicy") or "AND").upper()), True))
 
     # E -- unmapped path params become spec properties
     # CLAUSE 3 IS A FINDING, NOT A NOTE, when nothing can supply the value. An
@@ -585,6 +681,108 @@ def selftest():
         {"inline": "{hostname_suffix: .x}"}
     case("D substring collision stays ACTIONABLE", colliding, thin, "D", True,
          "no responseTransform")
+
+    # F -- AN ACTION-ONLY KIND WHOSE FINDBY CAN MATCH PERFORMS NOTHING.
+    # Three arms over one variable: the presence of a verb that can act. Only
+    # the kind with neither `get` nor `update` is at risk, because only there
+    # does findby's verdict decide whether the create is dispatched at all.
+    _v = rd()["spec"]["resource"]["verbsDescription"]          # [findby, create, get]
+    _upd = {"action": "update", "method": "DELETE", "path": "/v1/things/{uuid}"}
+    for _name, _verbs, _wantF in (
+            ("F silent when an `update` verb exists", [_v[0], _v[1], _upd], 0),
+            ("F silent when a `get` verb exists",     [_v[0], _v[1], _v[2]], 0),
+            ("F fires when there is NEITHER",         [_v[0], _v[1]],        1)):
+        _rows = [r for r in evaluate(rd(verbsDescription=_verbs), BASE_OAS, "thing")
+                 if r[0] == "F"]
+        _ok = len(_rows) == _wantF and all(r[3] for r in _rows)
+        if _ok and _wantF:
+            _ok = "UNREACHABLE" in _rows[0][2]
+        cases.append((_name, _ok))
+        if not _ok:
+            failures.append("%s: expected %d actionable F row(s) saying UNREACHABLE, got %s"
+                            % (_name, _wantF, [(r[1], r[3]) for r in _rows]))
+
+    # D MUST NOT BE ACTIONABLE FOR AN ACTION-ONLY KIND, and the control for this
+    # is the "D findby cannot match" case above: the SAME thin OAS, a kind that
+    # merely also has a `get`, and there the row IS actionable. One variable.
+    _d = [r for r in evaluate(rd(verbsDescription=[_v[0], _v[1]]), thin, "thing")
+          if r[0] == "D"]
+    _ok = len(_d) == 1 and not _d[0][3] and "ACTION-ONLY" in _d[0][2]
+    cases.append(("D downgraded to non-actionable for an action-only kind", _ok))
+    if not _ok:
+        failures.append("action-only D: expected 1 NON-actionable row saying ACTION-ONLY, got %s"
+                        % [(r[1], r[3], r[2][:60]) for r in _d])
+
+    # THE TRANSFORM ITSELF AS THE ONE VARIABLE, on an action-only kind.
+    #
+    # This is the arm a peer's port needed and did not have
+    # (openstack-nova-operator-kog, 2026-11-12). Their check-D fixture is itself
+    # action-only -- create + findby, no get, no update -- so their arm 1 asserts
+    # D IS actionable on the shape where that verdict is backwards, and their arm
+    # 2 asserts that adding a responseTransform is the REMEDY. That is the change
+    # that left eight blades at `enroll` for a day: the test would have defended
+    # the defect against a correct patch, and it reads as coverage.
+    #
+    # This repo escaped that only because rd()'s default verb set happens to
+    # include a `get`, which makes its D fixtures non-action-only. Luck, not
+    # design -- so assert the pair explicitly, on the thin OAS where the
+    # identifier is genuinely absent from the item:
+    #     no transform -> findby cannot match -> create reachable  -> no F
+    #        transform -> findby CAN match    -> create unreachable -> F
+    _ao = [_v[0], _v[1]]                                    # findby + create only
+    _no_xf = rd(verbsDescription=_ao)
+    _xf = rd(verbsDescription=[dict(_v[0], responseTransform={"inline": ".name = .uuid | .name"}),
+                               _v[1]])
+    for _n, _doc, _wantF in (("action-only, NO transform -> create reachable, no F", _no_xf, 0),
+                             ("action-only, WITH a transform -> create UNREACHABLE, F", _xf, 1)):
+        _r = [r for r in evaluate(_doc, thin, "thing") if r[0] == "F"]
+        _o = len(_r) == _wantF and all(x[3] for x in _r)
+        cases.append(("the transform is the variable: %s" % _n, _o))
+        if not _o:
+            failures.append("%s: expected %d F row(s), got %s" % (_n, _wantF, [(x[1], x[3]) for x in _r]))
+
+    # THE REGRESSION, ON THE REAL DOCUMENTS, BOTH DIRECTIONS.
+    #
+    # 52ebe5d (2026-11-11) added a findby responseTransform to the provision kind
+    # to satisfy check D and oasgen's identically-worded schemaWarning. Because
+    # that kind has no `get` and no `update`, a matching findby made Observe
+    # report exists-and-up-to-date and the PUT was never issued: every provision
+    # transition became a silent no-op and nodes stayed at `enroll`. The same
+    # transform had been reverted four days earlier in 40bf2ed, whose subject
+    # reads "the responseTransform I added today would have silently stopped
+    # every transition" -- and the comment recording that revert was still in the
+    # file, 59 lines BELOW the re-added transform, inside the same verb block.
+    #
+    # So: inject 52ebe5d's exact transform into the SHIPPED document and F must
+    # fire; the shipped document itself must be clean; and power -- which carries
+    # the equivalent transform but also a `get` and an `update` -- must be clean
+    # too. The last one is what stops this check being "no transforms allowed".
+    try:
+        import copy as _c, yaml as _y3
+        _prd = _y3.safe_load(open("manifests/restdefinition-provision.yaml"))
+        _poas = _y3.safe_load(open("oas/ironic-provision.yaml"))
+        _wrd = _y3.safe_load(open("manifests/restdefinition-power.yaml"))
+        _woas = _y3.safe_load(open("oas/ironic-power.yaml"))
+    except Exception as _e:
+        cases.append(("F on the real provision/power documents", False))
+        failures.append("could not load the provision/power documents (%s) -- VOID, not a pass" % _e)
+    else:
+        _hist = _c.deepcopy(_prd)
+        for _vv in _hist["spec"]["resource"]["verbsDescription"]:
+            if _vv.get("action") == "findby":
+                _vv["responseTransform"] = {
+                    "inline": "if (.name and .provision_state) then .node_id = .name else . end"}
+        _hf = [r for r in evaluate(_hist, _poas, "provision") if r[0] == "F"]
+        _sf = [r for r in evaluate(_prd, _poas, "provision") if r[0] == "F"]
+        _wf = [r for r in evaluate(_wrd, _woas, "power") if r[0] == "F"]
+        for _n, _rows, _want in (("52ebe5d's transform re-injected -> F fires", _hf, 1),
+                                 ("the shipped provision document -> no F",     _sf, 0),
+                                 ("power (has get AND update) -> no F",          _wf, 0)):
+            _o = len(_rows) == _want and all(r[3] for r in _rows)
+            cases.append(("F regression, real documents: %s" % _n, _o))
+            if not _o:
+                failures.append("%s: expected %d F row(s), got %s"
+                                % (_n, _want, [(r[1], r[3]) for r in _rows]))
 
     # CROSS-ASSERTIONS: each pair of branches must be DISTINGUISHABLE by message.
     # This is what kills the mutants; the per-case checks alone do not.
