@@ -44,15 +44,23 @@ apply-oas:
 	KUBECTL="$(KUBECTL)" ./scripts/create-ironic-oas-configmap.sh $(IRONIC_NS)
 
 apply-restdef: apply-oas
-	# All four definitions that are actually installed. restdefinition-power was
-	# missing here while being live in the cluster, so `apply-restdef` silently
-	# left the NodePower definition at whatever an earlier apply had put there.
-	# allocation / deploy-template / portgroup exist in manifests/ but are not
-	# installed; add them here when they are.
+	# All SEVEN definitions. restdefinition-power was once missing here while
+	# being live in the cluster, so `apply-restdef` silently left the NodePower
+	# definition at whatever an earlier apply had put there.
+	#
+	# allocation / deploy-template / portgroup were added 2026-11-12. They had
+	# shipped for months with nothing installing them, nothing referencing them
+	# from a chart and no test touching them -- and the note that used to live
+	# here said "add them here when they are", which is what this is.
+	# scripts/check-restdefinition-shape.py screens all seven statically; it
+	# found these three structurally sound, and better formed than the live ones.
 	$(KUBECTL) apply -f manifests/restdefinition-node.yaml
 	$(KUBECTL) apply -f manifests/restdefinition-port.yaml
 	$(KUBECTL) apply -f manifests/restdefinition-provision.yaml
 	$(KUBECTL) apply -f manifests/restdefinition-power.yaml
+	$(KUBECTL) apply -f manifests/restdefinition-allocation.yaml
+	$(KUBECTL) apply -f manifests/restdefinition-deploy-template.yaml
+	$(KUBECTL) apply -f manifests/restdefinition-portgroup.yaml
 
 deploy-chart:
 	$(HELMK) upgrade --install baremetal-lifecycle ./charts/baremetal-lifecycle \
@@ -249,22 +257,36 @@ krateo-up:    # install Krateo KOG (oasgen-provider) + composition engine (core-
 		--wait --timeout 8m
 	$(KUBECTL) -n krateo-system get pods
 
-restdef-up:   # apply OAS ConfigMaps + RestDefinitions (Node + Port + NodeProvision + NodePower) + endpoint singletons
+restdef-up:   # apply OAS ConfigMaps + all SEVEN RestDefinitions + endpoint singletons
 	KUBECTL="$(KUBECTL)" ./scripts/create-ironic-oas-configmap.sh $(IRONIC_NS)
 	$(KUBECTL) apply -f manifests/restdefinition-node.yaml
 	$(KUBECTL) apply -f manifests/restdefinition-port.yaml
 	$(KUBECTL) apply -f manifests/restdefinition-provision.yaml
 	$(KUBECTL) apply -f manifests/restdefinition-power.yaml
+	$(KUBECTL) apply -f manifests/restdefinition-allocation.yaml
+	$(KUBECTL) apply -f manifests/restdefinition-deploy-template.yaml
+	$(KUBECTL) apply -f manifests/restdefinition-portgroup.yaml
 	$(KUBECTL) -n $(IRONIC_NS) wait --for=condition=Ready restdefinition/ironic-node --timeout=180s
 	$(KUBECTL) -n $(IRONIC_NS) wait --for=condition=Ready restdefinition/ironic-port --timeout=180s
 	$(KUBECTL) -n $(IRONIC_NS) wait --for=condition=Ready restdefinition/ironic-node-provision --timeout=180s
 	$(KUBECTL) -n $(IRONIC_NS) wait --for=condition=Ready restdefinition/ironic-node-power --timeout=180s
+	$(KUBECTL) -n $(IRONIC_NS) wait --for=condition=Ready restdefinition/ironic-allocation --timeout=300s
+	$(KUBECTL) -n $(IRONIC_NS) wait --for=condition=Ready restdefinition/ironic-deploy-template --timeout=180s
+	$(KUBECTL) -n $(IRONIC_NS) wait --for=condition=Ready restdefinition/ironic-portgroup --timeout=180s
 	# Singleton NodeConfiguration + PortConfiguration. Applied AFTER the RestDefinitions are
 	# Ready so the *Configuration CRDs exist. Kept OUT of charts/baremetal-lifecycle so RDC
 	# can still resolve spec.configurationRef during the per-node delete drain (see
 	# manifests/nodeconfiguration-ironic.yaml header for the orphan-on-uninstall race).
 	$(KUBECTL) apply -f manifests/nodeconfiguration-ironic.yaml
 	$(KUBECTL) apply -f manifests/portconfiguration-ironic.yaml
+	# The three added 2026-11-12. Installing a KOG kind is THREE objects, not two:
+	# the OAS ConfigMap, the RestDefinition, AND a Configuration of that kind's own
+	# generated *Configuration type. Without the third the controller cannot resolve
+	# the endpoint or the credential and the CR sits with NO STATUS AT ALL -- no
+	# uuid, no conditions. Measured: all three kinds did exactly that for 180s.
+	$(KUBECTL) apply -f manifests/allocationconfiguration-ironic.yaml
+	$(KUBECTL) apply -f manifests/deploytemplateconfiguration-ironic.yaml
+	$(KUBECTL) apply -f manifests/portgroupconfiguration-ironic.yaml
 
 # Provision a sample fake node. The state machine is lookup-driven: each reconcile renders the
 # NodeProvision CR for the node's current state. composition-dynamic-controller does this on its

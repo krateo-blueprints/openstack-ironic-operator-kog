@@ -1,6 +1,18 @@
 # RestDefinition for Ironic DeployTemplate - oasgen-provider generates the CRD + controller.
 # Apply: create configmap ironic-deploy-template-oas from ../oas/ironic-deploy-template.yaml
 #        (key ironic_deploy_template.yaml), then apply this file.
+# spec.name MUST BE A VALID IRONIC TRAIT: CUSTOM_[A-Z0-9_]+, or a standard trait.
+# Not a style rule -- Ironic 400s otherwise, and the message does not say why.
+# MEASURED 2026-11-12 with both controls in one run:
+#
+#     spec.name: probe-deploy-template     -> create failed: 400
+#     spec.name: CUSTOM_PROBE_TEMPLATE     -> CREATED, uuid d2b5a05e-...
+#
+# That 400 cost a wrong conclusion first: with no microversion this endpoint
+# returned 405, and once 1.109 was pinned it became 400, which reads as "the fix
+# did not work" rather than "the fix worked and my payload is invalid". A status
+# change from 405 to 400 is PROGRESS -- the endpoint went from absent to reachable.
+#
 # Standalone (no Node needed); addressed by uuid or name; get/delete map the path id from
 # spec.name (known pre-create). No update verb (Ironic PATCH is JSON-Patch only).
 ---
@@ -39,23 +51,55 @@ spec:
         fromRestDefinition:
           actions:
             - "*"
+    # MICROVERSION, PINNED STATICALLY PER VERB -- added 2026-11-12, and the reason
+    # is measured rather than stylistic. This kind shipped for months installed by
+    # nothing. The first time it was installed and driven, every create failed:
+    #
+    #     PortGroup       create failed: unexpected status: 404
+    #     DeployTemplate  create failed: unexpected status: 405
+    #
+    # Ironic defaults to microversion 1.1 when no header is sent, and the OAS itself
+    # says >=1.55 is required for deploy templates,
+    # so at 1.1 the endpoint is not there to POST to. Nothing was wrong with the
+    # RestDefinition's shape -- scripts/check-restdefinition-shape.py passes it, and
+    # correctly, because a microversion requirement is not visible in either document.
+    #
+    # The OAS parameter description said "Set via the Configuration", and that route
+    # does work (measured on rdc 0.54.1: a distinctive 1.95 reached the wire twice,
+    # 0 406s). It is pinned HERE anyway, for the same reason restdefinition-port.yaml
+    # pins it: no chart renders these Configuration singletons, so a
+    # Configuration-only route is forgettable at install time -- and this kind is the
+    # proof, having been forgotten entirely. 1.109 matches the value the charts and
+    # restdefinition-port.yaml use; the floor for this kind is 1.55.
     verbsDescription:
       - action: findby
         method: GET
         path: /v1/deploy_templates
         identifiersMatchPolicy: OR
+        headers:
+        - name: X-OpenStack-Ironic-API-Version
+          value: '1.109'
       - action: get
         method: GET
         path: /v1/deploy_templates/{uuid}
         requestFieldMapping:
-          - inPath: uuid
-            inCustomResource: spec.name
+        - inPath: uuid
+          inCustomResource: spec.name
+        headers:
+        - name: X-OpenStack-Ironic-API-Version
+          value: '1.109'
       - action: create
         method: POST
         path: /v1/deploy_templates
+        headers:
+        - name: X-OpenStack-Ironic-API-Version
+          value: '1.109'
       - action: delete
         method: DELETE
         path: /v1/deploy_templates/{uuid}
         requestFieldMapping:
-          - inPath: uuid
-            inCustomResource: spec.name
+        - inPath: uuid
+          inCustomResource: spec.name
+        headers:
+        - name: X-OpenStack-Ironic-API-Version
+          value: '1.109'

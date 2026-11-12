@@ -147,6 +147,38 @@ def evaluate(rd, oas, slug):
     transform = (findby or {}).get("responseTransform")
     xf_text = str(transform) if transform else ""
 
+    def transform_supplies(ident):
+        """Does the findby responseTransform plausibly supply `ident`?
+
+        A HEURISTIC, and labelled as one in every row that uses it, because it
+        DOWNGRADES: a true answer turns an actionable finding into an informational
+        one. Getting it wrong in the permissive direction hides a findby that can
+        never match -- which is exactly the defect this screen exists to catch (#34).
+
+        It was a bare substring test (`ident in xf_text`) until 2026-11-12. That
+        works here only by luck of Ironic's payload shape: every identifier is flat
+        (`name`, `address`, `node_id`), so a substring cannot collide. The
+        openstack-nova-operator-kog session ported this screen and found the test
+        UNREACHABLE against Nova, whose payloads are enveloped -- a transform for a
+        dotted identifier references the LEAF (`{name: .flavors[0].name}`), so
+        `"status.server_group.id" in xf_text` is never true. Their D-rescued case
+        could not fire at all.
+
+        So: match the identifier's LEAF on a word boundary. Still a heuristic -- it
+        does not evaluate the jq -- but it fails in the direction that keeps a
+        finding actionable rather than silently informational.
+        """
+        if not xf_text:
+            return False
+        leaf = ident.split(".")[-1]
+        # `(?<!\w)`, NOT `(?<![\w.])`. A jq field reference is written `.node_id`, so
+        # excluding a preceding dot excludes the only form that actually occurs --
+        # which it did: the first version of this turned all four live transforms
+        # into "no transform supplies it" and made the screen RED ON MAIN with 4
+        # actionable rows. A word char before the leaf is the real collision case
+        # (`name` inside `hostname_suffix`), and `(?<!\w)` rejects exactly that.
+        return re.search(r"(?<!\w)%s(?!\w)" % re.escape(leaf), xf_text) is not None
+
     out = []
     # A -- the path and method must be declared
     for v in verbs:
@@ -161,8 +193,9 @@ def evaluate(rd, oas, slug):
     for ident in res.get("identifiers") or []:
         if ident in spec:
             continue
-        if ident in xf_text:
-            out.append(("B", ident, "not a spec field, but the findby responseTransform supplies it", False))
+        if transform_supplies(ident):
+            out.append(("B", ident, "not a spec field, but the findby responseTransform appears to "
+                                    "supply it (HEURISTIC: the jq is not evaluated)", False))
         else:
             out.append(("B", ident, "identifier is not a spec field and no transform supplies it", True))
 
@@ -185,8 +218,9 @@ def evaluate(rd, oas, slug):
         for ident in res.get("identifiers") or []:
             if ident in item:
                 continue
-            if ident in xf_text:
-                out.append(("D", ident, "absent from the collection item; the responseTransform manufactures it", False))
+            if transform_supplies(ident):
+                out.append(("D", ident, "absent from the collection item; the responseTransform appears "
+                                        "to manufacture it (HEURISTIC: the jq is not evaluated)", False))
             else:
                 out.append(("D", ident, "absent from the collection item and no responseTransform -- findby can NEVER match", True))
 
@@ -308,7 +342,22 @@ def selftest():
 
     cases, failures = [], []
 
-    def case(name, rdoc, oas, want_check, want_actionable):
+    msgs = {}
+
+    def case(name, rdoc, oas, want_check, want_actionable, want_msg=None):
+        """want_msg: a substring the row's MESSAGE must contain.
+
+        ASSERTING ONLY THE LETTER IS NOT ENOUGH, and a surviving mutant proved it
+        (found by openstack-nova-operator-kog porting this screen, their #137).
+        Deleting check A's "path not declared" branch leaves the METHOD branch to
+        catch an absent path -- because a path that does not exist has no methods
+        -- so an A row still appears, actionable, and all ten cases passed. The
+        message it printed was false in the worst way available: "the path is
+        declared but the method is not", about a path that is not declared.
+        Same hazard in E, whose two branches make OPPOSITE claims (a property
+        KEPT in spec versus one SUPPRESSED from it), so either branch can cover
+        for the other's removal while inverting the meaning.
+        """
         try:
             rows = evaluate(rdoc, oas, "thing")
         except Void as v:
@@ -317,17 +366,28 @@ def selftest():
             got = rows
         hit = [r for r in got if r[0] == want_check]
         ok = bool(hit) and (not want_actionable or any(r[3] for r in hit))
+        if ok and want_msg is not None:
+            ok = any(want_msg in r[2] for r in hit)
+            if not ok:
+                failures.append("%s: an %s row appeared but no message contained %r -- got %r"
+                                % (name, want_check, want_msg, [r[2] for r in hit]))
+        msgs[name] = [r[2] for r in hit]
         cases.append((name, ok))
-        if not ok:
+        if not ok and not any(name in f for f in failures):
+            # EVERY false case must reach `failures`. It did not: this used to be
+            # `if not ok and want_msg is None`, so a case carrying a want_msg that
+            # failed the letter/actionability check was recorded False and counted
+            # zero. A mutant reverting the check-D guard then reported
+            # "15 cases, 0 failure(s)" with a case printed as FAIL above it.
             failures.append("%s: wanted check %s (actionable=%s), got %s"
                             % (name, want_check, want_actionable, [(r[0], r[1], r[3]) for r in got]))
 
     # A: a path the OAS does not declare
     bad = rd(); bad["spec"]["resource"]["verbsDescription"][0]["path"] = "/v1/nope"
-    case("A inert path", bad, BASE_OAS, "A", True)
+    case("A inert path", bad, BASE_OAS, "A", True, "path not declared in the OAS")
     # A: right path, wrong method
     bad = rd(); bad["spec"]["resource"]["verbsDescription"][0]["method"] = "PUT"
-    case("A inert method", bad, BASE_OAS, "A", True)
+    case("A inert method", bad, BASE_OAS, "A", True, "is declared but method")
     # B: identifier not in the create body
     bad = rd(identifiers=["serial"],
              verbsDescription=rd()["spec"]["resource"]["verbsDescription"])
@@ -350,12 +410,43 @@ def selftest():
     case("D rescued by transform", saved, thin, "D", False)
     # E: unmapped path param absent from the create body
     e = rd(); e["spec"]["resource"]["verbsDescription"][2].pop("requestFieldMapping")
-    case("E unmapped path param", e, BASE_OAS, "E", False)
+    case("E unmapped path param", e, BASE_OAS, "E", False, "is unmapped and absent")
     # VOID: no verbs at all
     v = rd(verbsDescription=[])
     case("VOID no verbs", v, BASE_OAS, "VOID", True)
     # VOID: an OAS with no paths
     case("VOID empty OAS", rd(), {"paths": {}}, "VOID", True)
+
+    # E, the OTHER branch: a MAPPED path param suppressed from spec. Its message
+    # must be the suppression one, not the "kept as a spec property" one.
+    case("E mapped param suppressed", rd(), BASE_OAS, "E", False, "is suppressed from spec")
+
+    # The heuristic must fire on a LEAF reference, which is how a transform for a
+    # dotted identifier is actually written. nova's port proved the old substring
+    # test could not fire at all against enveloped payloads.
+    dotted = rd(identifiers=["thing.name"])
+    dotted["spec"]["resource"]["verbsDescription"][0]["responseTransform"] = \
+        {"inline": "{name: .things[0].name}"}
+    case("D dotted identifier rescued by leaf match", dotted, thin, "D", False, "HEURISTIC")
+
+    # ... and must NOT fire on a coincidental substring, which is the direction that
+    # would hide a real finding.
+    colliding = rd(identifiers=["name"])
+    colliding["spec"]["resource"]["verbsDescription"][0]["responseTransform"] = \
+        {"inline": "{hostname_suffix: .x}"}
+    case("D substring collision stays ACTIONABLE", colliding, thin, "D", True,
+         "no responseTransform")
+
+    # CROSS-ASSERTIONS: each pair of branches must be DISTINGUISHABLE by message.
+    # This is what kills the mutants; the per-case checks alone do not.
+    for a, b in (("A inert path", "A inert method"),
+                 ("E unmapped path param", "E mapped param suppressed")):
+        ma, mb = set(msgs.get(a) or []), set(msgs.get(b) or [])
+        ok = bool(ma) and bool(mb) and not (ma & mb)
+        cases.append(("messages differ: %s vs %s" % (a, b), ok))
+        if not ok:
+            failures.append("%s and %s are not distinguishable by message: %r vs %r"
+                            % (a, b, sorted(ma), sorted(mb)))
 
     # the negative control: a clean document must produce NO actionable row
     clean = evaluate(rd(), BASE_OAS, "thing")

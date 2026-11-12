@@ -99,7 +99,7 @@ components:
       name: X-OpenStack-Ironic-API-Version
       in: header
       required: false
-      description: Ironic API microversion (required for writes). Set via AllocationConfiguration.
+      description: Ironic API microversion (required for writes). Floor 1.52 for allocations. PINNED STATICALLY per verb in manifests/restdefinition-allocation.yaml at 1.109; an AllocationConfiguration can also supply it, and both routes work, but the static pin is what ships because no chart renders that singleton.
       schema:
         type: string
   schemas:

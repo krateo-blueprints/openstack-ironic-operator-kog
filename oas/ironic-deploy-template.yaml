@@ -100,7 +100,7 @@ components:
       name: X-OpenStack-Ironic-API-Version
       in: header
       required: false
-      description: Ironic API microversion (>=1.55 required for deploy templates). Set via DeployTemplateConfiguration.
+      description: Ironic API microversion (>=1.55 required for deploy templates). PINNED STATICALLY per verb in manifests/restdefinition-deploy-template.yaml at 1.109; a DeployTemplateConfiguration can also supply it, and both routes work, but the static pin is what ships because no chart renders that singleton. At the 1.1 default a POST here returns 405 -- measured 2026-11-12.
       schema:
         type: string
   schemas:
