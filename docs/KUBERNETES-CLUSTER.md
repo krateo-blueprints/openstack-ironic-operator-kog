@@ -14,6 +14,8 @@ Provision a real Kubernetes cluster on Ironic-managed bare-metal nodes by applyi
 > **v0.11.0 architecture change.** HA clusters (cpNodes > 1) now run etcd as a host **systemd unit** on each CP, bootstrapped from a static `initial-cluster=` list. kubeadm sees etcd as **external** and skips the join-time etcd-member-dance that broke v0.10.15 HA with an irrecoverable ghost-member loop. Single-CP path is unchanged (kubeadm stacked etcd). Full design rationale and bootstrap sequence: [`KUBERNETES-CLUSTER-V0.11.0-DESIGN.md`](KUBERNETES-CLUSTER-V0.11.0-DESIGN.md). Restore runbook: [`RUNBOOK-ETCD-RESTORE.md`](RUNBOOK-ETCD-RESTORE.md).
 >
 > New required value for HA: `controlPlane.nodes[].oobIp` (the OOB-network IP — etcd peer URLs are hard-pinned there). New optional values: `controlPlane.etcd.{aptPackage,snapshotImage,snapshotSchedule,snapshotRetentionDays}`.
+>
+> **Superseded in v0.13.2, and this note is kept only because it dates the change.** `controlPlane.nodes[].oobIp` is **vestigial and read by nothing** — measured 2026-11-12: zero template interpolations, against 15 for `.nodeUuid` as a control. etcd's address is resolved at runtime from the bootstrap's own `spec.extra.etcd_ip`. The "hard-pinned" mechanism described above is the one v0.13.2 removed, because a render-time read happens before the bootstrap has booted.
 
 ## Table of contents
 
