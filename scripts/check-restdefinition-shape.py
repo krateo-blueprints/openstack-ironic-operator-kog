@@ -324,8 +324,27 @@ def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
         restclient.go says so at 1197-1207 and notes that two readers took the
         opposite conclusion from that code in one day. So: absent -> OR,
         AND -> AND, anything else is a manifest the cluster will reject."""
-        p = (findby.get("identifiersMatchPolicy") or "").strip().upper()
-        return p if p in ("AND", "OR") else "OR"
+        # READ FROM THE VERB, NOT THE RESOURCE. identifiersMatchPolicy is declared in
+        # `type VerbsDescription struct` (oasgen apis/restdefinitions/v1alpha1/types.go
+        # :633, struct at :549), so it lives at
+        #     spec.resource.verbsDescription[].identifiersMatchPolicy
+        # and NOT at spec.resource.identifiersMatchPolicy. A screen reading the resource
+        # level can never see a declared policy: it reads None, defaults to OR, and a
+        # manifest that genuinely says AND is analysed as OR. That is the mirror of the
+        # bug this function fixes -- openstack-nova-operator-kog#148 had exactly it, and
+        # their fixture put the key at the resource level too, so the arm passed while
+        # testing nothing. Guarded by a self-test arm below.
+        #
+        # EXACT MATCH, no .upper(). The marker is `+kubebuilder:validation:Enum=AND;OR`,
+        # so the apiserver refuses `and`, `Or`, `And` and anything else at admission.
+        # Upper-casing would give a manifest that CANNOT APPLY the semantics of one that
+        # can -- screening `and` as AND while the cluster rejects it outright.
+        raw = findby.get("identifiersMatchPolicy")
+        if raw is None or raw == "":
+            return "OR"
+        if raw in ("AND", "OR"):
+            return raw
+        return "INVALID:%s" % raw
 
     # The identifiers split by HOW they are readable, computed once because both
     # D and F need it and they must not disagree about it.
@@ -351,7 +370,11 @@ def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
         Observe can ever report the resource absent."""
         if not findby or not idents:
             return False
-        if findby_policy() == "OR":
+        pol = findby_policy()
+        # An INVALID policy cannot apply, so there is no behaviour to predict. Answer
+        # the permissive side (OR) so F still reports rather than going quiet, and let
+        # the dedicated row below say the manifest is refused.
+        if pol != "AND":
             return bool(readable)
         return len(readable) == len(idents)
 
@@ -445,6 +468,26 @@ def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
                 out.append(("D", ident, "absent from the collection item and no responseTransform -- "
                                         "and no other identifier is readable either, so findby can "
                                         "NEVER match under policy %s" % findby_policy(), True))
+
+    # G -- identifiersMatchPolicy placed where nothing reads it
+    if "identifiersMatchPolicy" in res:
+        out.append(("G", "resource.identifiersMatchPolicy=%r" % res["identifiersMatchPolicy"],
+                    "declared at the RESOURCE level, where the field does not exist: it belongs "
+                    "on the findby VERB (oasgen types.go declares it in VerbsDescription). "
+                    "Nothing reads it here, so the policy silently defaults to OR -- and a "
+                    "manifest meaning AND is analysed, and matched, as OR",
+                    True))
+
+    # G -- a policy value the apiserver will refuse
+    if findby:
+        _pol = findby_policy()
+        if _pol.startswith("INVALID:"):
+            out.append(("G", "findby identifiersMatchPolicy=%r" % _pol.split(":", 1)[1],
+                        "not one of AND/OR. The field carries "
+                        "`+kubebuilder:validation:Enum=AND;OR`, so the apiserver REFUSES this "
+                        "manifest at admission -- it is not a policy with weaker semantics, it "
+                        "is a definition that cannot apply. Case matters: `and` is refused too",
+                        True))
 
     # F -- an action-only kind whose findby CAN match has an UNREACHABLE create
     #
@@ -802,6 +845,55 @@ def selftest():
     cases.append(("...and declaring AND silences F (one variable: the policy)", _ok))
     if not _ok:
         failures.append("AND declared: expected 0 F rows, got %s" % [(r[1], r[3]) for r in _f_and])
+
+    # THE POLICY IS A PER-VERB FIELD. Three arms over one variable: WHERE the key sits.
+    #
+    # oasgen declares IdentifiersMatchPolicy in `type VerbsDescription struct`
+    # (types.go:633, struct at :549), so it lives at
+    # spec.resource.verbsDescription[].identifiersMatchPolicy. A screen reading the
+    # RESOURCE level can never see a declared policy -- it reads None, defaults to OR,
+    # and a manifest that genuinely says AND is analysed as OR. nova's #148 had exactly
+    # that, AND their fixture placed the key at the resource level too, so the arm
+    # passed while testing nothing. These arms exist so a future "fix" that moves the
+    # read cannot pass.
+    _ao2v = rd(identifiers=["name", "serial"],
+               verbsDescription=[dict(_v[0], identifiersMatchPolicy="AND"), _v[1]])
+    _ao2r = rd(identifiers=["name", "serial"], verbsDescription=[_v[0], _v[1]])
+    _ao2r["spec"]["resource"]["identifiersMatchPolicy"] = "AND"   # the WRONG level
+
+    _f_verb = [r for r in evaluate(_ao2v, BASE_OAS, "thing") if r[0] == "F"]
+    _ok = len(_f_verb) == 0
+    cases.append(("policy on the VERB is SEEN (AND -> F silent)", _ok))
+    if not _ok:
+        failures.append("verb-level AND: expected 0 F rows, got %s" % [(r[1], r[3]) for r in _f_verb])
+
+    # At the resource level the policy must NOT be honoured -- the effective policy is
+    # still OR, so F fires -- AND the misplacement must be REPORTED, because silently
+    # analysing it as OR is how the real bug hid.
+    _rows_r = evaluate(_ao2r, BASE_OAS, "thing")
+    _f_res = [r for r in _rows_r if r[0] == "F"]
+    _g_res = [r for r in _rows_r if r[0] == "G"]
+    _ok = len(_f_res) == 1 and _f_res[0][3]
+    cases.append(("policy at the RESOURCE level is NOT honoured (F still fires)", _ok))
+    if not _ok:
+        failures.append("resource-level AND: expected 1 actionable F row, got %s"
+                        % [(r[1], r[3]) for r in _f_res])
+    _ok = len(_g_res) == 1 and _g_res[0][3] and "RESOURCE level" in _g_res[0][2]
+    cases.append(("...and the misplacement is REPORTED as a G finding", _ok))
+    if not _ok:
+        failures.append("resource-level AND: expected 1 actionable G row naming the RESOURCE "
+                        "level, got %s" % [(r[1], r[3], r[2][:60]) for r in _g_res])
+
+    # CASE MATTERS: the Enum is exactly AND;OR, so `and` is refused at admission. It
+    # must be a G finding, not silently given AND's semantics by an .upper().
+    _ao2bad = rd(identifiers=["name", "serial"],
+                 verbsDescription=[dict(_v[0], identifiersMatchPolicy="and"), _v[1]])
+    _g_bad = [r for r in evaluate(_ao2bad, BASE_OAS, "thing") if r[0] == "G"]
+    _ok = len(_g_bad) == 1 and _g_bad[0][3] and "Case matters" in _g_bad[0][2]
+    cases.append(("lowercase `and` is a REFUSED manifest, not a policy", _ok))
+    if not _ok:
+        failures.append("lowercase and: expected 1 actionable G row mentioning case, got %s"
+                        % [(r[1], r[3], r[2][:60]) for r in _g_bad])
 
     # F'S TWO MESSAGES MUST BE DIFFERENT STRINGS, and the heuristic-only one must say
     # so. Adopted from openstack-nova-operator-kog#148. A single message would let a
