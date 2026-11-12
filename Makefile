@@ -229,7 +229,14 @@ KRATEO_CORE_VERSION ?= 2.13.65
 # are both unusable here. Reported by the oasgen-provider session, which
 # corrected its own first answer that scoped the defect to 0.54.0 alone.
 # Safe pins are therefore <= 0.52.0 or >= 0.54.1.
-KRATEO_OASGEN_VERSION ?= 0.54.1
+# 0.59.0 is what the lab ACTUALLY runs. This read 0.54.1 until 2026-11-12, five
+# minor versions behind, so `make` would have DOWNGRADED a working cluster -- the
+# same shape as the core-provider pin that was a downgrade waiting to happen.
+# Found by scripts/check-restdefinition-shape.py needing a version to answer for:
+# checks C and E depend on oasgen #421 (0.52.0), so the screen reads this pin, and
+# a pin that disagrees with reality gives the wrong verdict rather than no verdict.
+# 0.60.0 is released and NOT adopted here yet -- deliberately, it is unmeasured.
+KRATEO_OASGEN_VERSION ?= 0.59.0
 # Kept explicit and equal rather than letting the chart default it. The 0.54.1
 # chart ships `rdc.image.tag: ""`, the helm idiom for "use appVersion", so the
 # default would resolve to the same thing -- but silently, and a future chart
