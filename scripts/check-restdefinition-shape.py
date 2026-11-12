@@ -84,7 +84,21 @@ class Void(Exception):
 # carries the range it applies to. One that does not apply at the configured version
 # is reported as RETIRED BY VERSION rather than counted as a calibration failure --
 # otherwise upgrading past a fix turns this screen red for the fix.
-MIN_SELFREF_SURVIVES = (0, 52, 0)   # oasgen #421
+# oasgen #421. MEASURED from the tag graph, not read off the PR -- and that
+# distinction is load-bearing, because #421's own description says it targets
+# **0.51.1, A VERSION THAT DOES NOT EXIST**:
+#
+#     git tag | grep ^0.51          ->  0.51.0          (one line, no 0.51.1)
+#     git tag --contains 8461460    ->  0.52.0 first, 11 tags total
+#     CONTROL: git tag | grep ^0.52 ->  0.52.0          (so the grep works)
+#
+# 8461460 is the #421 merge commit. Had this constant been "corrected" against the
+# PR body it would encode a release nobody can install, and every verdict below the
+# real boundary would have been wrong in the permissive direction -- the screen would
+# have said a property survives at 0.51.1 when there is no 0.51.1 to survive at.
+#
+# A version a fix CLAIMS to target is a plan; the tag graph is what happened.
+MIN_SELFREF_SURVIVES = (0, 52, 0)
 
 KNOWN = {
     ("power", "E", "node_id"): {
