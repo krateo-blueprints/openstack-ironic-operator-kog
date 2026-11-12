@@ -1,3 +1,12 @@
+{{/* 0.6.5: `(.Values.image).source` rather than `.Values.image.source`.
+     values.yaml ships `image:` with every sub-key commented out, so `image` exists
+     with a NULL value -- `hasKey` is true and `.source` dereferences nil. `helm
+     install` therefore FAILED for every imageless node:
+       Error: INSTALLATION FAILED: ... NOTES.txt:9:45 ... <.Values.image.source>:
+       nil pointer evaluating interface {}.source
+     which made the "(no image set; host stops at `available`)" line below
+     unreachable -- the chart could not be installed for the one configuration that
+     message exists to describe. */}}
 BaremetalHost {{ .Release.Name }} applied for node {{ .Values.nodeName }}.
 
 State flow:
@@ -6,8 +15,8 @@ State flow:
   inspecting   -> manageable + node.status.properties + inspection_finished_at populated
   {{- end }}
   available    -> provide -> cleaning -> available
-  {{- if and (hasKey .Values "image") .Values.image.source }}
-  provisioning -> deploy -> wait call-back -> active (image: {{ .Values.image.source }})
+  {{- if (.Values.image).source }}
+  provisioning -> deploy -> wait call-back -> active (image: {{ (.Values.image).source }})
   {{- else }}
   (no image set; host stops at `available`)
   {{- end }}

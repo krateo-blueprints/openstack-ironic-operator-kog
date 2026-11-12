@@ -404,7 +404,7 @@ part of this that survives.
 > standard (`krateo-blueprints/charts#7`, `PUBLISHING.md`) requires charts to
 > carry a `CHART_VERSION` placeholder stamped from the git tag — and explicitly
 > exempts repositories like this one, naming our case as the example: *"…
-> `composition.krateo.io/v0-6-4`, which must equal `baremetal-host` 0.6.4 …
+> `composition.krateo.io/v0-6-5`, which must equal `baremetal-host` 0.6.4 …
 > these repositories commit literal versions, and their release refuses any
 > chart whose CompositionDefinition or dependent apiVersion reference disagrees
 > (openstack-ironic-operator-kog's `check-examples`)."* Verified in the branch
@@ -591,7 +591,7 @@ and should be done in the same step:
   are now rejected with `unknown field`, not ignored. Done in this repo's
   `manifests/`.
 - Any `KubernetesCluster` setting `lifecycleApiVersion` explicitly must move to
-  `composition.krateo.io/v0-6-4`.
+  `composition.krateo.io/v0-6-5`.
 - The six hosts provisioned before `baremetal-host` 0.6.4 keep their
   materialised `spec.debug: {connectorVerbose: false}`. Removing the schema
   default stops it being added to *new* hosts; it does not remove it from
