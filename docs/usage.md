@@ -18,7 +18,8 @@ Everything runs on a laptop for free — no hardware, PXE, VMs, or public cloud.
 ```bash
 make local-up        # kind + standalone Ironic + Krateo (KOG + core) + RestDefinitions
 make provision-demo  # composition provisions a sample fake node -> active
-make local-down      # tear down
+make local-down      # tear down (refuses on a cluster named ironic-kog;
+                     #            pass I_MEAN_IT=1 if it is yours to delete)
 ```
 
 `local-up` chains `kind-up → ironic-up → krateo-up → restdef-up`. Every `kubectl`/`helm`
