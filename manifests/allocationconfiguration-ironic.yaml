@@ -1,0 +1,38 @@
+# Singleton AllocationConfiguration for the Ironic endpoint.
+#
+# EVERY Configuration kind needs its own authentication block. This is measured, not
+# stylistic: on 2026-10-29, with auth on the BaremetalNodeConfiguration alone, node
+# calls reached Ironic (a 400 on a body problem) while Port calls returned a bare 401
+# -- which reads as a token fault rather than a missing config. See
+# manifests/nodeconfiguration-ironic.yaml for the rotation contract.
+#
+# WHY THIS FILE EXISTS (2026-11-12). Allocation shipped for months with nothing
+# installing it. When it was finally installed, its CR sat with no status at all --
+# no uuid, no conditions -- for 180s. The cause was this file's absence: installing
+# a KOG kind is THREE objects, not two.
+#
+#   1. the OAS ConfigMap        scripts/create-ironic-oas-configmap.sh
+#   2. the RestDefinition       manifests/restdefinition-allocation.yaml
+#   3. this Configuration       without it the controller cannot resolve the
+#                               endpoint or the credential, and reports nothing
+#
+# Kept OUT of any chart so rest-dynamic-controller can still resolve
+# spec.configurationRef at DELETE time. Deleting a Configuration while a CR of its
+# kind is terminating breaks delete-time endpoint resolution and wedges the CR --
+# done by accident on 2026-11-11 and it cost an orphaned ReplicaSet cleanup.
+#
+# Verbs declared by restdefinition-allocation.yaml: findby/get/create/delete.
+---
+apiVersion: baremetal.ogen.krateo.io/v1alpha1
+kind: AllocationConfiguration
+metadata:
+  name: ironic-endpoint
+  namespace: openstack
+spec:
+  authentication:
+    apiKey:
+      header: X-Auth-Token
+      tokenRef:
+        name: ironic-keystone-token
+        namespace: openstack
+        key: token

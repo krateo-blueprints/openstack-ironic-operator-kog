@@ -41,23 +41,55 @@ spec:
         fromRestDefinition:
           actions:
             - "*"
+    # MICROVERSION, PINNED STATICALLY PER VERB -- added 2026-11-12, and the reason
+    # is measured rather than stylistic. This kind shipped for months installed by
+    # nothing. The first time it was installed and driven, every create failed:
+    #
+    #     PortGroup       create failed: unexpected status: 404
+    #     DeployTemplate  create failed: unexpected status: 405
+    #
+    # Ironic defaults to microversion 1.1 when no header is sent, and allocations
+    # arrived at microversion 1.52,
+    # so at 1.1 the endpoint is not there to POST to. Nothing was wrong with the
+    # RestDefinition's shape -- scripts/check-restdefinition-shape.py passes it, and
+    # correctly, because a microversion requirement is not visible in either document.
+    #
+    # The OAS parameter description said "Set via the Configuration", and that route
+    # does work (measured on rdc 0.54.1: a distinctive 1.95 reached the wire twice,
+    # 0 406s). It is pinned HERE anyway, for the same reason restdefinition-port.yaml
+    # pins it: no chart renders these Configuration singletons, so a
+    # Configuration-only route is forgettable at install time -- and this kind is the
+    # proof, having been forgotten entirely. 1.109 matches the value the charts and
+    # restdefinition-port.yaml use; the floor for this kind is 1.52.
     verbsDescription:
       - action: findby
         method: GET
         path: /v1/allocations
         identifiersMatchPolicy: OR
+        headers:
+        - name: X-OpenStack-Ironic-API-Version
+          value: '1.109'
       - action: get
         method: GET
         path: /v1/allocations/{uuid}
         requestFieldMapping:
-          - inPath: uuid
-            inCustomResource: spec.name
+        - inPath: uuid
+          inCustomResource: spec.name
+        headers:
+        - name: X-OpenStack-Ironic-API-Version
+          value: '1.109'
       - action: create
         method: POST
         path: /v1/allocations
+        headers:
+        - name: X-OpenStack-Ironic-API-Version
+          value: '1.109'
       - action: delete
         method: DELETE
         path: /v1/allocations/{uuid}
         requestFieldMapping:
-          - inPath: uuid
-            inCustomResource: spec.name
+        - inPath: uuid
+          inCustomResource: spec.name
+        headers:
+        - name: X-OpenStack-Ironic-API-Version
+          value: '1.109'

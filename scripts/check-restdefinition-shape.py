@@ -308,7 +308,22 @@ def selftest():
 
     cases, failures = [], []
 
-    def case(name, rdoc, oas, want_check, want_actionable):
+    msgs = {}
+
+    def case(name, rdoc, oas, want_check, want_actionable, want_msg=None):
+        """want_msg: a substring the row's MESSAGE must contain.
+
+        ASSERTING ONLY THE LETTER IS NOT ENOUGH, and a surviving mutant proved it
+        (found by openstack-nova-operator-kog porting this screen, their #137).
+        Deleting check A's "path not declared" branch leaves the METHOD branch to
+        catch an absent path -- because a path that does not exist has no methods
+        -- so an A row still appears, actionable, and all ten cases passed. The
+        message it printed was false in the worst way available: "the path is
+        declared but the method is not", about a path that is not declared.
+        Same hazard in E, whose two branches make OPPOSITE claims (a property
+        KEPT in spec versus one SUPPRESSED from it), so either branch can cover
+        for the other's removal while inverting the meaning.
+        """
         try:
             rows = evaluate(rdoc, oas, "thing")
         except Void as v:
@@ -317,17 +332,23 @@ def selftest():
             got = rows
         hit = [r for r in got if r[0] == want_check]
         ok = bool(hit) and (not want_actionable or any(r[3] for r in hit))
+        if ok and want_msg is not None:
+            ok = any(want_msg in r[2] for r in hit)
+            if not ok:
+                failures.append("%s: an %s row appeared but no message contained %r -- got %r"
+                                % (name, want_check, want_msg, [r[2] for r in hit]))
+        msgs[name] = [r[2] for r in hit]
         cases.append((name, ok))
-        if not ok:
+        if not ok and want_msg is None:
             failures.append("%s: wanted check %s (actionable=%s), got %s"
                             % (name, want_check, want_actionable, [(r[0], r[1], r[3]) for r in got]))
 
     # A: a path the OAS does not declare
     bad = rd(); bad["spec"]["resource"]["verbsDescription"][0]["path"] = "/v1/nope"
-    case("A inert path", bad, BASE_OAS, "A", True)
+    case("A inert path", bad, BASE_OAS, "A", True, "path not declared in the OAS")
     # A: right path, wrong method
     bad = rd(); bad["spec"]["resource"]["verbsDescription"][0]["method"] = "PUT"
-    case("A inert method", bad, BASE_OAS, "A", True)
+    case("A inert method", bad, BASE_OAS, "A", True, "is declared but method")
     # B: identifier not in the create body
     bad = rd(identifiers=["serial"],
              verbsDescription=rd()["spec"]["resource"]["verbsDescription"])
@@ -350,12 +371,27 @@ def selftest():
     case("D rescued by transform", saved, thin, "D", False)
     # E: unmapped path param absent from the create body
     e = rd(); e["spec"]["resource"]["verbsDescription"][2].pop("requestFieldMapping")
-    case("E unmapped path param", e, BASE_OAS, "E", False)
+    case("E unmapped path param", e, BASE_OAS, "E", False, "is unmapped and absent")
     # VOID: no verbs at all
     v = rd(verbsDescription=[])
     case("VOID no verbs", v, BASE_OAS, "VOID", True)
     # VOID: an OAS with no paths
     case("VOID empty OAS", rd(), {"paths": {}}, "VOID", True)
+
+    # E, the OTHER branch: a MAPPED path param suppressed from spec. Its message
+    # must be the suppression one, not the "kept as a spec property" one.
+    case("E mapped param suppressed", rd(), BASE_OAS, "E", False, "is suppressed from spec")
+
+    # CROSS-ASSERTIONS: each pair of branches must be DISTINGUISHABLE by message.
+    # This is what kills the mutants; the per-case checks alone do not.
+    for a, b in (("A inert path", "A inert method"),
+                 ("E unmapped path param", "E mapped param suppressed")):
+        ma, mb = set(msgs.get(a) or []), set(msgs.get(b) or [])
+        ok = bool(ma) and bool(mb) and not (ma & mb)
+        cases.append(("messages differ: %s vs %s" % (a, b), ok))
+        if not ok:
+            failures.append("%s and %s are not distinguishable by message: %r vs %r"
+                            % (a, b, sorted(ma), sorted(mb)))
 
     # the negative control: a clean document must produce NO actionable row
     clean = evaluate(rd(), BASE_OAS, "thing")

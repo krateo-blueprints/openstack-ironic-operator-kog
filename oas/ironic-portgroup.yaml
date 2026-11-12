@@ -9,7 +9,7 @@ info:
   version: 1.0.0
 servers:
   - url: http://ironic.openstack.svc.cluster.local:6385
-    description: Ironic API (override via PortgroupConfiguration)
+    description: Ironic API (override via PortGroupConfiguration)
 # Applies the apiKey scheme defined under components. The token itself comes from the
 # <Kind>Configuration's spec.authentication.apiKey.tokenRef; where no tokenRef is
 # configured (the local standalone Ironic runs noauth) no header is sent, so the same
@@ -99,7 +99,7 @@ components:
       name: X-OpenStack-Ironic-API-Version
       in: header
       required: false
-      description: Ironic API microversion (required for writes). Set via PortgroupConfiguration.
+      description: Ironic API microversion (required for writes). Floor 1.23 for portgroups. PINNED STATICALLY per verb in manifests/restdefinition-portgroup.yaml at 1.109; a PortGroupConfiguration can also supply it, and both routes work, but the static pin is what ships because no chart renders that singleton. At the 1.1 default a POST here returns 404 -- measured 2026-11-12.
       schema:
         type: string
   schemas:

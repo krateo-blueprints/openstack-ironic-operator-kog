@@ -56,6 +56,22 @@ class Void(Exception):
 # field still fails; `--selftest` has a case proving exactly that.
 BLOCKED_UPSTREAM = [
     {
+        "signature": "is omitted from the generated spec because verb",
+        "issue": "oasgen path-param suppression (measured, not filed)",
+        "why": ("MEASURED THREE WAYS and benign for every kind in this repo. A "
+                "requestFieldMapping suppresses the path parameter's own spec property; "
+                "only an independent request-BODY declaration rescues it. For "
+                "Allocation, DeployTemplate and PortGroup the suppressed property is "
+                "`uuid`, which is supplied from `spec.name` by the mapping and surfaced "
+                "through additionalStatusFields -- so no author ever sets it and nothing "
+                "is lost. The warning's own suggested remedies are both WRONG here: "
+                "there is nothing to remove from the CR, and removing the fieldMapping "
+                "would break get/delete. A warning on a correct configuration.\n"
+                "Three independent channels agree it is this mechanism: live CRD dumps "
+                "(2026-11-04), static OAS reading (scripts/check-restdefinition-shape.py "
+                "check E), and this generator warning itself (2026-11-12)."),
+    },
+    {
         "signature": "is absent from the items the findby response carries",
         "issue": "oasgen #575",
         "why": ("the check is computed from the declared schema and is blind to "
