@@ -113,11 +113,20 @@ KNOWN = {
         "upto": MIN_SELFREF_SURVIVES,
     },
     ("port", "E", "uuid"): {
-        "why": ("NOT self-referencing -- Port's delete maps uuid <- status.uuid, and "
-                "its get leaves {uuid} unmapped. Neither survival clause can apply at "
-                "ANY version, so this one does not retire. Port is addressed by "
-                "address, so it is inert rather than broken."),
-        "upto": None,   # applies at every version
+        "why": ("NOT self-referencing -- Port's delete AND get both map "
+                "uuid <- status.uuid, so clause 2 cannot apply, clause 3 has no "
+                "unmapped verb to fire on, and uuid is not in the create body. Absent "
+                "at every version, which is CORRECT: Ironic generates a Port's uuid "
+                "on POST, so no author could supply it.\n"
+                "THIS TEXT WAS WRONG UNTIL 2026-11-12. It read 'its get leaves "
+                "{uuid} unmapped. Neither survival clause can apply at ANY version' "
+                "-- while the live CRD said PRESENT and REQUIRED, because an unmapped "
+                "path param becomes a spec field (clause 3), which this model did not "
+                "have. Every NEW Port was being rejected. And it was the entry I had "
+                "declared could never retire. An exemption table is where an "
+                "incomplete model goes to hide: all three entries here were papering "
+                "over a missing clause."),
+        "upto": None,   # applies at every version, now that get is mapped
     },
 }
 
