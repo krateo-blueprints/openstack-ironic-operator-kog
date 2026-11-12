@@ -7,7 +7,7 @@ type: application
 # composition.krateo.io/v0-6-3. Registering a new version stops the previous one
 # being served, so the kubernetes-cluster blueprint's `lifecycleApiVersion` has to
 # move in the same step -- `make check-examples` fails the build if it does not.
-version: 0.6.3
+version: 0.6.4
 appVersion: "1.0"
 
 home: https://github.com/krateo-blueprints/openstack-ironic-operator-kog
