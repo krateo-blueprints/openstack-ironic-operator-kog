@@ -691,7 +691,19 @@ bifrost-up:   # deploy the in-cluster proxy and point `ironic` Service at a remo
 # A separate kind cluster (default name: ironic-lab) where the WireGuard tunnel runs inside the
 # proxy pod, so the host's networking stays untouched. The operator pods talk to
 # `ironic.openstack.svc.cluster.local:6385` and traffic exits via WG to the real Ironic.
-LAB_CLUSTER ?= ironic-lab
+# ironic-kog, NOT ironic-lab. This said `ironic-lab` until 2026-11-12, and no such
+# cluster exists -- measured: `kind get clusters` lists ironic-kog (plus other
+# sessions'), and the docs say ironic-kog 22 times against ironic-lab 5. A stale
+# local/kubeconfig.ironic-lab is still on disk, which is what makes the dead name
+# look live.
+#
+# So `make lab-up` would have built a SECOND, EMPTY cluster while the operator
+# believed they had rebuilt the lab, and `make lab-down` would have deleted nothing
+# while reading as "delete my lab". Neither was noticed because nothing runs either
+# target -- the fourth target this week that was broken and invisible for exactly
+# that reason, after apply-restdef omitting power, the publish list silently
+# dropping a chart, and local-up's unresolvable credential.
+LAB_CLUSTER ?= ironic-kog
 WG_CONF     ?= local/wireguard/ironic-lab.conf
 # NOTE: `managementCluster.apiUrl` (http://198.51.100.5:8443) has no listener.
 #
@@ -741,7 +753,27 @@ lab-up: # bring up the lab cluster end-to-end (kind + Krateo + WG/proxy + RestDe
 	$(MAKE) KIND_CLUSTER=$(LAB_CLUSTER) KUBECONFIG_FILE=local/kubeconfig.$(LAB_CLUSTER) \
 		kind-up krateo-up lab-tunnel-up restdef-up
 
-lab-down: # delete the lab kind cluster (does NOT touch your default kubeconfig)
+lab-down: # delete the lab kind cluster (REFUSES on the protected lab unless forced)
+	# NAMING REALITY MADE THIS TARGET DANGEROUS, so it is guarded in the same change.
+	# While LAB_CLUSTER was a cluster that did not exist, `lab-down` was a no-op. Now
+	# that it names the real lab, it would delete 8 provisioned blades, 16 Ports, a
+	# 3+4 HA Kubernetes cluster and 32 Ready CRs.
+	#
+	# The chart inputs are in git; the PROVISIONED state is not -- blade disks, the
+	# enrolment, the Keystone token -- so a rebuild is hours, and `kind delete` is
+	# irreversible. Diego, asked directly on 2026-11-11: keep it stopped, do not
+	# delete. Stopping costs 0 CPU and 0 memory, measured, so there is no pressure
+	# to delete it at all.
+	#
+	# Any OTHER lab cluster deletes normally; only the protected name is refused.
+	@if [ "$(LAB_CLUSTER)" = "ironic-kog" ] && [ "$(I_MEAN_IT)" != "1" ]; then \
+		echo "REFUSING to delete the protected lab cluster '$(LAB_CLUSTER)'."; \
+		echo "  It holds 8 provisioned blades and a live HA cluster whose state is NOT in git."; \
+		echo "  To stop it instead (0 CPU, 0 memory, fully resumable):"; \
+		echo "      docker stop $(LAB_CLUSTER)-control-plane"; \
+		echo "  If you genuinely mean to destroy it:  make lab-down I_MEAN_IT=1"; \
+		exit 1; \
+	fi
 	-kind delete cluster --name $(LAB_CLUSTER) --kubeconfig local/kubeconfig.$(LAB_CLUSTER)
 
 ironic-noauth-token:   # a placeholder token so the Configurations can RESOLVE on noauth Ironic
