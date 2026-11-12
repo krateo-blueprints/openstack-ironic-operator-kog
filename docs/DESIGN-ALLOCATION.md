@@ -1,8 +1,10 @@
 ---
+type: Architecture
 title: "Design note — requesting capacity with Ironic Allocation"
-status: proposal
-scope: workers
-date: 2026-11-12
+description: "A proposal for workers only: replace hand-named blades with an Ironic Allocation request, what makes it feasible here (identity is resolved at runtime since v0.13.2), the enrolment/consumption responsibility split it forces, and the three things it does not settle — including that the success path is unexercised because no lab blade is `available`."
+resource: oci://ghcr.io/krateo-blueprints/charts/kubernetes-cluster
+tags: [ironic, allocation, kubernetes-cluster, workers, design, proposal, krateo]
+timestamp: 2026-11-12T00:00:00Z
 ---
 
 # Design note — requesting capacity with Ironic Allocation
