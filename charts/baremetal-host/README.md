@@ -48,7 +48,7 @@ kubectl apply -f compositiondefinition.yaml     # ships inside the chart
 `core-provider` reads the chart's `values.schema.json`, generates the
 `BaremetalHost` CRD from it, and starts a controller **for this chart version**.
 The chart version *is* the served apiVersion: `0.6.3` is served as
-`composition.krateo.io/v0-6-4`. Registering a new version stops the previous one
+`composition.krateo.io/v0-6-5`. Registering a new version stops the previous one
 being served, so anything that renders `BaremetalHost` resources at a pinned
 apiVersion — the `kubernetes-cluster` blueprint does — has to move in the same
 step.
@@ -56,7 +56,7 @@ step.
 Then one host:
 
 ```yaml
-apiVersion: composition.krateo.io/v0-6-4
+apiVersion: composition.krateo.io/v0-6-5
 kind: BaremetalHost
 metadata:
   name: blade03

@@ -7,7 +7,7 @@ type: application
 # composition.krateo.io/v0-15-1. Minor rather than patch because the input
 # contract changed in three ways -- `cni.kubeProxyReplacement` and `conformance`
 # are now reachable, and the two inert `ironicApi*` inputs are gone.
-version: 0.15.4
+version: 0.15.5
 appVersion: "1.0"
 
 home: https://github.com/krateo-blueprints/openstack-ironic-operator-kog

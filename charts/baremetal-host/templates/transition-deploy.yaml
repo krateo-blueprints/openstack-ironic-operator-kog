@@ -12,7 +12,14 @@
 {{/* Do NOT fire deploy when spec.undeploy=true. Without this gate, the chart would loop:
      available -> deploy -> active -> undeploy -> available -> deploy ... forever. The
      undeploy field is a "hold at available" signal; deploy should respect it. */}}
-{{- if and (eq (include "baremetal-host.provisionState" .) "available") (hasKey .Values "image") .Values.image.source (not .Values.undeploy) }}
+{{/* `(.Values.image).source`, NOT `and (hasKey .Values "image") .Values.image.source`.
+     values.yaml ships `image:` with every sub-key COMMENTED OUT, so the key exists
+     with a NULL value: hasKey returns true and `.source` then dereferences nil. Go
+     templates' `and` is a function, not a short-circuiting operator, so every
+     argument is evaluated regardless. The parenthesised form yields nil instead of
+     erroring -- the same idiom this chart already uses for
+     `(.Values.debug).connectorVerbose`. See the note in NOTES.txt. */}}
+{{- if and (eq (include "baremetal-host.provisionState" .) "available") (.Values.image).source (not .Values.undeploy) }}
 {{- $configdrive := include "baremetal-host.configdrive" . }}
 {{/* v0.5.8: REFUSE to deploy with an empty configdrive when one was expected.
 

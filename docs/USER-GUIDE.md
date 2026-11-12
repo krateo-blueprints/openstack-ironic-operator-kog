@@ -10,7 +10,7 @@ timestamp: 2026-08-11T00:00:00Z
 # BaremetalHost composition — user guide
 
 Drive a bare-metal blade through Ironic's lifecycle with a single
-`composition.krateo.io/v0-6-4` BaremetalHost CR. The Krateo blueprint
+`composition.krateo.io/v0-6-5` BaremetalHost CR. The Krateo blueprint
 re-renders on every reconcile; each transition fires automatically once
 the gates match live Ironic state.
 
@@ -154,7 +154,7 @@ is idle by design, not by accident.
 A minimal BaremetalHost that walks a blade enroll → active with cloud-init:
 
 ```yaml
-apiVersion: composition.krateo.io/v0-6-4
+apiVersion: composition.krateo.io/v0-6-5
 kind: BaremetalHost
 metadata:
   name: blade01
@@ -518,7 +518,7 @@ the 202 response code must be declared.
 ### `kubectl apply` returns `Warning: unknown field "spec.X"`
 
 The version you applied at doesn't have field X in its schema. Re-apply at
-`composition.krateo.io/v0-6-4` (or whichever is current). See the README's
+`composition.krateo.io/v0-6-5` (or whichever is current). See the README's
 "Multi-version CompositionDefinitions" section.
 
 ### `helm get values` shows defaults for fields you set
