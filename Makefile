@@ -13,6 +13,41 @@ KCTX := kind-$(KIND_CLUSTER)
 KUBECTL := kubectl --kubeconfig $(KUBECONFIG_FILE) --context $(KCTX)
 HELMK := helm --kubeconfig $(KUBECONFIG_FILE) --kube-context $(KCTX)
 
+# ---------------------------------------------------------------------------------
+# TARGETS NOTHING EXERCISES -- a SNAPSHOT taken 2026-11-12, not a guarantee.
+#
+# Asking "what ships that nothing exercises" of this Makefile found 43 targets, of
+# which 8 are referenced by no prerequisite, no CI workflow, no doc and no script:
+#
+#     check-schema-warnings
+#     deploy-chart
+#     deploy-ironic
+#     ironic-down
+#     lab-down
+#     lab-up
+#     template-chart
+#     validate-chart
+#
+# Only one of them was a real defect: LAB_CLUSTER named `ironic-lab`, a cluster that
+# does not exist, so `lab-up` would have built a second empty one and `lab-down` was
+# a no-op reading as "delete my lab". Fixed, and `lab-down` is now guarded.
+#
+# THE REST ARE UNPROVEN RATHER THAN BROKEN, and the distinction matters. Every path
+# their recipes name resolves -- but that is a weak test: the rot this repo has
+# actually hit was a MISSING LIST ITEM (`apply-restdef` omitted power while NodePower
+# was live) and a MISSING SECRET (`local-up` left every controller a credential it
+# could not resolve). Neither is a bad path, so a static check cannot see either.
+#
+# Treat anything on this list as never having been run. If you run one and it works,
+# say so somewhere -- a target referenced by a doc leaves this list and gains a
+# witness. A target that is broken and never run is indistinguishable from one that
+# works, which is how all four of this week's Makefile defects survived.
+#
+# The list is deliberately NOT enforced by a screen. It would have to be
+# hand-maintained, and a hand-maintained list of hand-maintained lists is where this
+# started.
+# ---------------------------------------------------------------------------------
+
 help:
 	@echo "Targets:"
 	@echo "  apply-oas      - Create ConfigMap with OAS in cluster"
