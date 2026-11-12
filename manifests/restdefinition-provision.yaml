@@ -61,40 +61,54 @@ spec:
       - action: findby
         method: GET
         path: /v1/nodes
-        # ADDED 2026-11-11, mirroring restdefinition-power.yaml's findby. WITHOUT this
-        # transform findby could never match, and oasgen says so in
-        # status.schemaWarnings -- a field nothing in this repo had read until today:
+        # DO NOT ADD A responseTransform TO THIS findby. IT HAS BEEN ADDED AND
+        # REVERTED TWICE -- 2026-11-07 (40bf2ed) and 2026-11-11 (52ebe5d) -- and
+        # this warning is HERE, at the top of the verb, because the first revert
+        # left its warning 59 lines further down and that did not stop the second.
         #
-        #   identifier "node_id" is absent from the items the findby response carries,
-        #   so findby cannot compare against it. no declared identifier is present in
-        #   the findby response, so findby can never match any item regardless of
-        #   policy: it will report not-found and the reconciler acts on not-found by
-        #   CREATING
+        # THE MECHANISM, read from rest-dynamic-controller source, not inferred:
+        # this kind has no `get` and no `update`. With no `get`, IsResourceKnown
+        # cannot build a get call, so Observe decides existence from findby. With
+        # no `update`, a reported difference cannot drive the endpoint. So the
+        # create -- PUT /v1/nodes/{node_id}/states/provision, the kind's ONLY
+        # effect -- is dispatched exactly one way: Observe reporting the resource
+        # ABSENT. restResources.go returns {ResourceExists: true,
+        # ResourceUpToDate: true} and logs "External resource up-to-date" the
+        # moment findby matches, and nothing errors anywhere.
         #
-        # /v1/nodes returns NodeState -- [name, provision_state, target_provision_state,
-        # uuid] -- and never `node_id`, which is the sole declared identifier. The
-        # transform manufactures it from `.name` BEFORE matching: oasgen-provider
-        # confirmed from source that `normalizeItems` applies the verb's
-        # responseTransform per item and hands the transformed items to the matcher
-        # (restclient.go:711), with the comment "Put every item into the CR's shape
-        # BEFORE comparing against the CR".
+        # A findby that NEVER MATCHES is therefore this kind's operating
+        # mechanism, not a defect in it. oasgen's schemaWarning says so in its
+        # own last clause and it was read as a bug report:
         #
-        # WHY THIS KIND AND NOT power: power has carried the equivalent transform all
-        # along, which is why its 8 CRs are Ready while the same warning fires on both.
-        # Provision had none. The warning was a false positive on power and literally
-        # true here -- same text, opposite truth, and oasgen's generator is blind to
-        # responseTransform entirely (filed as oasgen #575).
+        #   identifier "node_id" is absent from the items the findby response
+        #   carries ... findby can never match any item regardless of policy: it
+        #   will report not-found and the reconciler acts on not-found by CREATING
         #
-        # WHY IT MATTERS MORE HERE THAN ON POWER. Provision declares only findby and
-        # create -- NO `get`. Power has a `get` (fixed in PR #30) that answers the
-        # existence question directly and backstops a findby miss; provision has no
-        # such backstop, so a miss goes straight to `create`, which for this kind is
-        # PUT /v1/nodes/{node_id}/states/provision -- a real provision transition on a
-        # live node. Nobody noticed because provision holds ZERO CRs while all eight
-        # blades are `active`; the kind only gets CRs during a transition, so the wedge
-        # was armed for the next one rather than absent.
-        responseTransform:
-          inline: if (.name and .provision_state) then .node_id = .name else . end
+        # "The reconciler acts on not-found by CREATING" is the DESIRED behaviour
+        # here. 52ebe5d quoted that warning, manufactured `node_id` from `.name`
+        # so findby would match, and thereby made every provision transition a
+        # silent no-op: deploy, undeploy, manage, provide, inspect and clean all
+        # became reconcile-clean non-events, and nodes stayed at `enroll`. That is
+        # the symptom this lab showed on 2026-11-11/12.
+        #
+        # WHY POWER CARRIES THE EQUIVALENT TRANSFORM SAFELY: it has a `get` AND an
+        # `update` pointing at its own endpoint, so neither its existence verdict
+        # nor its ability to act depends on findby matching. The asymmetry is
+        # deliberate -- see the `update` note below for why provision must NOT
+        # converge on drift.
+        #
+        # WHAT IT COSTS TO LEAVE THIS OFF: observability only. findby never
+        # matches, so additionalStatusFields (uuid, provision_state,
+        # target_provision_state) never populate on a NodeProvision CR. The charts
+        # read provision_state off the BaremetalNode CR, which has a working
+        # responseTransform, which is why nothing depends on this. Buying that
+        # observability needs a DIFFERENT shape -- a `get` verb, so existence does
+        # not depend on findby (Ironic has GET /v1/nodes/{id}/states, which this
+        # OAS does not yet declare) -- not an identifier lift.
+        #
+        # Enforced by scripts/check-restdefinition-shape.py check F, which fails
+        # on exactly this shape and carries 52ebe5d's transform as its positive
+        # control.
         # include_children REMOVED 2026-11-04. It is correct and it will come
         # back, but it cannot work yet and was failing silently.
         #
@@ -152,11 +166,11 @@ spec:
         headers:
           - name: X-OpenStack-Ironic-API-Version
             value: "1.109"
-        # NO responseTransform HERE, AND THE ONE ADDED 2026-11-07 WAS REVERTED THE
-        # SAME DAY. It lifted `node_id` from `name` and `target` from
-        # `provision_state`, by symmetry with restdefinition-power.yaml. Both
-        # halves were wrong for this kind, and /code-review caught it before any
-        # NodeProvision CR existed to be broken by it.
+        # NO responseTransform ON THIS VERB EITHER. The full account is at the TOP
+        # of this findby block, where someone about to add one will actually read
+        # it; this copy is a pointer on purpose. The 2026-11-07 attempt lifted
+        # `node_id` from `name` AND `target` from `provision_state`; the
+        # 2026-11-11 one re-added the first half alone. Both disable the kind.
         #
         # 1. THE IDENTIFIER LIFT DISABLES THE ONLY WORKING VERB. `create` is the
         #    sole verb here that performs PUT /v1/nodes/{node_id}/states/provision.
