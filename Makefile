@@ -499,6 +499,25 @@ check-oas-defaults:   # no OAS body schema may acquire the v1.26.x defaulting sh
 	# found the only field instances anyone has (2 of 35).
 	python3 -I scripts/check-defaulted-optional-objects.py
 
+check-publish-set:   # the release workflow's chart list agrees with each chart's own declaration
+	# `.github/workflows/release-chart.yaml` publishes a HAND-MAINTAINED list, written
+	# out twice (lint, then package; push globs dist/). A chart added to charts/ and
+	# not to that list is NEVER PUBLISHED, SILENTLY -- it lints clean, the tag
+	# succeeds, and the artifact just never appears in the registry.
+	#
+	# This repo paid for the same shape once already: `apply-restdef` applied four of
+	# five RestDefinitions, omitting `power`, while NodePower was live. Nothing
+	# re-applies a RestDefinition in normal operation, so the broken target was
+	# indistinguishable from a working one.
+	#
+	# The list deliberately STAYS explicit rather than becoming a glob: a push to GHCR
+	# cannot be withdrawn (tag 0.3.7 shipped a broken kubernetes-cluster 0.15.2), so a
+	# new directory must not publish itself without a reviewable diff. Each chart
+	# declares `krateo.io/publish` in its own Chart.yaml and this screen makes any
+	# disagreement loud, offline, before a tag.
+	python3 -I scripts/check-publish-set.py --selftest && \
+		python3 -I scripts/check-publish-set.py
+
 check-restdefinition-shape:   # every declared verb/identifier/mapping resolves against its OAS
 	# The two most expensive defects this repo has had were both a reference from one
 	# document to another that does not resolve, and both passed review:
@@ -571,7 +590,7 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 	python3 -I scripts/check-blueprint-metadata.py --self-test && \
 		python3 -I scripts/check-blueprint-metadata.py $(if $(BLUEPRINT_ONLINE),--online,)
 
-check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape   # every standing screen
+check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set   # every standing screen
 	@echo "all standing screens passed"
 
 chart-host-pinned:   # add the chart versions the LIVE CompositionDefinitions pin

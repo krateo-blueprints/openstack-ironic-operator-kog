@@ -17,3 +17,11 @@ keywords:
   - krateo
 maintainers:
   - name: openstack-ironic-operator
+
+# Declares whether .github/workflows/release-chart.yaml publishes this chart.
+# scripts/check-publish-set.py asserts this agrees with the workflow's
+# hand-maintained lint and package lists -- so a new chart that nobody adds
+# to the workflow fails `make check` offline instead of silently never
+# appearing in the registry.
+annotations:
+  "krateo.io/publish": "true"

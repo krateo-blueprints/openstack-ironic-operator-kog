@@ -15,3 +15,12 @@ description: |
 type: application
 version: 0.1.2
 appVersion: "1.0"
+
+# Declares whether .github/workflows/release-chart.yaml publishes this chart.
+# scripts/check-publish-set.py asserts this agrees with the workflow's
+# hand-maintained lint and package lists -- so a new chart that nobody adds
+# to the workflow fails `make check` offline instead of silently never
+# appearing in the registry.
+# a spent instrument: it measured core-provider#303 on both sides of the fix. Kept for reproducibility, never shipped.
+annotations:
+  "krateo.io/publish": "false"
