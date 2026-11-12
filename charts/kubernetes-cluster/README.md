@@ -138,7 +138,7 @@ spec:
     endpoint: 192.0.2.200          # a load-balanced VIP; required for HA
     nodes:
       - nodeName: blade01            # index 0 bootstraps the cluster
-        oobIp: 192.0.2.101         # required for HA: etcd binds to it
+        oobIp: 192.0.2.101         # vestigial since v0.13.2; read by nothing
         driver: redfish
         driver_info:
           redfish_address: https://192.0.2.101
@@ -208,10 +208,17 @@ sequence of manifests to apply in order.
 | Back up etcd | `controlPlane.etcd.snapshotSchedule` (default: every 6h, 7 days retained) |
 
 A multi-node control plane runs etcd as a service on each node rather than
-kubeadm's stacked etcd, which is why `oobIp` is required: etcd binds its peer
-and client URLs to that address and it is written into the etcd server
-certificate. Use the management NIC — a data NIC's DHCP lease moves across
-reboots and breaks the peer URLs.
+kubeadm's stacked etcd. Each member's address is resolved **at runtime** — the
+bootstrap CP derives its own and publishes it to its `BaremetalNode` CR's
+`spec.extra.etcd_ip`, and the replicas read it from there.
+
+`oobIp` is **vestigial since v0.13.2 and read by nothing.** This section used to
+say it was required because "etcd binds its peer and client URLs to that address
+and it is written into the etcd server certificate". That described v0.11.0.
+Hard-pinning etcd to a hand-typed address is precisely what v0.13.2 removed:
+replicas render *concurrently* with the bootstrap so etcd can reach quorum, so at
+render time the bootstrap has not booted and the value would be empty — baking
+`https://:2379` into a member-add, which looks like an etcd fault and is not.
 
 ## Cilium, and why kube-proxy is replaced
 

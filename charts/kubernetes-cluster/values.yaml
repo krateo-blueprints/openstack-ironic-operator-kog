@@ -159,16 +159,29 @@ controlPlane:
     snapshotRetentionDays: 7
   # HA shape — uncomment + fill in with 1, 3, or 5 entries.
   #
-  # v0.11.0 NEW: every HA CP MUST set .oobIp — the IP etcd binds peer
-  # + client URLs to AND that the chart bakes into the etcd PKI server
-  # cert SAN at template time. Use the OOB (management) NIC's IP; the
-  # data NIC's DHCP lease is volatile and breaks etcd peer URLs across
-  # reboots (this was the v0.10.15 ghost-member root cause).
+  # .oobIp IS VESTIGIAL SINCE v0.13.2 AND IS READ BY NOTHING. Measured
+  # 2026-11-12: zero interpolations of `.oobIp` in any template, against
+  # 15 interpolations of `.nodeUuid` as the control. The schema still
+  # declares it (and does not require it), so setting it is harmless and
+  # has no effect.
+  #
+  # This comment used to say "every HA CP MUST set .oobIp ... baked into
+  # the etcd PKI server cert SAN at template time". That was true in
+  # v0.11.0 and WRONG from v0.13.2, which resolves the bootstrap CP's
+  # etcd endpoint AT RUNTIME from the address the bootstrap derives for
+  # itself and publishes to its own BaremetalNode CR's spec.extra.etcd_ip.
+  #
+  # The correction matters beyond tidiness: HARD-PINNING etcd to a
+  # hand-typed address is the mechanism v0.13.2 removed, and a stale
+  # render-time read would bake an empty endpoint and fail a member-add
+  # with "https://:2379" — which looks like an etcd problem and is not.
+  # Anyone debugging etcd from the old text would be looking at a value
+  # the chart no longer consults.
   #
   # nodes:
   #   - nodeName: blade06        # bootstrap CP
   #     nodeUuid: 2f05176e-...
-  #     oobIp: 192.0.2.194     # REQUIRED for HA (cpNodes > 1)
+  #     oobIp: 192.0.2.194     # vestigial since v0.13.2; read by nothing
   #     driver: redfish
   #     driver_info: {...}
   #     ports: [...]

@@ -93,7 +93,7 @@ placeholders — a real cluster overrides them on the `KubernetesCluster` CR.
 | `network.podCIDR` / `.serviceCIDR` | `10.244.0.0/16` / `10.96.0.0/12` | cluster networking. |
 | `network.managementApiReachability` | `external-lb` | ingress hint (kube-vip / MetalLB / external-lb / NodePort+DNS). See the [USER-GUIDE](./USER-GUIDE.md) option matrix. |
 | `controlPlane.endpoint` | `""` | stable apiserver address; **required** for HA (>1 node), points at a load-balanced VIP. |
-| `controlPlane.nodes[]` | *(commented)* | preferred CP shape; 1/3/5 entries, index 0 is the bootstrap CP. Each HA CP must set `.oobIp`. |
+| `controlPlane.nodes[]` | *(commented)* | preferred CP shape; 1/3/5 entries, index 0 is the bootstrap CP. `.oobIp` is **vestigial since v0.13.2 and read by nothing** — etcd's address is resolved at runtime from the bootstrap's `spec.extra.etcd_ip`. |
 | `controlPlane.node` | *(empty)* | legacy single-CP shape, ignored when `nodes[]` is populated. |
 | `controlPlane.etcd.aptPackage` | `etcd-server=3.5.16-4` | external-etcd apt package for HA CPs (v0.11.0+). |
 | `controlPlane.etcd.snapshotImage` | `gcr.io/etcd-development/etcd:v3.5.16` | etcdctl image for the snapshot CronJob. |
