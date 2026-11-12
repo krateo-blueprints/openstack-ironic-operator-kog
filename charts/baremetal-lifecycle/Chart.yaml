@@ -35,6 +35,12 @@ keywords:
 maintainers:
   - name: openstack-ironic-operator
 annotations:
+  # Declares whether .github/workflows/release-chart.yaml publishes this
+  # chart. scripts/check-publish-set.py asserts this agrees with the
+  # workflow's hand-maintained lint and package lists -- so a new chart
+  # that nobody adds to the workflow fails `make check` offline instead of
+  # silently never appearing in the registry.
+  "krateo.io/publish": "true"
   krateo.io/category: compute
   krateo.io/display-name: Baremetal Lifecycle (Ironic KOG)
   krateo.io/maturity: beta
