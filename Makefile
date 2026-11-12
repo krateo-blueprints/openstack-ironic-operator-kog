@@ -744,7 +744,35 @@ lab-up: # bring up the lab cluster end-to-end (kind + Krateo + WG/proxy + RestDe
 lab-down: # delete the lab kind cluster (does NOT touch your default kubeconfig)
 	-kind delete cluster --name $(LAB_CLUSTER) --kubeconfig local/kubeconfig.$(LAB_CLUSTER)
 
-local-up: kind-up ironic-up krateo-up restdef-up   # full local stack: kind + Ironic + Krateo + RestDefinitions
+ironic-noauth-token:   # a placeholder token so the Configurations can RESOLVE on noauth Ironic
+	# The local standalone Ironic runs NOAUTH, but all six applied Configurations
+	# declare `authentication.apiKey.tokenRef` -> secret/ironic-keystone-token.
+	# Nothing creates that secret locally, so on a fresh `make local-up` every
+	# generated controller has a credential reference it cannot resolve.
+	#
+	# The endpoint ignores the header; the reference just has to resolve. This repo
+	# already established that pattern -- scripts/probe-0430-config-header.sh creates
+	# `--from-literal=token=dummy` against its mock for exactly this reason.
+	#
+	# CREATE-IF-ABSENT, deliberately, and this is the load-bearing part. On the real
+	# lab the token is a LIVE Keystone token rewritten every 20 minutes by the
+	# keystone-token-refresher CronJob. An unconditional `create --dry-run | apply`
+	# would overwrite a working credential with the literal string "dummy-noauth" and
+	# every call to Ironic would start failing 401 -- so this target is wired into
+	# `local-up` only, never into `restdef-up`, which both environments run.
+	@$(KUBECTL) -n $(IRONIC_NS) get secret ironic-keystone-token >/dev/null 2>&1 \
+		&& echo "secret/ironic-keystone-token already exists -- left alone (this may be a REAL token)" \
+		|| { $(KUBECTL) -n $(IRONIC_NS) create secret generic ironic-keystone-token \
+			--from-literal=token=dummy-noauth \
+			&& echo "created placeholder secret/ironic-keystone-token (noauth Ironic ignores it)"; }
+
+# NOTE: this target relies on prerequisites running LEFT TO RIGHT, which plain
+# `make` does and `make -j` does not. That was already true before
+# ironic-noauth-token was added -- kind must exist before Ironic is deployed into
+# it, and Krateo before the RestDefinitions it generates CRDs from -- so a parallel
+# run was never going to work here. Stated rather than fixed, because serialising it
+# with order-only prerequisites would imply the rest is parallel-safe, and it is not.
+local-up: kind-up ironic-up krateo-up ironic-noauth-token restdef-up   # full local stack: kind + Ironic + Krateo + RestDefinitions
 
 local-down:   # delete the whole local kind cluster
 	-kind delete cluster --name $(KIND_CLUSTER) --kubeconfig $(KUBECONFIG_FILE)

@@ -17,7 +17,7 @@
 #
 #   generating RBAC using chart-inspector: ... unexpected status code: 500
 #   failed to fetch http://chartrepo.openstack.svc.cluster.local/
-#     baremetal-host-0.6.3.tgz : 404 Not Found
+#     baremetal-host-0.6.4.tgz : 404 Not Found
 #
 # and the pod was serving nothing but nginx's own index.html and 50x.html,
 # both dated Apr 16 2025 from the image. `migprobe-1` was Ready=True/Available
@@ -79,7 +79,7 @@ spec:
             # to prevent. `make chart-host` keeps this path in step with
             # HOST_CHART_VERSION.
             httpGet:
-              path: /baremetal-host-0.6.3.tgz
+              path: /baremetal-host-0.6.4.tgz
               port: 80
             initialDelaySeconds: 2
             periodSeconds: 10
