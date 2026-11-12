@@ -148,6 +148,12 @@
         }
       },
       "title": "Debugging"
+    },
+    "resourceClass": {
+      "type": "string",
+      "title": "Ironic resource class",
+      "default": "",
+      "description": "Ironic resource class for this node, rendered as spec.resource_class. The only thing that makes a node eligible for an Ironic Allocation: POST /v1/allocations requires a resource_class and matches only nodes declaring the same one. Empty means do not set it, leaving the node unallocatable -- the right default for hardware that belongs to a named cluster rather than to a pool."
     }
   }
 }

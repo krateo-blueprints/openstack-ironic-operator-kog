@@ -68,7 +68,7 @@ spec is missing them and the composition renders without them.
 ```yaml
 # Applying a BaremetalHost using spec.online (v0-1-0) and spec.maintenance (v0-1-2):
 # apply at v0-1-2 or later, the version that has BOTH fields.
-apiVersion: composition.krateo.io/v0-6-3
+apiVersion: composition.krateo.io/v0-6-4
 kind: BaremetalHost
 metadata:
   name: blade03
@@ -83,7 +83,7 @@ the latest schema's view, hit the precise endpoint:
 
 ```bash
 kubectl get --raw \
-  /apis/composition.krateo.io/v0-6-3/namespaces/openstack/baremetalhosts/blade03 | jq .
+  /apis/composition.krateo.io/v0-6-4/namespaces/openstack/baremetalhosts/blade03 | jq .
 ```
 
 Symptoms of a wrong-version apply, and their fixes, are in [api](./api.md) and the README

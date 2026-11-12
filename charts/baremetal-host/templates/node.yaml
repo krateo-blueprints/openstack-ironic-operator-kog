@@ -46,6 +46,15 @@ spec:
   {{- if .Values.parentNode }}
   parent_node: {{ .Values.parentNode | quote }}
   {{- end }}
+  {{/* resource_class: v0.6.4. The class Ironic schedules this node under, and the
+       ONLY thing that makes it eligible for an Allocation -- `POST /v1/allocations`
+       requires resource_class and matches only nodes that declare the same one.
+       Until this existed, no chart in this repo could make a node allocatable at
+       all, so the Allocation kind shipped and could never succeed. Optional:
+       omitted when empty, which leaves Ironic's own default (unset) in place. */}}
+  {{- if .Values.resourceClass }}
+  resource_class: {{ .Values.resourceClass | quote }}
+  {{- end }}
   {{- if .Values.maintenance }}
   maintenance: true
   {{- end }}

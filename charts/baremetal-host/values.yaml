@@ -132,6 +132,21 @@ networkData:
 # helm uninstall directly, with no re-render of the chart, so the state-machine drive
 # has to happen via the normal upgrade-on-reconcile path. Document this contract:
 # "delete BH = remove from k8s, doesn't touch Ironic. Undeploy = release Ironic."
+# resourceClass is the Ironic resource class this node is scheduled under, rendered as
+# spec.resource_class on the BaremetalNode. Added in 0.6.4.
+#
+# IT IS THE ONLY THING THAT MAKES A NODE ALLOCATABLE. `POST /v1/allocations` requires
+# a resource_class and matches only nodes declaring the same one, so before 0.6.4 no
+# chart here could make a node eligible for an Allocation -- the Allocation kind
+# shipped and could never succeed on any node this chart enrolled. Measured
+# 2026-11-12: 0 occurrences of resource_class in this chart's values, schema and
+# templates, against 2 for `driver` as a control.
+#
+# Empty means "do not set it", which leaves the node unallocatable and is the right
+# default: a node that belongs to a named cluster should not be handed out by a
+# scheduler. Set it only on hardware you intend to offer as capacity.
+resourceClass: ""
+
 undeploy: false
 
 # undeployMode controls Ironic's cleanup pass between `deleted` and `available`. Applied

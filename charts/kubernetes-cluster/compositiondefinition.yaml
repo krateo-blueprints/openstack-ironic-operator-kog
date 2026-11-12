@@ -28,7 +28,7 @@ metadata:
 spec:
   chart:
     url: oci://ghcr.io/krateo-blueprints/charts/kubernetes-cluster
-    version: "0.15.3"
+    version: "0.15.4"
     # Served from the Marketplace's classic Helm channel instead of OCI:
     #   url: https://krateo-blueprints.github.io/charts/blueprints
     #   repo: kubernetes-cluster

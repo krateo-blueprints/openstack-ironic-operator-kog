@@ -404,7 +404,7 @@ part of this that survives.
 > standard (`krateo-blueprints/charts#7`, `PUBLISHING.md`) requires charts to
 > carry a `CHART_VERSION` placeholder stamped from the git tag — and explicitly
 > exempts repositories like this one, naming our case as the example: *"…
-> `composition.krateo.io/v0-6-3`, which must equal `baremetal-host` 0.6.3 …
+> `composition.krateo.io/v0-6-4`, which must equal `baremetal-host` 0.6.4 …
 > these repositories commit literal versions, and their release refuses any
 > chart whose CompositionDefinition or dependent apiVersion reference disagrees
 > (openstack-ironic-operator-kog's `check-examples`)."* Verified in the branch
@@ -591,8 +591,8 @@ and should be done in the same step:
   are now rejected with `unknown field`, not ignored. Done in this repo's
   `manifests/`.
 - Any `KubernetesCluster` setting `lifecycleApiVersion` explicitly must move to
-  `composition.krateo.io/v0-6-3`.
-- The six hosts provisioned before `baremetal-host` 0.6.3 keep their
+  `composition.krateo.io/v0-6-4`.
+- The six hosts provisioned before `baremetal-host` 0.6.4 keep their
   materialised `spec.debug: {connectorVerbose: false}`. Removing the schema
   default stops it being added to *new* hosts; it does not remove it from
   existing ones, and nothing can — see `make check-blueprints` for the mechanism.
@@ -632,7 +632,7 @@ and the convergence on 2026-11-07 measured it:
 | `lab-ha` (KubernetesCluster) | `v0-13-26` → `v0-14-0` | `ironicApiUrl`, `ironicApiVersion` |
 | six `lab-ha-*` BaremetalHosts | `v0-6-2` → `v0-6-3` | **nothing** |
 
-Only `kubernetes-cluster` 0.14.0 removes fields. `baremetal-host` 0.6.3 removed a
+Only `kubernetes-cluster` 0.14.0 removes fields. `baremetal-host` 0.6.4 removed a
 schema **default**, not a field, so the six hosts migrate with nothing to prune.
 Predicting seven would have had someone hunting six warnings that were never due.
 
@@ -705,7 +705,7 @@ channel moved since 2026-10-09.
 | | baseline, before tagging | after |
 |---|---|---|
 | `kubernetes-cluster` 0.14.0 | ABSENT from the served index | present, `http=200` |
-| `baremetal-host` 0.6.3 | ABSENT | present, `http=200` |
+| `baremetal-host` 0.6.4 | ABSENT | present, `http=200` |
 | index `generated` | 2026-10-09T07:23:32.658419512Z | **2026-11-07T21:09:25.307397773Z** |
 | total charts | 810 | 813 |
 
