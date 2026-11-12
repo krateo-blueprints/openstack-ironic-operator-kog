@@ -36,6 +36,40 @@ spec:
     # distinctive 1.95 reached the wire twice, 0 406s. That run was on Port; the other
     # three kinds share the mechanism, not the measurement. Do not remove it with these.
     configurationFields:
+      # X-IRONIC-ENDPOINT IS DEAD AND MUST STAY. It is declared in ZERO OAS documents
+      # here -- measured, with a control: the same grep hits
+      # X-OpenStack-Ironic-API-Version 6x in oas/ironic-port.yaml. It resolves to
+      # nothing and produces a generation warning.
+      #
+      # It is here because `configurationFields` is IMMUTABLE once the CRD has been
+      # generated, and this entry is in what the cluster already STORED. PR #27
+      # removed it from this file on 2026-11-11 as dead, which silently made
+      # restdefinition-port.yaml UN-APPLIABLE on every existing install:
+      #
+      #   apply the shipped manifest (entry absent)  -> REFUSED, "ConfigurationFields
+      #                                                 are immutable"
+      #   apply with the entry restored FIRST        -> accepted
+      #   apply with the entry restored LAST         -> REFUSED
+      #
+      # So the comparison is ORDER-SENSITIVE: the same entries in a different order
+      # are still refused. The order below is the stored order, read off the cluster.
+      #
+      # Nobody noticed for a day because nothing re-applies a RestDefinition in normal
+      # operation -- `make apply-restdef` and `make restdef-up` would both have failed
+      # on this one kind. A survey of all seven found port is the ONLY one affected:
+      # node, power and provision store `(none)` and so have no mismatch.
+      #
+      # DO NOT REMOVE IT to tidy the file. The only way to a clean manifest on an
+      # existing install is deleting the RestDefinition, which cascade-deletes every
+      # Port CR and fires external DELETEs at Ironic -- 16 ports off 8 provisioned
+      # blades, which PXE depends on. A fresh install does not need this entry; this
+      # file has to serve both, and the existing fleet is the one that can be broken.
+      - fromOpenAPI:
+          name: X-Ironic-Endpoint
+          in: header
+        fromRestDefinition:
+          actions:
+            - "*"
       - fromOpenAPI:
           name: X-OpenStack-Ironic-API-Version
           in: header
