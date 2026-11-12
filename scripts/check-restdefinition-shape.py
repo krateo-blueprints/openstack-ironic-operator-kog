@@ -602,15 +602,37 @@ def selftest():
         cases.append(("C/E invariant across real documents", False))
         failures.append("could not enumerate manifests (%s) -- VOID, not a pass" % _e)
     else:
-        violations, checked = [], 0
+        violations, checked, saw_discriminator = [], 0, False
+
+        # THE REAL CORPUS CANNOT DISCRIMINATE THE TWO DIRECTIONS, so it is not enough.
+        # Every shipped manifest names a field that exists, so `E - C` and `E ^ C` are
+        # identical over all 21 document-versions and a symmetric invariant SURVIVES.
+        # Measured: mutating `-` to `^` left 19 cases passing. The corpus therefore
+        # carries a synthetic document whose mapping names a field that does not
+        # exist, which the sound direction allows and the symmetric one flags.
+        _typo = ({"spec": {"oasPath": "configmap://x/y/thing.yaml", "resource": {
+                    "kind": "Thing", "identifiers": ["name"],
+                    "additionalStatusFields": ["uuid"],
+                    "verbsDescription": [
+                        {"action": "findby", "method": "GET", "path": "/v1/things"},
+                        {"action": "create", "method": "POST", "path": "/v1/things"},
+                        {"action": "get", "method": "GET", "path": "/v1/things/{uuid}",
+                         "requestFieldMapping": [
+                             {"inPath": "uuid", "inCustomResource": "spec.nonesuch"}]}]}}},
+                 BASE_OAS)
+
+        _corpus = [(s_, None) for s_ in _slugs] + [("<synthetic typo>", _typo)]
         for _ver in ((0, 50, 0), (0, 52, 0), (0, 59, 0)):
-            for _slug in _slugs:
+            for _slug, _inline in _corpus:
                 try:
-                    _rd = _y.safe_load(open("manifests/restdefinition-%s.yaml" % _slug))
-                    _key = _rd["spec"]["oasPath"].rsplit("/", 1)[-1]
-                    _oasp = next(c for c in ("oas/" + _key.replace("_", "-"),
-                                             "oas/ironic-%s.yaml" % _slug) if _o.path.exists(c))
-                    _oas = _y.safe_load(open(_oasp))
+                    if _inline is not None:
+                        _rd, _oas = _inline
+                    else:
+                        _rd = _y.safe_load(open("manifests/restdefinition-%s.yaml" % _slug))
+                        _key = _rd["spec"]["oasPath"].rsplit("/", 1)[-1]
+                        _oasp = next(c for c in ("oas/" + _key.replace("_", "-"),
+                                                 "oas/ironic-%s.yaml" % _slug) if _o.path.exists(c))
+                        _oas = _y.safe_load(open(_oasp))
                     _rows = evaluate(_rd, _oas, _slug, _ver)
                 except Exception:
                     continue
@@ -625,15 +647,51 @@ def selftest():
                 _c_leaves = {r[1].split("<-")[1].split(".")[-1]
                              for r in _rows if r[0] == "C" and "<-spec." in r[1]}
                 checked += 1
+                if _c_leaves - _e_sup:
+                    # a C row with no matching suppressed-E row: the shape that tells
+                    # the sound invariant apart from the symmetric one
+                    saw_discriminator = True
                 for _pp in _e_sup - _c_leaves:
                     violations.append("%s@%s: E says %s suppressed but C is SILENT"
                                       % (_slug, ".".join(map(str, _ver)), _pp))
-        ok = not violations and checked > 0
-        cases.append(("C/E invariant: %d document-versions checked" % checked, ok))
+        ok = not violations and checked > 0 and saw_discriminator
+        cases.append(("C/E invariant: %d document-versions, discriminator present=%s"
+                      % (checked, saw_discriminator), ok))
         if checked == 0:
             failures.append("C/E invariant checked NOTHING -- VOID, not a pass")
+        elif not saw_discriminator:
+            # Without this the arm passes whether the invariant is sound OR symmetric.
+            failures.append("C/E invariant never saw a C-row-without-E-row case, so it "
+                            "cannot tell the sound direction from the symmetric one -- "
+                            "VOID, not a pass")
         for _v in violations:
             failures.append("C/E invariant: " + _v)
+
+    # THE ARM THAT PROVES THE UNSOUND DIRECTION IS NOT IMPLEMENTED.
+    #
+    # The invariant above is one-directional on purpose. Nothing yet proves the
+    # SYMMETRIC version (`E-suppressed == C-fired`) is not in force, and a future
+    # "simplification" to an equality would pass every other arm here. nova wrote
+    # this arm after I flagged the direction; one of their two had the symmetric
+    # form, and it held only because their fixture contained no typo.
+    #
+    # The ordinary case it would break on: a mapping naming a field that does not
+    # exist. That is the most mundane real finding a screen can make -- and under the
+    # symmetric rule it is reported as the screen CONTRADICTING ITSELF. A false
+    # positive about the instrument is worse than a missed finding, because the next
+    # person mutes the check.
+    typo = rd()
+    typo["spec"]["resource"]["verbsDescription"][2]["requestFieldMapping"] = [
+        {"inPath": "uuid", "inCustomResource": "spec.nonesuch"}]
+    typo_rows = evaluate(typo, BASE_OAS, "thing", (0, 59, 0))
+    c_rows = [r for r in typo_rows if r[0] == "C"]
+    e_sup = [r for r in typo_rows if r[0] == "E" and r[1] == "nonesuch"]
+    ok = bool(c_rows) and any(r[3] for r in c_rows) and not e_sup
+    cases.append(("a typo'd mapping source is a C FINDING, not a self-contradiction", ok))
+    if not ok:
+        failures.append("a mapping reading spec.nonesuch must yield an actionable C row "
+                        "and NO suppressed-E row for 'nonesuch'; got C=%s E=%s"
+                        % ([(r[1], r[3]) for r in c_rows], [r[1] for r in e_sup]))
 
     # the negative control: a clean document must produce NO actionable row
     clean = evaluate(rd(), BASE_OAS, "thing")
