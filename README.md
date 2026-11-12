@@ -49,7 +49,8 @@ image `quay.io/airshipit/ironic` with the `fake-hardware` driver, SQLite, noauth
 ```bash
 make local-up        # kind + standalone Ironic + Krateo (KOG + core) + RestDefinitions
 make provision-demo  # composition provisions a sample fake node -> active
-make local-down      # tear down
+make local-down      # tear down (refuses on a cluster named ironic-kog;
+                     #            pass I_MEAN_IT=1 if it is yours to delete)
 ```
 
 All `kubectl`/`helm` calls use an isolated kubeconfig (`local/kubeconfig.ironic-kog`) and

@@ -47,6 +47,38 @@ HELMK := helm --kubeconfig $(KUBECONFIG_FILE) --kube-context $(KCTX)
 # hand-maintained, and a hand-maintained list of hand-maintained lists is where this
 # started.
 # ---------------------------------------------------------------------------------
+# PROTECT_LAB -- a refusal shared by every target that deletes a kind cluster.
+#
+# DEFINED ONCE ON PURPOSE. `lab-down` and `local-down` both resolve to
+# `kind delete cluster --name ironic-kog` by default, and two copies of a safety
+# check is exactly the hand-maintained duplication this Makefile has already been
+# bitten by four times. Call it with $(call PROTECT_LAB,<cluster>).
+#
+# WHY ironic-kog SPECIFICALLY. On a fresh machine `make local-up` creates a
+# disposable cluster of that name and `local-down` removing it is correct. On THIS
+# machine that name belongs to a long-lived lab holding 8 provisioned blades, 16
+# Ports, a 3+4 HA Kubernetes cluster and 32 Ready CRs. The chart inputs are in git;
+# the PROVISIONED state is not, so a rebuild is hours and `kind delete` cannot be
+# undone. Diego, asked directly 2026-11-11: keep it stopped, do not delete.
+#
+# So the refusal is overridable and SAYS SO, because for most readers it will be a
+# false alarm about their own throwaway cluster.
+define PROTECT_LAB
+@if [ "$(1)" = "ironic-kog" ] && [ "$(I_MEAN_IT)" != "1" ]; then \
+		echo "REFUSING to delete kind cluster '$(1)'."; \
+		echo ""; \
+		echo "  On this machine that name is a long-lived lab: 8 provisioned blades,"; \
+		echo "  16 Ports, a 3+4 HA Kubernetes cluster, 32 Ready CRs. The provisioned"; \
+		echo "  state is NOT in git, so a rebuild is hours and this cannot be undone."; \
+		echo ""; \
+		echo "  To free its resources instead (0 CPU, 0 memory, fully resumable):"; \
+		echo "      docker stop $(1)-control-plane"; \
+		echo ""; \
+		echo "  If '$(1)' is your own disposable cluster and you mean to destroy it,"; \
+		echo "  re-run the same target with I_MEAN_IT=1"; \
+	exit 1; \
+fi
+endef
 
 help:
 	@echo "Targets:"
@@ -801,14 +833,7 @@ lab-down: # delete the lab kind cluster (REFUSES on the protected lab unless for
 	# to delete it at all.
 	#
 	# Any OTHER lab cluster deletes normally; only the protected name is refused.
-	@if [ "$(LAB_CLUSTER)" = "ironic-kog" ] && [ "$(I_MEAN_IT)" != "1" ]; then \
-		echo "REFUSING to delete the protected lab cluster '$(LAB_CLUSTER)'."; \
-		echo "  It holds 8 provisioned blades and a live HA cluster whose state is NOT in git."; \
-		echo "  To stop it instead (0 CPU, 0 memory, fully resumable):"; \
-		echo "      docker stop $(LAB_CLUSTER)-control-plane"; \
-		echo "  If you genuinely mean to destroy it:  make lab-down I_MEAN_IT=1"; \
-		exit 1; \
-	fi
+	$(call PROTECT_LAB,$(LAB_CLUSTER))
 	-kind delete cluster --name $(LAB_CLUSTER) --kubeconfig local/kubeconfig.$(LAB_CLUSTER)
 
 ironic-noauth-token:   # a placeholder token so the Configurations can RESOLVE on noauth Ironic
@@ -841,5 +866,10 @@ ironic-noauth-token:   # a placeholder token so the Configurations can RESOLVE o
 # with order-only prerequisites would imply the rest is parallel-safe, and it is not.
 local-up: kind-up ironic-up krateo-up ironic-noauth-token restdef-up   # full local stack: kind + Ironic + Krateo + RestDefinitions
 
-local-down:   # delete the whole local kind cluster
+local-down:   # delete the whole local kind cluster (REFUSES on the protected lab)
+	# README.md and docs/usage.md both present this as the plain "tear down" step of
+	# the quickstart -- and with no arguments it resolved to
+	# `kind delete cluster --name ironic-kog`, the protected lab. Anyone following
+	# the README on this machine destroyed it. Guarded 2026-11-12.
+	$(call PROTECT_LAB,$(KIND_CLUSTER))
 	-kind delete cluster --name $(KIND_CLUSTER) --kubeconfig $(KUBECONFIG_FILE)
