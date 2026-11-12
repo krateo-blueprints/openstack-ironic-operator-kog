@@ -1,6 +1,18 @@
 # RestDefinition for Ironic DeployTemplate - oasgen-provider generates the CRD + controller.
 # Apply: create configmap ironic-deploy-template-oas from ../oas/ironic-deploy-template.yaml
 #        (key ironic_deploy_template.yaml), then apply this file.
+# spec.name MUST BE A VALID IRONIC TRAIT: CUSTOM_[A-Z0-9_]+, or a standard trait.
+# Not a style rule -- Ironic 400s otherwise, and the message does not say why.
+# MEASURED 2026-11-12 with both controls in one run:
+#
+#     spec.name: probe-deploy-template     -> create failed: 400
+#     spec.name: CUSTOM_PROBE_TEMPLATE     -> CREATED, uuid d2b5a05e-...
+#
+# That 400 cost a wrong conclusion first: with no microversion this endpoint
+# returned 405, and once 1.109 was pinned it became 400, which reads as "the fix
+# did not work" rather than "the fix worked and my payload is invalid". A status
+# change from 405 to 400 is PROGRESS -- the endpoint went from absent to reachable.
+#
 # Standalone (no Node needed); addressed by uuid or name; get/delete map the path id from
 # spec.name (known pre-create). No update verb (Ironic PATCH is JSON-Patch only).
 ---
