@@ -2614,3 +2614,58 @@ like a total. Do not conclude about a whole from a pipeline ending in one.
 This repo's standing note says a null result is a claim about the instrument
 first. Two more belong beside it now: so is a falsification, and so is the
 *existence* of the thing being explained.
+
+### 9.13f — oasgen 0.61.0 adopted, and what #599 actually demonstrated
+
+**Digests verified BEFORE installing**, computed with
+`buildx imagetools inspect --raw | shasum -a 256` rather than
+`docker manifest inspect -v` — the latter returns a list of *per-platform* manifests,
+so reading element `[0]` treats the amd64 manifest as though it were the image:
+
+```
+oasgen-provider:0.61.0          sha256:ed4bb706…   matches what oasgen published
+rest-dynamic-controller:0.61.0  sha256:9a334aec…   matches
+oasgen-provider:0.60.0          sha256:197fabd1…   matches          (control)
+```
+
+**The upgrade:** provider and all **seven** generated controllers rolled to 0.61.0,
+and the 32 live CRs were IDENTICAL uid-for-uid at 32/32 Ready, before and after.
+
+**A POD'S `imageID` IS THE INDEX DIGEST, NOT THE PER-PLATFORM ONE** — measured here
+on kind/containerd:
+
+```
+pod imageID                      sha256:ed4bb706…   <- the INDEX digest
+per-platform manifest (buildx)   sha256:44bfa207…   <- NOT what the pod reports
+```
+
+This corrects a claim relayed to this repo that `imageID` carries the per-platform
+digest "except on GKE". The nova session measured the index digest on GKE; this is
+kind, and it is also the index digest. So the exception was the rule, and **digest
+verification from a running pod against a published index digest does work.**
+
+**What #599 demonstrated, precisely: 4 of 7, and the other 3 are VOID rather than
+failures.** A config-only change (`--set rdc.env.PROBE_599=…`) was applied:
+
+| | restartedAt | `PROBE_599` in its ConfigMap |
+|---|---|---|
+| node, node-power, node-provision, port | set, 12:27:16–30 | **present** |
+| allocation, deploy-template, portgroup | no annotations at all | **ABSENT** |
+
+The three that did not restart **never received the value**. The gate cannot be
+tested on a controller whose ConfigMap did not change, so they are VOID for this
+measurement. On 0.59.0 the count would have been 0 of 7, so the fix is demonstrated —
+on four controllers.
+
+Why those three and not the others is **unexplained**. They are exactly the three
+kinds installed earlier the same day, which is suggestive and unproven; raised with
+oasgen rather than guessed at here.
+
+**And two of my own gates were weak enough to name.** The restart check broke out of
+its wait loop on the *first* pod change and then printed annotations, so it reported
+"RESTARTED" on a 4-of-7 result with no way to express "partial" — the same
+two-outcome shape this repo keeps finding. Separately, `PROBE_599` is delivered via
+`envFrom: <rd>-controller-configmap`, not as an explicit `env` entry, so looking for
+it in the pod spec returned "(not in the pod spec)" for a controller that *did* have
+it. The ConfigMap check is the one that discriminates; the pod-spec check contributed
+nothing and would have read as a failure on its own.

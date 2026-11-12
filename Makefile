@@ -236,14 +236,30 @@ KRATEO_CORE_VERSION ?= 2.13.65
 # checks C and E depend on oasgen #421 (0.52.0), so the screen reads this pin, and
 # a pin that disagrees with reality gives the wrong verdict rather than no verdict.
 # 0.60.0 is released and NOT adopted here yet -- deliberately, it is unmeasured.
-KRATEO_OASGEN_VERSION ?= 0.59.0
+# 0.61.0 adopted 2026-11-12, Diego's call, with the index digest verified against
+# what the oasgen-provider session published BEFORE installing:
+#   oasgen-provider         sha256:ed4bb706a55bd0f483238780ccaa5aa63b4c21b342cccb064ddd45b818ef28c7
+#   rest-dynamic-controller sha256:9a334aecbe2e9fd7a17d026f8cedf7c41a2961224dddaf0b1d1afa4577cd841f
+# Computed with `buildx imagetools inspect --raw | shasum -a 256`, NOT with
+# `docker manifest inspect -v`, which returns a list of PER-PLATFORM manifests --
+# reading element [0] publishes the amd64 manifest as though it were the image.
+# 0.61.0's per-platform manifest is 44bfa207, which is what a pod's imageID reports.
+KRATEO_OASGEN_VERSION ?= 0.61.0
 # Kept explicit and equal rather than letting the chart default it. The 0.54.1
 # chart ships `rdc.image.tag: ""`, the helm idiom for "use appVersion", so the
 # default would resolve to the same thing -- but silently, and a future chart
 # could change what empty means. Both image tags verified present in GHCR
 # before this bump, because a tag that does not exist fails as ImagePullBackOff
 # several minutes into `helm --wait`.
-KRATEO_RDC_VERSION    ?= 0.54.1
+# 0.54.1 until 2026-11-12, while the lab ran rdc 0.59.0 on all four generated
+# controllers -- a SECOND downgrade waiting to happen, in the line directly above the
+# provider pin that had the same defect and was fixed hours earlier. I corrected one
+# pin and did not audit its neighbour: checks on the value you changed pass by
+# construction, and the damage is in what you inherited.
+KRATEO_RDC_VERSION    ?= 0.61.0
+# Both pins VERIFIED ON THE LAB 2026-11-12: provider and all seven generated
+# controllers rolled to 0.61.0, 32 CRs survived uid-for-uid at 32/32 Ready, and the
+# running pod's imageID matched the index digest verified before install.
 KRATEO_OCI            ?= oci://ghcr.io/krateo-platformops/charts
 
 krateo-up:    # install Krateo KOG (oasgen-provider) + composition engine (core-provider)
