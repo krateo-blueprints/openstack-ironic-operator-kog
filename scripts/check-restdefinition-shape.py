@@ -399,12 +399,37 @@ def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
                 out.append(("D", ident, "absent from the collection item and no responseTransform -- findby can NEVER match", True))
 
     # F -- an action-only kind whose findby CAN match has an UNREACHABLE create
-    # The runtime dispatches Create only on ResourceExists=false. A matching
-    # findby makes Observe return exists=true, and with no `update` verb a
-    # difference cannot drive the endpoint either, so NOTHING issues the
-    # request: the kind reconciles clean, reports Ready, and performs nothing.
-    # restResources.go returns {ResourceExists: true, ResourceUpToDate: true}
-    # and logs "External resource up-to-date" -- no error, anywhere.
+    #
+    # unstructured-runtime pkg/controller/worker.go:964-997, which is the whole
+    # argument and the reason this precondition needs no qualifier:
+    #
+    #     if !observation.ResourceExists {        -> queues ctrlevent.Create
+    #     } else if !observation.ResourceUpToDate { -> queues ctrlevent.Update
+    #
+    # Create is queued ONLY on !ResourceExists. Nothing about ResourceUpToDate
+    # can ever produce one. So a matching findby -- which makes Observe return
+    # exists=true -- puts the create out of reach regardless of what the drift
+    # comparison then decides.
+    #
+    # WHY THAT MATTERS, because a peer review raised it and the answer changes
+    # the SYMPTOM but not the verdict (openstack-nova-operator-kog, 2026-11-12).
+    # They confirmed the mechanism on the `compareScope: updatable` path, where
+    # scopeFields is empty with no update verb so nothing is compared, and
+    # correctly flagged that no manifest here SETS compareScope -- we are on the
+    # default scope, where scopeFields = identifiers + additionalStatusFields and
+    # is non-empty, so drift IS compared. Their open question was whether F's
+    # precondition should therefore be "action-only AND updatable scope".
+    #
+    # It should not, and the two paths differ only in how the failure LOOKS:
+    #   comparison agrees   -> {exists: true, upToDate: true}, logged
+    #                          "External resource up-to-date". Silent no-op.
+    #                          This is what the lab actually showed, and it is
+    #                          expected: the status fields were just populated
+    #                          FROM the same response body being compared.
+    #   comparison disagrees -> upToDate=false queues an UPDATE, and with no
+    #                          update verb restResources.go:1414 logs
+    #                          "API action update not found". Still no PUT.
+    # Either way the create is unreachable, so the check keys on the verb set.
     if action_only and findby_can_match():
         out.append(("F", "create %s %s" % ((create.get("method") or "").upper(), create.get("path")),
                     "UNREACHABLE: this kind has no `get` and no `update`, so its create is dispatched "
@@ -687,6 +712,34 @@ def selftest():
     if not _ok:
         failures.append("action-only D: expected 1 NON-actionable row saying ACTION-ONLY, got %s"
                         % [(r[1], r[3], r[2][:60]) for r in _d])
+
+    # THE TRANSFORM ITSELF AS THE ONE VARIABLE, on an action-only kind.
+    #
+    # This is the arm a peer's port needed and did not have
+    # (openstack-nova-operator-kog, 2026-11-12). Their check-D fixture is itself
+    # action-only -- create + findby, no get, no update -- so their arm 1 asserts
+    # D IS actionable on the shape where that verdict is backwards, and their arm
+    # 2 asserts that adding a responseTransform is the REMEDY. That is the change
+    # that left eight blades at `enroll` for a day: the test would have defended
+    # the defect against a correct patch, and it reads as coverage.
+    #
+    # This repo escaped that only because rd()'s default verb set happens to
+    # include a `get`, which makes its D fixtures non-action-only. Luck, not
+    # design -- so assert the pair explicitly, on the thin OAS where the
+    # identifier is genuinely absent from the item:
+    #     no transform -> findby cannot match -> create reachable  -> no F
+    #        transform -> findby CAN match    -> create unreachable -> F
+    _ao = [_v[0], _v[1]]                                    # findby + create only
+    _no_xf = rd(verbsDescription=_ao)
+    _xf = rd(verbsDescription=[dict(_v[0], responseTransform={"inline": ".name = .uuid | .name"}),
+                               _v[1]])
+    for _n, _doc, _wantF in (("action-only, NO transform -> create reachable, no F", _no_xf, 0),
+                             ("action-only, WITH a transform -> create UNREACHABLE, F", _xf, 1)):
+        _r = [r for r in evaluate(_doc, thin, "thing") if r[0] == "F"]
+        _o = len(_r) == _wantF and all(x[3] for x in _r)
+        cases.append(("the transform is the variable: %s" % _n, _o))
+        if not _o:
+            failures.append("%s: expected %d F row(s), got %s" % (_n, _wantF, [(x[1], x[3]) for x in _r]))
 
     # THE REGRESSION, ON THE REAL DOCUMENTS, BOTH DIRECTIONS.
     #
