@@ -377,6 +377,27 @@ restdef-up:   # apply OAS ConfigMaps + all SEVEN RestDefinitions + endpoint sing
 	$(KUBECTL) apply -f manifests/allocationconfiguration-ironic.yaml
 	$(KUBECTL) apply -f manifests/deploytemplateconfiguration-ironic.yaml
 	$(KUBECTL) apply -f manifests/portgroupconfiguration-ironic.yaml
+	# THE TRANSITION CONFIGURATIONS, added 2026-11-12, and without them NOTHING
+	# PROVISIONS. This one file holds BOTH NodeProvisionConfiguration and
+	# NodePowerConfiguration (two documents, both named ironic-endpoint), and it was
+	# applied by NO target -- zero mentions anywhere in this Makefile.
+	#
+	# Measured on a fresh cluster built by `make local-up`: 5 Configuration objects
+	# present, nodeprovisionconfigurations=0, nodepowerconfigurations=0. Every
+	# transition CR the charts render then fails to reconcile:
+	#
+	#   alloc01-manage  Ready=Unknown/ObserveFailed  Synced=False/ReconcileError
+	#   observe failed: nodeprovisionconfigurations... "ironic-endpoint" not found
+	#
+	# so a node sits at `enroll` forever. 40 reconciles rendered `target: manage`
+	# every time and none of them could be observed. The provisioning state machine --
+	# the core of this product -- is dead on any new install.
+	#
+	# The lab does not show it because these two were applied there by hand long ago.
+	# I added the three Configurations above this line earlier today and did NOT audit
+	# the ones already present: I was reading the list of what to ADD rather than
+	# checking what the list was missing.
+	$(KUBECTL) apply -f manifests/transitionconfiguration-ironic.yaml
 
 # Provision a sample fake node. The state machine is lookup-driven: each reconcile renders the
 # NodeProvision CR for the node's current state. composition-dynamic-controller does this on its
