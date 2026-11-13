@@ -587,6 +587,19 @@ check-oas-defaults:   # no OAS body schema may acquire the v1.26.x defaulting sh
 	# found the only field instances anyone has (2 of 35).
 	python3 -I scripts/check-defaulted-optional-objects.py
 
+check-release-table:   # docs/release.md's table must agree with charts/*/Chart.yaml
+	# The table went STALE FOUR TIMES -- most recently inside the very pull request whose
+	# commit message said it had been updated, where a rebase dropped the hunk and nothing
+	# noticed, because a markdown table is not code and no screen read it.
+	#
+	# It is checkable only since being retitled. Headed "Current published versions" it was
+	# a claim about the REGISTRY, and charts here are bumped BEFORE the tag -- so "table ==
+	# Chart.yaml" contradicted the heading and "table == newest tag" would have been red for
+	# most of this repo's life. "Versions the next tag will publish" states what is in the
+	# working tree, which is a mechanical fact with one source.
+	python3 -I scripts/check-release-table.py --selftest && \
+		python3 -I scripts/check-release-table.py
+
 check-chart-renders:   # what a chart RENDERS must be a kind that exists, at a served version
 	# check-examples screens manifests, examples and README fences -- everything a reader
 	# COPIES. Nothing screened what a chart PRODUCES. So baremetal-discovery shipped,
@@ -713,7 +726,7 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 	python3 -I scripts/check-blueprint-metadata.py --self-test && \
 		python3 -I scripts/check-blueprint-metadata.py $(if $(BLUEPRINT_ONLINE),--online,)
 
-check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set check-chart-version-moved check-chart-renders   # every standing screen
+check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set check-chart-version-moved check-chart-renders check-release-table   # every standing screen
 	@echo "all standing screens passed"
 
 chart-host-pinned:   # add the chart versions the LIVE CompositionDefinitions pin

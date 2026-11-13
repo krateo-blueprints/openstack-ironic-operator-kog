@@ -46,12 +46,26 @@ $ helm show chart oci://ghcr.io/krateo-blueprints/charts/baremetal-lifecycle --v
 After a chart is published, bump the matching `manifests/compositiondefinition-*.yaml`
 `spec.chart.version` (and `url` for released charts) to the version that now exists.
 
-## Current published versions
+## Versions the next tag will publish
+
+These are the versions in `charts/*/Chart.yaml` **right now** — what a tag pushed from
+this commit would put in the registry. They are deliberately NOT "what is published
+today": charts are bumped when their content changes, which is before the tag, so
+between a bump and a release this table is ahead of the registry. That is the correct
+state, not drift.
+
+For what is actually in the registry, read the GitHub releases, or
+`git show <tag>:charts/<name>/Chart.yaml`.
+
+**This table was headed "Current published versions" until 2026-11-13 and went stale
+four times** -- most recently inside the very pull request whose message said it had
+been updated, where a rebase dropped the hunk. It is now enforced by
+`scripts/check-release-table.py`, so it cannot disagree with the charts again.
 
 | chart | version |
 |---|---|
 | `baremetal-host` | `0.6.5` |
-| `baremetal-lifecycle` | `0.3.4` |
+| `baremetal-lifecycle` | `0.3.5` |
 | `baremetal-discovery` | `0.1.4` |
 | `kubernetes-cluster` | `0.15.5` |
 
