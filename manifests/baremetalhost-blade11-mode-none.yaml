@@ -5,7 +5,7 @@
 #   cloud-init SSH verification via dome jump. Round 1 of the marker
 #   (/etc/cfgdrive-round-1) — bump to round-2 between deploys.
 ---
-apiVersion: composition.krateo.io/v0-3-3
+apiVersion: composition.krateo.io/v0-6-5
 kind: BaremetalHost
 metadata:
   name: blade11

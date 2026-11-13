@@ -5,7 +5,7 @@
 # NodeProvision, cdc reconcile is idle. Recovery requires manual fix
 # (driver_info password) AND a manual target=manage to re-enter manageable.
 ---
-apiVersion: composition.krateo.io/v0-3-3
+apiVersion: composition.krateo.io/v0-6-5
 kind: BaremetalHost
 metadata:
   name: blade10

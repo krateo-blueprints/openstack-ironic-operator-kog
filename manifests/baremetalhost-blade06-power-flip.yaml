@@ -5,7 +5,7 @@
 # - Observe whether the chart's transition-power renames + restores, or
 #   whether Ironic surfaces a terminal deploy failure.
 ---
-apiVersion: composition.krateo.io/v0-3-4
+apiVersion: composition.krateo.io/v0-6-5
 kind: BaremetalHost
 metadata:
   name: blade06

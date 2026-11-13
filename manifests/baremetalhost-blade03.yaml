@@ -10,7 +10,7 @@
 # `online: true|false` drives BMC power continuously (CR is renamed on observed-vs-desired
 # mismatch so KOG re-fires after Ironic's deploy-time auto-power-on).
 ---
-apiVersion: composition.krateo.io/v0-1-1
+apiVersion: composition.krateo.io/v0-6-5
 kind: BaremetalHost
 metadata:
   name: blade03

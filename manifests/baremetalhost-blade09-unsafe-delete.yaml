@@ -3,7 +3,7 @@
 # the README warning: BH disappears from k8s, Ironic node remains orphan, KOG
 # DELETE 409s on the active node.
 ---
-apiVersion: composition.krateo.io/v0-3-3
+apiVersion: composition.krateo.io/v0-6-5
 kind: BaremetalHost
 metadata:
   name: blade09
