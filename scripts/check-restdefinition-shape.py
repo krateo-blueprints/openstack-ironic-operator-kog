@@ -416,8 +416,17 @@ def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
                 out.append(("C", "%s %s<-%s" % (v.get("action"), m.get("inPath"), src),
                             "source does not resolve in %s" % pname, True))
 
+    # D/F SUPPRESSION. A non-conforming policy means the manifest is refused at
+    # admission, so every conclusion D and F would draw is advice about a document that
+    # cannot exist -- printing it is noise that competes with the one row that matters.
+    # Adopted from openstack-nova-operator-kog#149. The control arm matters as much as
+    # the suppression: "G suppresses D and F" and "F stopped working" look identical
+    # from the outside, so the self-test asserts the same kind with a VALID policy
+    # still reports F.
+    policy_refused = bool(findby) and findby_policy().startswith("INVALID:")
+
     # D -- findby must be able to match
-    if findby:
+    if findby and not policy_refused:
         _w, item = response_item_props(oas, findby["path"], (findby.get("method") or "get").lower())
         for ident in res.get("identifiers") or []:
             if ident in item:
@@ -469,13 +478,23 @@ def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
                                         "and no other identifier is readable either, so findby can "
                                         "NEVER match under policy %s" % findby_policy(), True))
 
-    # G -- identifiersMatchPolicy placed where nothing reads it
+    # G -- identifiersMatchPolicy misdeclared. TWO CAUSES, AND THEY ARE DIFFERENT NEWS.
+    # "your policy is doing nothing" and "your manifest will be rejected" lead a reader
+    # to different actions, so they must not share a message. Distinction and the
+    # pruning mechanism from openstack-nova-operator-kog#149; the CRD was then read
+    # here independently, which is the better pair of sources -- they read the CRD the
+    # apiserver enforces, I read the struct and the marker.
     if "identifiersMatchPolicy" in res:
         out.append(("G", "resource.identifiersMatchPolicy=%r" % res["identifiersMatchPolicy"],
-                    "declared at the RESOURCE level, where the field does not exist: it belongs "
-                    "on the findby VERB (oasgen types.go declares it in VerbsDescription). "
-                    "Nothing reads it here, so the policy silently defaults to OR -- and a "
-                    "manifest meaning AND is analysed, and matched, as OR",
+                    "declared at the RESOURCE level, where the field does not exist -- it "
+                    "belongs on the findby VERB (oasgen types.go:633 declares it in "
+                    "VerbsDescription). It is PRUNED, not merely unread: spec.resource is a "
+                    "structural schema and the CRD's five "
+                    "x-kubernetes-preserve-unknown-fields are all on *ApiRef.extras and "
+                    "fieldMapping.defaultIfAbsent, none on spec.resource -- verified against "
+                    "crds/ogen.krateo.io_restdefinitions.yaml. So the apiserver DROPS the key, "
+                    "`kubectl apply` returns 0, and the policy silently defaults to OR: a "
+                    "manifest meaning AND is stored, analysed and MATCHED as OR",
                     True))
 
     # G -- a policy value the apiserver will refuse
@@ -483,10 +502,14 @@ def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
         _pol = findby_policy()
         if _pol.startswith("INVALID:"):
             out.append(("G", "findby identifiersMatchPolicy=%r" % _pol.split(":", 1)[1],
-                        "not one of AND/OR. The field carries "
-                        "`+kubebuilder:validation:Enum=AND;OR`, so the apiserver REFUSES this "
-                        "manifest at admission -- it is not a policy with weaker semantics, it "
-                        "is a definition that cannot apply. Case matters: `and` is refused too",
+                        "not one of AND/OR, so this manifest is REFUSED AT ADMISSION -- a "
+                        "different outcome from the pruned resource-level case, and the reader "
+                        "acts differently on it. The field carries "
+                        "`+kubebuilder:validation:Enum=AND;OR`, so it is not a policy with "
+                        "weaker semantics, it is a definition that cannot apply. Case matters: "
+                        "`and` is refused too. D and F are SUPPRESSED for this kind below, "
+                        "because every conclusion they would draw rests on a policy the "
+                        "cluster will never accept",
                         True))
 
     # F -- an action-only kind whose findby CAN match has an UNREACHABLE create
@@ -521,7 +544,7 @@ def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
     #                          update verb restResources.go:1414 logs
     #                          "API action update not found". Still no PUT.
     # Either way the create is unreachable, so the check keys on the verb set.
-    if action_only and findby_can_match():
+    if action_only and not policy_refused and findby_can_match():
         subject = "create %s %s" % ((create.get("method") or "").upper(), create.get("path"))
         base = ("UNREACHABLE: this kind has no `get` and no `update`, so its create is dispatched "
                 "only when Observe reports the resource ABSENT -- but its findby CAN match "
@@ -894,6 +917,40 @@ def selftest():
     if not _ok:
         failures.append("lowercase and: expected 1 actionable G row mentioning case, got %s"
                         % [(r[1], r[3], r[2][:60]) for r in _g_bad])
+
+    # G'S TWO CAUSES MUST DIFFER BY CAUSE, not just by subject. A reader acts
+    # differently on "your policy was silently dropped and apply returned 0" than on
+    # "your manifest will be rejected", so a shared message is a defect even though
+    # both rows are actionable. Distinction from openstack-nova-operator-kog#149.
+    _g_pruned = [r for r in evaluate(_ao2r, BASE_OAS, "thing") if r[0] == "G"]
+    _g_refused = [r for r in evaluate(_ao2bad, BASE_OAS, "thing") if r[0] == "G"]
+    _ok = (len(_g_pruned) == 1 and len(_g_refused) == 1
+           and _g_pruned[0][2] != _g_refused[0][2]
+           and "PRUNED" in _g_pruned[0][2] and "REFUSED AT ADMISSION" in _g_refused[0][2]
+           and "PRUNED" not in _g_refused[0][2])
+    cases.append(("G's PRUNED and REFUSED messages differ BY CAUSE", _ok))
+    if not _ok:
+        failures.append("G causes: pruned=%r refused=%r"
+                        % ([r[2][:70] for r in _g_pruned], [r[2][:70] for r in _g_refused]))
+
+    # A REFUSED POLICY SUPPRESSES D AND F, because their conclusions would be advice
+    # about a document that cannot exist. The CONTROL is the whole point: "G suppresses
+    # D and F" and "F stopped working" look identical from outside, so the same kind
+    # with a VALID policy must still report F.
+    _rows_bad = evaluate(_ao2bad, BASE_OAS, "thing")
+    _ok = not [r for r in _rows_bad if r[0] in ("D", "F")]
+    cases.append(("a refused policy SUPPRESSES D and F", _ok))
+    if not _ok:
+        failures.append("refused policy: expected no D/F rows, got %s"
+                        % [(r[0], r[1]) for r in _rows_bad if r[0] in ("D", "F")])
+    _ao2valid = rd(identifiers=["name", "serial"],
+                   verbsDescription=[dict(_v[0], identifiersMatchPolicy="OR"), _v[1]])
+    _f_valid = [r for r in evaluate(_ao2valid, BASE_OAS, "thing") if r[0] == "F"]
+    _ok = len(_f_valid) == 1 and _f_valid[0][3]
+    cases.append(("...CONTROL: a VALID policy on the same kind still reports F", _ok))
+    if not _ok:
+        failures.append("valid-policy control: expected 1 actionable F row, got %s"
+                        % [(r[1], r[3]) for r in _f_valid])
 
     # F'S TWO MESSAGES MUST BE DIFFERENT STRINGS, and the heuristic-only one must say
     # so. Adopted from openstack-nova-operator-kog#148. A single message would let a
