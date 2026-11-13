@@ -38,6 +38,21 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # FULL HISTORY AND TAGS, REQUIRED. The default is a shallow fetch of the
+          # single triggering ref, so at tag time the only tag present is the one
+          # being built -- and scripts/check-chart-version-moved.py compares the
+          # working tree against the newest EARLIER tag. Measured in the 0.3.9 run,
+          # where the shallow checkout made it compare 0.3.9 with itself and print
+          #   baremetal-discovery  0.1.3 -> 0.1.3
+          # for all four charts, with no "content moved" anywhere: the screen that
+          # guards this job was vacuous in the only place it runs.
+          #
+          # With that screen fixed to skip HEAD's own tags, a shallow checkout now
+          # VOIDs instead of passing, which would FAIL this job rather than mislead
+          # it. Both halves are needed: the fix makes the failure honest, this makes
+          # the comparison possible.
+          fetch-depth: 0
 
       - name: Install helm
         uses: azure/setup-helm@v5

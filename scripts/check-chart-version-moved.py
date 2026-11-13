@@ -40,6 +40,24 @@ def sh(*args):
 
 
 def newest_tag():
+    """The newest tag that is NOT the commit being checked.
+
+    EXCLUDING HEAD'S OWN TAGS IS THE WHOLE POINT, and this screen shipped without it.
+    Measured in the 0.3.9 release run, which is the only place `make check` runs in
+    CI (release-chart.yaml, `on: push: tags`):
+
+        checked 4 published chart(s) against tag 0.3.9: ...
+          baremetal-discovery      0.1.3 -> 0.1.3
+
+    It compared tag 0.3.9 against the tree AT tag 0.3.9 -- the tag against itself. No
+    chart can show movement against its own commit, so every one passed trivially and
+    the screen that exists to guard releases was vacuous in the only place it ran.
+
+    Locally the bug is invisible: HEAD is normally past the newest tag, so the
+    comparison is real. It appears exactly when HEAD *is* the tag, which is the
+    release. A screen whose correctness depends on not being at the moment it guards
+    is not a screen.
+    """
     out, rc = sh("git", "for-each-ref", "--sort=-creatordate",
                  "--format=%(refname:short)", "refs/tags")
     if rc != 0:
@@ -47,7 +65,28 @@ def newest_tag():
     tags = [t for t in out.split("\n") if t.strip()]
     if not tags:
         raise Void("this repository has no tags, so no published bytes exist to protect")
-    return tags[0]
+
+    head, rc = sh("git", "rev-parse", "HEAD")
+    if rc != 0:
+        raise Void("git could not resolve HEAD, so 'the tag before this commit' is unknown")
+
+    def sha_of(t):
+        out, rc = sh("git", "rev-list", "-n", "1", t)
+        return out if rc == 0 else None
+
+    return pick_tag(tags, sha_of, head)
+
+
+def pick_tag(tags, sha_of, head):
+    """The newest tag not pointing at `head`. Pure, so the self-test can drive it."""
+    usable = [t for t in tags if sha_of(t) not in (None, head)]
+    if not usable:
+        raise Void("every tag in this repository points at HEAD (%s), so there is no "
+                   "EARLIER release to compare against. A shallow CI checkout that "
+                   "fetched only the tag being built looks exactly like this -- and "
+                   "comparing a tag with itself would pass every chart trivially"
+                   % head[:12])
+    return usable[0]
 
 
 def chart_version(text):
@@ -193,6 +232,26 @@ def selftest():
          not is_published('annotations:\n  "krateo.io/publish": "false"\n'))
     case("is_published rejects a chart with no annotation",
          not is_published("name: x\nversion: 1.0.0\n"))
+
+    # THE TAG MUST NOT BE HEAD'S OWN. This screen shipped without that check and was
+    # VACUOUS in the only place it runs: release-chart.yaml fires `on: push: tags`, so
+    # at 0.3.9 it compared tag 0.3.9 against the tree AT 0.3.9 and printed
+    #   baremetal-discovery  0.1.3 -> 0.1.3
+    # for every chart, with no "content moved" anywhere. Locally the bug is invisible,
+    # because HEAD is normally past the newest tag.
+    SHAS = {"0.3.9": "aaa", "0.3.8": "bbb", "0.3.7": "ccc"}
+    case("at a tagged HEAD, the tag itself is SKIPPED",
+         pick_tag(["0.3.9", "0.3.8", "0.3.7"], SHAS.get, "aaa") == "0.3.8")
+    case("off a tag, the newest tag is used",
+         pick_tag(["0.3.9", "0.3.8"], SHAS.get, "zzz") == "0.3.9")
+    case("several tags on HEAD are all skipped",
+         pick_tag(["0.3.9", "0.3.8", "0.3.7"], {"0.3.9": "aaa", "0.3.8": "aaa",
+                                                "0.3.7": "ccc"}.get, "aaa") == "0.3.7")
+    try:
+        pick_tag(["0.3.9"], SHAS.get, "aaa")
+        case("VOID when the ONLY tag is HEAD's (the shallow-CI shape)", False)
+    except Void:
+        case("VOID when the ONLY tag is HEAD's (the shallow-CI shape)", True)
 
     # THE DISCRIMINATOR. Every arm above that expects "clean" would also pass if
     # audit() simply returned no findings ever. This one must come back non-empty,
