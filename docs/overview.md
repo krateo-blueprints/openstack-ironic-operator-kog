@@ -61,7 +61,7 @@ The primitives are shared; the charts differ only in which slice of the machine 
 |---|---|---|
 | `baremetal-host` | `BaremetalHost` | the whole thing behind one CRD: `registering → (inspecting → ready)? → available → (provisioning → provisioned)`, plus power (`spec.online`), maintenance, detached, clean steps and undeploy |
 | `baremetal-lifecycle` | `BaremetalLifecycle` | provisioning-only: `enroll → active`. Inspection is out of scope. |
-| `baremetal-discovery` | `BaremetalDiscovery` | discovery-only: `enroll → manage → inspect`, surfacing inventory (cpus/memory/disks/NICs) in the Node CR's status as **input** to a lifecycle spec. No ports/deploy. |
+| `baremetal-discovery` | `BaremetalDiscovery` | **DEPRECATED** — use `baremetal-host`. Never worked: renders a `Node` kind that does not exist. Was: discovery-only: `enroll → manage → inspect`, surfacing inventory (cpus/memory/disks/NICs) in the Node CR's status as **input** to a lifecycle spec. No ports/deploy. |
 | `kubernetes-cluster` | `KubernetesCluster` | renders one `BaremetalLifecycle` per cluster member and gates the `kubeadm join` sequence on the control plane publishing its join command into its own Node CR's `spec.extra` |
 
 `baremetal-host` is the unified successor that absorbs the discovery + lifecycle split into

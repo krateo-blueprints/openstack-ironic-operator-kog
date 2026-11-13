@@ -110,7 +110,19 @@ def run():
                    "That is not the same as every chart being safe" % PUBLISH_ANNOTATION)
 
     def moved(c):
-        out, rc = sh("git", "diff", "--name-only", tag, "HEAD", "--", "charts/%s" % c)
+        # TAG vs THE WORKING TREE, not tag..HEAD.
+        #
+        # This read `tag HEAD` until 2026-11-13 and was INCONSISTENT with itself: it
+        # took "has the content moved" from COMMITTED state while taking the new
+        # version from the working tree two lines below. So an uncommitted Chart.yaml
+        # edit was invisible, and `make check` -- which you run BEFORE committing,
+        # which is the whole point -- passed on exactly the change it exists to catch.
+        #
+        # Found by using it: an uncommitted one-line edit to baremetal-lifecycle's
+        # description went unreported while a committed edit to baremetal-discovery
+        # was flagged, in the same run. Omitting the second ref diffs the tag against
+        # the working tree, which is the state a human is about to commit and tag.
+        out, rc = sh("git", "diff", "--name-only", tag, "--", "charts/%s" % c)
         if rc != 0:
             raise Void("git diff failed for charts/%s against %s" % (c, tag))
         return bool(out)

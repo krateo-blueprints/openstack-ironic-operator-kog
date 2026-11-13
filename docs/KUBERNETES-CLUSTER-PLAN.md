@@ -19,7 +19,7 @@ more of the three existing Krateo charts/compositions wherever possible:
 - `charts/baremetal-host/` — unified single-CRD BaremetalHost composition
   (`spec.undeploy`, `spec.undeployMode`, `spec.online`, `spec.image`,
   `spec.maintenance`, `spec.detached`, `spec.cleanSteps`, `spec.configDrive`).
-- `charts/baremetal-discovery/` — discovery-only flow
+- `charts/baremetal-discovery/` — discovery-only flow (DEPRECATED, never worked; use `baremetal-host`)
   (`enroll → manageable → inspect → manageable`).
 - `charts/baremetal-lifecycle/` — lifecycle-only flow
   (`available → deploy → active` and undeploy back).
