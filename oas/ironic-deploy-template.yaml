@@ -36,7 +36,7 @@ paths:
                   deploy_templates:
                     type: array
                     items:
-                      $ref: '#/components/schemas/DeployTemplate'
+                      $ref: '#/components/schemas/DeployTemplateListItem'
     post:
       summary: Create deploy template
       operationId: createDeployTemplate
@@ -104,6 +104,34 @@ components:
       schema:
         type: string
   schemas:
+    # THE LIST RESPONSE, WHICH IS NOT THE SINGLE-ITEM RESPONSE.
+    #
+    # MEASURED at microversion 1.109 on two independent clusters, with the
+    # single-item GET as the control each time: this collection returns 3 keys
+    # against the item's 7. Before 2026-11-13 the collection reused
+    # `DeployTemplate`, so this document claimed the list carries the whole object --
+    # and the RestDefinition agreed with it, so the two documents were
+    # consistent with each other and both wrong about Ironic. No
+    # document-to-document screen can catch that; only a live measurement or
+    # the vendor's source can.
+    #
+    # It matters because check-restdefinition-shape.py decides findby
+    # matchability from THIS schema. An identifier declared here but absent
+    # from the real response would be cleared as readable while findby could
+    # never match on it. Every identifier this repo declares happens to be
+    # within the measured set, which is luck, not design.
+    DeployTemplateListItem:
+      type: object
+      properties:
+        links:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        name:
+          type: string
+        uuid:
+          type: string
     DeployStep:
       type: object
       required:

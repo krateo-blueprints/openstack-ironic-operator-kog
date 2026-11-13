@@ -42,7 +42,7 @@ paths:
                   nodes:
                     type: array
                     items:
-                      $ref: '#/components/schemas/NodeState'
+                      $ref: '#/components/schemas/NodeStateListItem'
 
   # ADDED 2026-11-11. This path was MISSING while restdefinition-power.yaml declared a
   # `get` verb on it, so that verb could not resolve a schema and was inert. oasgen said
@@ -148,6 +148,24 @@ components:
       schema:
         type: string
   schemas:
+    # THE LIST RESPONSE. MEASURED /v1/nodes at microversion 1.109 on two independent
+    # clusters: ['instance_uuid','links','maintenance','name','power_state',
+    # 'provision_state','uuid'] -- 7 keys, and NO target_*_state. The single-node GET
+    # returns 69 and does include it, which is why this had to become its own schema
+    # rather than a narrowing of the shared one.
+    #
+    # `NodeState` previously served BOTH responses, so this document claimed the list carries
+    # target_power_state. It does not. The RestDefinition agreed with the document, so the
+    # two were consistent with each other and both wrong about Ironic.
+    NodeStateListItem:
+      type: object
+      properties:
+        name:
+          type: string
+        power_state:
+          type: string
+        uuid:
+          type: string
     PowerTarget:
       type: object
       required:

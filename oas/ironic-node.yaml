@@ -40,7 +40,7 @@ paths:
                   nodes:
                     type: array
                     items:
-                      $ref: '#/components/schemas/Node'
+                      $ref: '#/components/schemas/NodeListItem'
     post:
       summary: Create node
       operationId: createNode
@@ -158,6 +158,42 @@ components:
         type: string
         default: "1.109"
   schemas:
+    # THE LIST RESPONSE, WHICH IS NOT THE SINGLE-ITEM RESPONSE.
+    #
+    # MEASURED at microversion 1.109 on two independent clusters, with the
+    # single-item GET as the control each time: this collection returns 7 keys
+    # against the item's 69. Before 2026-11-13 the collection reused
+    # `Node`, so this document claimed the list carries the whole object --
+    # and the RestDefinition agreed with it, so the two documents were
+    # consistent with each other and both wrong about Ironic. No
+    # document-to-document screen can catch that; only a live measurement or
+    # the vendor's source can.
+    #
+    # It matters because check-restdefinition-shape.py decides findby
+    # matchability from THIS schema. An identifier declared here but absent
+    # from the real response would be cleared as readable while findby could
+    # never match on it. Every identifier this repo declares happens to be
+    # within the measured set, which is luck, not design.
+    NodeListItem:
+      type: object
+      properties:
+        instance_uuid:
+          type: string
+        links:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        maintenance:
+          type: boolean
+        name:
+          type: string
+        power_state:
+          type: string
+        provision_state:
+          type: string
+        uuid:
+          type: string
     Node:
       type: object
       properties:
