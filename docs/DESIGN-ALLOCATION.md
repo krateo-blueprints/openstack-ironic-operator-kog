@@ -67,7 +67,7 @@ Allocation does not simplify the existing values — it **splits them in two**:
 
 | | who does it | what it needs |
 |---|---|---|
-| **enrolment** | a separate, prior step — an operator, or a `baremetal-discovery` release | driver, driver_info, ports, resource_class |
+| **enrolment** | a separate, prior step — an operator, or a `baremetal-discovery` release | driver, driver_info, ports, resource_class, **and a known power state** |
 | **consumption** | `kubernetes-cluster` | a resource class, a count, optional traits |
 
 That split is the actual proposal. It is not a refactor of the worker list; it is a
@@ -109,12 +109,47 @@ new mechanism, only a new input.
    would silently be pointing at different hardware. The failure mode is a cluster
    that reprovisions onto a node nobody chose. Not measured.
 
-3. **No `available` node exists here, so the success path is UNEXERCISED.** All eight
-   lab blades are `active`, and Ironic allocates only from `available`. Driving an
-   Allocation CR here produced `state=allocating` and would settle in `error` — which
-   exercised create, get and delete, and says nothing about a successful claim. **Any
-   confidence in this design is confidence in a path no measurement here has run.**
-   Closing that needs either a ninth blade taken to `available`, or a clean cluster.
+3. ~~**No `available` node exists here, so the success path is UNEXERCISED.**~~
+   **CLOSED 2026-11-13 — the success path is now PROVEN, on a throwaway cluster with
+   fake-hardware nodes.** Measured end to end, with its negative control:
+
+   ```
+   Ironic:  alloc-ok       state=active  rc=baremetal-test  node=d7aec0f7-…
+            alloc-nomatch  state=error   rc=no-such-class   node=None
+   probe01: allocation_uuid = 3904851a-…   power_state = 'power off'
+   CR:      alloc-ok active → d7aec0f7-…   alloc-nomatch error
+   ```
+
+   The allocation is bound **on the node** (`allocation_uuid`), not merely reported by
+   the allocation record, and a request for a resource class nothing carries is still
+   refused. So the claim path works and it really does match on `resource_class`.
+
+   **AND IT FOUND A PRECONDITION THIS NOTE DID NOT LIST: Ironic will not allocate a
+   node whose `power_state` is null.** The same node, at `available`, carrying exactly
+   the requested `resource_class`, with `maintenance=False`, was refused with
+
+   > `no available nodes match the resource class baremetal-test`
+
+   and was allocated **immediately** once a power state existed. Nothing in the refusal
+   mentions power. That is why the responsibility table above now says *and a known
+   power state*: a node this operator has enrolled is not yet claimable.
+
+   Reaching that state was itself blocked, which is how the precondition surfaced:
+   `NodePower` could not set the power of a node that had none. Its `get`
+   responseTransform read
+   `if (.target_power_state // .power_state) then .target = … else . end`, and on a
+   node where both are null the `//` chain is falsy, so `target` was never set on the
+   observed object. A key absent from the response is **skipped** by the drift
+   comparison (`CompareExisting`'s own comment says so), so no drift was reported, no
+   update was issued, and the CR sat at `Ready=True/Available`,
+   `Synced=True/ReconcileSuccess` having done nothing. Fixed by
+   `// "unknown"`, which makes the unknown case read as drift; measured one-variable,
+   old transform leaves `power_state` null through 20 polls, new transform sets it on
+   poll 5.
+
+   What is still NOT settled here is whether `baremetal-discovery` should drive that
+   power transition, and to which target. That is a behavioural change on real
+   hardware and needs its own decision.
 
 ## Recommendation
 
