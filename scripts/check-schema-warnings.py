@@ -73,19 +73,61 @@ BLOCKED_UPSTREAM = [
     },
     {
         "signature": "is absent from the items the findby response carries",
-        "issue": "oasgen #575",
-        "why": ("the check is computed from the declared schema and is blind to "
-                "`responseTransform`, which is what actually supplies the identifier "
-                "before matching (restclient.go:711, normalizeItems). Both "
-                "ironic-node-power and ironic-node-provision carry the transform, so "
-                "this warning is a FALSE POSITIVE on both and cannot be cleared here."),
+        "issue": "oasgen #575 (power) / BY DESIGN (provision)",
+        "why": ("STALE UNTIL 2026-11-13, in the dangerous direction. This entry read "
+                "\"Both ironic-node-power and ironic-node-provision carry the transform, "
+                "so this warning is a FALSE POSITIVE on both\" -- which stopped being "
+                "true when #65 REMOVED provision's findby responseTransform. It was "
+                "classifying a literally-true warning as benign on a basis that no "
+                "longer held.\n"
+                "The two kinds need OPPOSITE reasons:\n"
+                "  POWER -- false positive. It carries `if (.name and .power_state) then "
+                ".node_id = .name else . end`, and the generator does not evaluate "
+                "responseTransform (restclient.go:711, normalizeItems applies it before "
+                "matching).\n"
+                "  PROVISION -- LITERALLY TRUE, AND INTENDED. No findby transform, "
+                "deliberately: with no `get` and no `update`, its create is dispatched "
+                "only when Observe reports the resource ABSENT, so a findby that never "
+                "matches is what fires the provision PUT. Making findby match disabled "
+                "every transition for 24 hours (#65). The warning's own advice IS the "
+                "outage.\n"
+                "Accepted for both kinds for opposite reasons, which is why one "
+                "signature cannot carry one justification."),
     },
     {
         "signature": "status field 'node_id' not found in response",
-        "issue": "oasgen #575",
-        "why": ("same cause: /v1/nodes returns `name` and `uuid`, and the findby "
-                "responseTransform manufactures `node_id` from `.name`. The generator "
-                "does not evaluate the transform."),
+        "issue": "oasgen #575 (power) / BY DESIGN (provision)",
+        "why": ("POWER: false positive -- /v1/nodes returns `name` and `uuid`, and its "
+                "findby responseTransform manufactures `node_id` from `.name`; the "
+                "generator does not evaluate the transform.\n"
+                "PROVISION: true and intended, same reason as the entry above -- no "
+                "transform, so `node_id` really is absent from the findby response. "
+                "Nothing reads NodeProvision status; the charts read provision_state off "
+                "the BaremetalNode CR."),
+    },
+    {
+        "signature": "status field 'target_provision_state' not found in response",
+        "issue": "BY DESIGN -- the declaration is kept ON PURPOSE so this warning survives",
+        "why": ("THIS WARNING EXISTS BECAUSE THE DECLARATION WAS KEPT, and that was a "
+                "decision, not an oversight.\n"
+                "`target_provision_state` is in NodeProvision's additionalStatusFields and "
+                "can never populate: the kind's only reader is findby, which never matches "
+                "by design, and since 2026-11-13 the OAS no longer falsely claims "
+                "/v1/nodes carries it (MEASURED on two clusters: the collection returns 7 "
+                "keys, the single-node GET 69). Correcting that document is what made the "
+                "generator able to say so -- before, the false schema suppressed it.\n"
+                "REMOVING the entry would make the manifest fully honest AND SILENCE THIS "
+                "WARNING, and a silent document is indistinguishable from a tool that is "
+                "not looking. Keeping it preserves a claim for the generator to contradict "
+                "-- the only standing, machine-checked record that this kind's status "
+                "cannot populate. The manifest comment says the same thing, but nothing "
+                "checks a comment.\n"
+                "SO THIS ENTRY IS TWO-WAY. If the warning ever DISAPPEARS, something "
+                "changed worth knowing: either somebody removed the declaration (fine, but "
+                "deliberately) or Ironic began returning the field in the collection, which "
+                "would mean the provision kind could finally be made observable. Framing "
+                "owed to openstack-nova-operator-kog, who named the tension between an "
+                "honest document and a surviving diagnostic."),
     },
     {
         "signature": "set in configurationFields not found in schema",
@@ -178,7 +220,24 @@ def selftest():
         ("a NEAR MISS must stay ACTIONABLE", [_rd("a", warns=[NEAR_MISS])], ok, (1, 0)),
         ("a blocked warning must not mask an actionable one",
          [_rd("a", warns=[BLOCKED, "something real"])], ok, (1, 1)),
+        # EVERY REGISTRY ENTRY MUST BE REACHABLE. An entry whose signature has a typo
+        # never matches, so its warning silently reads as ACTIONABLE forever -- or, worse,
+        # a future entry meant to accept something quietly accepts nothing. The
+        # target_provision_state entry is the one that exists to be a STANDING two-way
+        # diagnostic, so it is the one that most needs to be shown to fire.
+        ("the kept-on-purpose target_provision_state warning is classified",
+         [_rd("a", warns=["generation error at additionalStatusFields."
+                          "target_provision_state: status field "
+                          "'target_provision_state' not found in response, "
+                          "defaulting to string"])], ok, (0, 1)),
     ]
+
+    # ... and that the real generator text matches EVERY registry signature, not just
+    # the one above. A signature that matches nothing is a dead exemption.
+    for _e in BLOCKED_UPSTREAM:
+        if not _e["signature"].strip():
+            raise SystemExit("a BLOCKED_UPSTREAM entry has an empty signature, which "
+                             "would classify every warning as accepted")
     failures = 0
     for label, items, props, expect in cases:
         try:
