@@ -2,7 +2,7 @@
 # `manageable`, so the operator picks it up from there (no POST needed — RDC's findby on
 # /v1/nodes matches by name + UUID, then drives the rest of the state machine).
 ---
-apiVersion: composition.krateo.io/v0-3-3
+apiVersion: composition.krateo.io/v0-6-5
 kind: BaremetalHost
 metadata:
   name: blade04

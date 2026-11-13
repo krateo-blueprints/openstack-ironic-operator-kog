@@ -229,13 +229,58 @@ def doc_snippets(tmpdir, root=None):
     return out, unparseable
 
 
+def _manifests_with_composition_crs(root=None):
+    """Every manifests/*.yaml declaring at least one composition.krateo.io CR.
+
+    `root` exists so the self-test can drive this against fixtures. A selector that
+    can only be exercised against the real tree is a selector nothing tests -- and
+    this function replaced one whose bug was invisible for months precisely because
+    no arm ever ran it.
+
+    Parse failures are INCLUDED rather than skipped. A file this screen cannot read
+    is not a file it has cleared, and silently dropping it is how a filter turns an
+    unreadable manifest into a pass -- the same mistake in a different costume. The
+    caller already reports unparsable documents.
+    """
+    out = []
+    for f in glob.glob(os.path.join(root or REPO, "manifests/*.yaml")):
+        try:
+            text = open(f).read()
+        except OSError:
+            out.append(f)
+            continue
+        if "composition.krateo.io/" in text:
+            out.append(f)
+    return out
+
+
 def targets():
     """manifests a reader is meant to apply, plus every production RestDefinition"""
     out = sorted(glob.glob(os.path.join(REPO, "examples/**/*.yaml"), recursive=True))
-    out += sorted(
-        f for f in glob.glob(os.path.join(REPO, "manifests/*.yaml"))
-        if "example" in os.path.basename(f) or "quickstart" in os.path.basename(f)
-    )
+
+    # SELECTED BY CONTENT, NOT BY FILENAME. This used to read
+    #     if "example" in os.path.basename(f) or "quickstart" in os.path.basename(f)
+    # which decided what a reader applies from a substring of the file's NAME. The
+    # assumption -- that anything meant to be applied says "example" in its name --
+    # was false, and FOURTEEN manifests had drifted outside it, every one of them a
+    # CR a reader is told to apply:
+    #
+    #   manifests/baremetalhost-blade03.yaml            v0-1-1   chart serves v0-6-5
+    #   manifests/baremetalhost-blade02-e2e.yaml        v0-1-3   chart serves v0-6-5
+    #   manifests/kubernetescluster-lab-ha.yaml         v0-13-20 chart serves v0-15-5
+    #   ... 11 more
+    #
+    # Demonstrated rather than inferred, 2026-11-13: planting an impossible
+    # `composition.krateo.io/v9-9-9` in baremetalhost-blade03.yaml left this screen
+    # at exit 0. That is the EXACT defect class this file was written for -- see the
+    # module docstring's "four example manifests declared composition apiVersions
+    # from long-pruned chart versions" -- accumulating in the files its own filter
+    # excluded.
+    #
+    # So: take every manifests/*.yaml that CARRIES a composition CR. A file's
+    # content is what makes it a thing a reader applies; its name is a convention
+    # nobody is obliged to follow.
+    out += sorted(_manifests_with_composition_crs())
     # The RestDefinitions themselves, for the multi-identifier rule. They are
     # not "manifests a reader applies" but they are where the identifier hazard
     # would be introduced, and a rule over a file list that excludes its own
@@ -282,6 +327,37 @@ def self_test():
             "apiVersion: composition.krateo.io/v9-9-9\nkind: KubernetesCluster\n"
             "metadata:\n  name: x\n")
         broken_yaml = write("broken.yaml", "apiVersion: [unclosed\n")
+
+        # SELECTION IS BY CONTENT, NOT BY FILENAME. _manifests_with_composition_crs
+        # replaced a filter that read `"example" in basename or "quickstart" in
+        # basename`, under which FOURTEEN applyable manifests went unscreened for
+        # months -- every one of them a CR a reader is told to apply, several
+        # declaring apiVersions their chart had long stopped serving. Nothing about
+        # a filename says whether its contents are meant to be applied.
+        #
+        # These two arms vary ONLY the name. A file whose name carries none of the
+        # old magic substrings must still be selected when it holds a composition
+        # CR, and a file holding none must still be ignored however it is named.
+        mdir = os.path.join(td, "manifests")
+        os.makedirs(mdir, exist_ok=True)
+        with open(os.path.join(mdir, "blade42-concurrent.yaml"), "w") as fh:
+            fh.write("apiVersion: composition.krateo.io/v0-1-0\nkind: KubernetesCluster\n"
+                     "metadata:\n  name: x\n")
+        with open(os.path.join(mdir, "example-nothing.yaml"), "w") as fh:
+            fh.write("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n")
+        picked = {os.path.basename(f) for f in _manifests_with_composition_crs(td)}
+        cases += 1
+        if "blade42-concurrent.yaml" not in picked:
+            failures.append(
+                "selection by CONTENT regressed: a manifest holding a composition CR was "
+                "NOT selected because its name carries no magic substring. That is the exact "
+                "filter that left 14 applyable manifests unscreened")
+        cases += 1
+        if "example-nothing.yaml" in picked:
+            failures.append(
+                "selection is OVER-EAGER: a file with no composition CR was selected merely "
+                "for having 'example' in its name. The rule is content, not filename, in BOTH "
+                "directions")
 
         # OVER-EAGERNESS ARMS. Four of the original five cases tested rules I
         # was thinking about while writing them; only "a correct manifest

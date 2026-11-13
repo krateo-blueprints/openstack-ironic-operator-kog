@@ -2,7 +2,7 @@
 # observe two concurrent reconcile loops walking enroll -> active without
 # name collisions or proxy 503s.
 ---
-apiVersion: composition.krateo.io/v0-3-3
+apiVersion: composition.krateo.io/v0-6-5
 kind: BaremetalHost
 metadata:
   name: blade07

@@ -8,7 +8,7 @@
 # Boot-time effect: cloud-init reads the drive, creates user `ironic` with password
 # `baremetal`, configures both NICs for DHCP, sets hostname=blade05.
 ---
-apiVersion: composition.krateo.io/v0-3-3
+apiVersion: composition.krateo.io/v0-6-5
 kind: BaremetalHost
 metadata:
   name: blade05

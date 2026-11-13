@@ -1,6 +1,6 @@
 # Gap 5 (docs/TEST-PLAN.md): paired with blade07. See sibling manifest for context.
 ---
-apiVersion: composition.krateo.io/v0-3-3
+apiVersion: composition.krateo.io/v0-6-5
 kind: BaremetalHost
 metadata:
   name: blade08

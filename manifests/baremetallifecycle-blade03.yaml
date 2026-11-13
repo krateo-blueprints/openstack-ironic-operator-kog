@@ -6,7 +6,7 @@
 # then delete the BaremetalDiscovery and apply this lifecycle CR. See
 # manifests/baremetaldiscovery-blade02.yaml.
 ---
-apiVersion: composition.krateo.io/v0-3-1
+apiVersion: composition.krateo.io/v0-3-4
 kind: BaremetalLifecycle
 metadata:
   name: blade03

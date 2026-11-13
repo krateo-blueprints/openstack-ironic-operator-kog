@@ -2,7 +2,7 @@
 # freshly-generated UUID (to avoid the earlier UUID tombstone). Apply this and
 # nothing else — the operator drives every transition autonomously.
 ---
-apiVersion: composition.krateo.io/v0-1-3
+apiVersion: composition.krateo.io/v0-6-5
 kind: BaremetalHost
 metadata:
   name: blade02
