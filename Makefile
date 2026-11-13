@@ -587,6 +587,24 @@ check-oas-defaults:   # no OAS body schema may acquire the v1.26.x defaulting sh
 	# found the only field instances anyone has (2 of 35).
 	python3 -I scripts/check-defaulted-optional-objects.py
 
+check-chart-version-moved:   # a published chart whose CONTENT moved must move its VERSION
+	# `helm push` OVERWRITES an existing version, and a tag re-pushes every published
+	# chart at whatever its Chart.yaml currently says. So a chart whose content changed
+	# while its version did not silently replaces bytes consumers already hold -- and a
+	# consumer who pinned that version gets different bytes than they pinned.
+	#
+	# MEASURED 2026-11-13 preparing 0.3.9: TWO of four published charts were in exactly
+	# that state (baremetal-discovery 0.1.2, baremetal-lifecycle 0.3.3, both having
+	# gained a krateo.io/publish annotation). Semantically inert, bytes not. Nothing in
+	# `make check` caught it and the tag was one command away.
+	#
+	# docs/release.md records the same hazard reached from the other side
+	# (kubernetes-cluster 0.15.2, left immutable rather than overwritten). This is the
+	# preventive half. The comparison is against the newest TAG, because that is the
+	# only thing a consumer can be holding.
+	python3 -I scripts/check-chart-version-moved.py --selftest && \
+		python3 -I scripts/check-chart-version-moved.py
+
 check-publish-set:   # the release workflow's chart list agrees with each chart's own declaration
 	# `.github/workflows/release-chart.yaml` publishes a HAND-MAINTAINED list, written
 	# out twice (lint, then package; push globs dist/). A chart added to charts/ and
@@ -678,7 +696,7 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 	python3 -I scripts/check-blueprint-metadata.py --self-test && \
 		python3 -I scripts/check-blueprint-metadata.py $(if $(BLUEPRINT_ONLINE),--online,)
 
-check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set   # every standing screen
+check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set check-chart-version-moved   # every standing screen
 	@echo "all standing screens passed"
 
 chart-host-pinned:   # add the chart versions the LIVE CompositionDefinitions pin
