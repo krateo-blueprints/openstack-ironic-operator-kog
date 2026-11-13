@@ -1,5 +1,46 @@
 apiVersion: v2
+# DEPRECATED 2026-11-13. `baremetal-host` replaces this chart, and already did:
+# baremetal-lifecycle's own deprecation note (2026-11-08) says host "absorbed the
+# discovery/lifecycle split into one CR per machine for its whole lifecycle" -- it
+# names DISCOVERY, but only lifecycle was marked at the time. This closes that gap.
+#
+# AND THIS CHART HAS NEVER BEEN ABLE TO WORK. Measured 2026-11-13 by rendering it:
+#
+#   $ helm template disc charts/baremetal-discovery --set nodeName=blade99 --set driver=redfish
+#   apiVersion: baremetal.ogen.krateo.io/v1alpha1
+#   kind: Node
+#
+# No RestDefinition in this repo produces a kind called `Node`. The kinds are
+# Allocation, BaremetalNode, DeployTemplate, NodePower, NodeProvision, Port and
+# PortGroup, and the node kind is `BaremetalNode` at `v1-0-0` -- which is what
+# baremetal-host renders. `kubectl apply` of this chart's output fails with "no
+# matches for kind Node in version baremetal.ogen.krateo.io/v1alpha1".
+#
+# It renders ONE resource and nothing else, because templates/_helpers.tpl does
+#   lookup (include "baremetal-discovery.nodeApiVersion" .) "Node" ...
+# against that same non-existent kind, so provisionState is always empty and every
+# transition guard (`eq ... "enroll"`) fails silently. The chart appears to install
+# and produces no transitions, no ports and no inspection.
+#
+# The helper has carried `v1alpha1` since the chart's first commit (a009c6f), so
+# there is no regression to bisect: baremetal-host moved to `v1-0-0` in 30ced1a and
+# this chart was left behind. Its transitions also omit `spec.configurationRef`,
+# which the generated kinds mark REQUIRED -- the same defect the lifecycle note
+# records -- so even with the apiVersion corrected its NodeProvisions would be
+# rejected.
+#
+# Why deprecated rather than fixed or deleted. Fixing it means owning a second
+# implementation of a job baremetal-host already does: host has
+# templates/transition-inspect.yaml and `enableInspection`, and BaremetalNode's
+# status carries `properties`, `inspection_started_at` and `inspection_finished_at`
+# -- the inventory this chart's description promises. Deleting it would leave 0.1.x
+# installable from the Marketplace channel with no source here, and the org
+# publishing standard forbids deleting a stored tarball.
+#
+# `deprecated: true` is Helm's own flag: `helm install` warns and the Marketplace
+# index carries it. 0.1.3 stays published and resolvable.
 name: baremetal-discovery
+deprecated: true
 description: Discovery composition for Ironic bare-metal nodes. Creates a Node CR + drives manage + inspect via KOG NodeProvisions, then surfaces inventory (cpus/memory/disks/NICs + capabilities) in the Node CR's status. Output is consumed as INPUT to baremetal-lifecycle (the operator/policy reads inventory and writes a lifecycle spec). No ports created here, no provide/deploy - this composition only discovers.
 type: application
 version: 0.1.3
