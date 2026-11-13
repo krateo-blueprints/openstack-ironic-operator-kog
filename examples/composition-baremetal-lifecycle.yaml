@@ -8,7 +8,7 @@
 # Per-resource CRs (Node / Port / NodeProvision / NodePower) are rendered by the chart at
 # install time; no separate samples/ directory ships with this chart.
 ---
-apiVersion: composition.krateo.io/v0-3-4
+apiVersion: composition.krateo.io/v0-3-5
 kind: BaremetalLifecycle
 metadata:
   name: baremetal-lifecycle

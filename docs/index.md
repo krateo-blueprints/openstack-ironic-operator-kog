@@ -29,7 +29,7 @@ The bundle ships **four charts**, versioned independently:
 |---|---|---|
 | `charts/baremetal-host` | `BaremetalHost` | unified single-CRD host lifecycle (metal3-equivalent surface) |
 | `charts/baremetal-lifecycle` | `BaremetalLifecycle` | provisioning-only walk `enroll → active` |
-| `charts/baremetal-discovery` | `BaremetalDiscovery` | discovery-only walk `enroll → manage → inspect`, surfaces inventory |
+| `charts/baremetal-discovery` | `BaremetalDiscovery` | **DEPRECATED** — use `baremetal-host`. Never worked: renders a `Node` kind that does not exist |
 | `charts/kubernetes-cluster` | `KubernetesCluster` | kubeadm cluster over Ironic-provisioned blades |
 
 ## The bundle (start here)

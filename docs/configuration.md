@@ -41,8 +41,11 @@ node at `available`; setting it walks to `active`.
 
 ## baremetal-lifecycle (`charts/baremetal-lifecycle`)
 
-Provisioning-only walk `enroll → active`. Inspection is out of scope — use
-`baremetal-discovery` first for inventory.
+Provisioning-only walk `enroll → active`. **DEPRECATED — use `baremetal-host`.**
+Inspection is out of scope here; `baremetal-host` does both, via
+`enableInspection: true`. Do not use `baremetal-discovery` for it: that chart is
+also deprecated and has never worked (it renders `kind: Node`, which no
+RestDefinition declares).
 
 | key | default | effect |
 |---|---|---|
@@ -60,7 +63,20 @@ Provisioning-only walk `enroll → active`. Inspection is out of scope — use
 | `nodeNamespace` | `""` | Node CR namespace (where the RDC watches). |
 | `configurationRef.name` | `ironic-endpoint` | singleton `NodeConfiguration`. |
 
-## baremetal-discovery (`charts/baremetal-discovery`)
+## baremetal-discovery (`charts/baremetal-discovery`) — DEPRECATED, AND NEVER WORKED
+
+**Do not use this chart.** It renders `kind: Node` at
+`baremetal.ogen.krateo.io/v1alpha1`, and no RestDefinition in this repo declares a
+kind called `Node` — the node kind is `BaremetalNode` at `v1-0-0`. `kubectl apply`
+of its output fails with "no matches for kind Node". Its own `lookup` uses the same
+non-existent kind, so every transition guard fails silently and it renders one
+inapplicable resource and nothing else: it appears to install and does nothing.
+The helper has carried `v1alpha1` since the chart's first commit.
+
+Use **`baremetal-host`** with `enableInspection: true`. `BaremetalNode`'s status
+carries `properties`, `inspection_started_at` and `inspection_finished_at` — the
+inventory this chart's description promises. The values below are recorded for
+readers of existing releases; they drive nothing.
 
 Discovery-only walk `enroll → manage → inspect → manageable`; inventory is read from the
 Node CR's status. Output feeds a lifecycle spec.
