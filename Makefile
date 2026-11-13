@@ -587,6 +587,23 @@ check-oas-defaults:   # no OAS body schema may acquire the v1.26.x defaulting sh
 	# found the only field instances anyone has (2 of 35).
 	python3 -I scripts/check-defaulted-optional-objects.py
 
+check-chart-renders:   # what a chart RENDERS must be a kind that exists, at a served version
+	# check-examples screens manifests, examples and README fences -- everything a reader
+	# COPIES. Nothing screened what a chart PRODUCES. So baremetal-discovery shipped,
+	# published and documented, rendering `kind: Node` at `v1alpha1` for its entire life,
+	# while no RestDefinition here declares a kind called Node. Its own `lookup` used the
+	# same non-existent kind, so every transition guard failed silently and the chart
+	# rendered ONE resource and nothing else: it appeared to install and did nothing.
+	#
+	# check-example-manifests.py's own docstring records this exact defect being fixed in
+	# the quickstart -- "shipped `kind: Node` at an unserved apiVersion for months". It was
+	# fixed where readers copy it and left in the chart that generates it.
+	#
+	# VOID IS NOT A PASS: a chart whose output is lookup-gated renders nothing of ours
+	# offline, and is reported as unscreened rather than clean.
+	python3 -I scripts/check-chart-renders.py --selftest && \
+		python3 -I scripts/check-chart-renders.py
+
 check-chart-version-moved:   # a published chart whose CONTENT moved must move its VERSION
 	# `helm push` OVERWRITES an existing version, and a tag re-pushes every published
 	# chart at whatever its Chart.yaml currently says. So a chart whose content changed
@@ -696,7 +713,7 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 	python3 -I scripts/check-blueprint-metadata.py --self-test && \
 		python3 -I scripts/check-blueprint-metadata.py $(if $(BLUEPRINT_ONLINE),--online,)
 
-check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set check-chart-version-moved   # every standing screen
+check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set check-chart-version-moved check-chart-renders   # every standing screen
 	@echo "all standing screens passed"
 
 chart-host-pinned:   # add the chart versions the LIVE CompositionDefinitions pin
