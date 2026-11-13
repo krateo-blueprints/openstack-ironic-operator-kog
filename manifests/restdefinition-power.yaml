@@ -481,8 +481,38 @@ spec:
         headers:
           - name: X-OpenStack-Ironic-API-Version
             value: "1.109"
+        # THE THIRD CASE: BOTH NULL. A node whose power has never been read carries
+        # target_power_state=null AND power_state=null, and the old form's
+        # `if (...) then .target = ... else . end` left `target` ABSENT there. An
+        # absent field is not a difference, so the drift comparison had nothing to
+        # compare `spec.target` against, reported up-to-date, and the update -- the
+        # PUT that would set the power -- was never issued. NodePower could only
+        # change a power state that was ALREADY KNOWN.
+        #
+        # MEASURED 2026-11-13 on a throwaway cluster, fake-hardware nodes at
+        # `available`: the CR reported Observed=True/ResponseObtained,
+        # Ready=True/Available, Synced=True/ReconcileSuccess with status populated,
+        # the controller logged "External resource is up to date" twelve times, zero
+        # creates, zero updates, and Ironic's power_state stayed null throughout.
+        # Nothing failed anywhere.
+        #
+        # It also blocks Allocation, which is how it was found: Ironic will not
+        # allocate a node whose power state is unknown, so no node this operator
+        # enrolled could ever be claimed.
+        #
+        # `// "unknown"` makes the unknown case read as DRIFT instead of as silence.
+        # "unknown" cannot collide with a real target -- oas/ironic-power.yaml defines
+        # target as power on | power off | rebooting | soft power off | soft rebooting
+        # -- so spec.target always differs from it, the update fires once, and after
+        # that power_state is known and the normal target_power_state/power_state
+        # fallback above takes over.
+        #
+        # The other two cases are UNCHANGED, verified with jq before applying:
+        #   tps set            -> target = tps        (in-flight, reads as converging)
+        #   tps null, ps set   -> target = ps         (settled)
+        #   both null          -> target = "unknown"  (NEW; was absent)
         responseTransform:
-          inline: 'if .name then .node_id = .name else . end | if (.target_power_state // .power_state) then .target = (.target_power_state // .power_state) else . end'
+          inline: 'if .name then .node_id = .name else . end | .target = ((.target_power_state // .power_state) // "unknown")'
         requestFieldMapping:
           - inPath: node_id
             inCustomResource: spec.node_id
