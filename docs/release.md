@@ -52,7 +52,7 @@ After a chart is published, bump the matching `manifests/compositiondefinition-*
 |---|---|
 | `baremetal-host` | `0.6.5` |
 | `baremetal-lifecycle` | `0.3.4` |
-| `baremetal-discovery` | `0.1.3` |
+| `baremetal-discovery` | `0.1.4` |
 | `kubernetes-cluster` | `0.15.5` |
 
 > **`kubernetes-cluster` 0.15.2 is published and must not be used.** Its bundled
