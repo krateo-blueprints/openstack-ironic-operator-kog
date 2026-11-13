@@ -18,9 +18,9 @@ apiVersion: v2
 # Marketplace index carries it. 0.3.1 stays published and resolvable.
 name: baremetal-lifecycle
 deprecated: true
-description: Helm chart for Ironic bare metal server provisioning via composition-dynamic-controller. Creates a Node CR + Port CRs (synced by KOG) and per-state NodeProvision CRs that drive Ironic from `enroll` to `active`. Inspection is OUT OF SCOPE - use the sibling `baremetal-discovery` chart first if you need inventory before provisioning.
+description: Helm chart for Ironic bare metal server provisioning via composition-dynamic-controller. Creates a Node CR + Port CRs (synced by KOG) and per-state NodeProvision CRs that drive Ironic from `enroll` to `active`. Inspection is OUT OF SCOPE. Use `baremetal-host` with `enableInspection=true`, which does both - NOT the sibling `baremetal-discovery` chart, which is also deprecated and has never worked.
 type: application
-version: 0.3.4
+version: 0.3.5
 appVersion: "1.0"
 icon: "https://raw.githubusercontent.com/krateo-blueprints/openstack-ironic-operator-kog/1516dd678f3c0760557bd1f142db0a67f81b8abd/branding/krateo-akmon-mark.svg"
 keywords:
