@@ -124,3 +124,58 @@ nothing for Observe to key on that is not simply "the node is there". The kind s
 unobservable by construction, and the charts read `provision_state` off the
 BaremetalNode CR, which has a working `responseTransform`. This is a property of the
 model, not a defect in the manifest.
+
+---
+
+# `ironic_action_only_warning_test.go` — the arms oasgen asked for (#625 / #629)
+
+oasgen-provider asked this repo for a consumer-side regression arm and said they would
+treat a break in it as a break in their repo. This is it.
+
+## What it pins
+
+**#625**: a generation warning told authors to make findby match on a definition where a
+never-matching findby is the *operating mechanism*. Acting on it disabled every
+bare-metal provision transition here for 24 hours.
+**#629**: the inverse and worse half — when such a definition's findby *can* match, its
+create is unreachable and nothing warns at all.
+
+Two arms over **one variable, the verb set**, read from the real shipped manifests:
+
+| kind | verbs | expectation |
+|---|---|---|
+| `ironic-node-provision` | findby + create | must **not** be advised to make findby match |
+| `ironic-node-power` | findby + get + create + update | must **still** be advised |
+
+**The control is the point.** "The warning is suppressed" and "the warning stopped
+working" are indistinguishable from the first arm alone, and a fix that silenced the
+diagnostic everywhere would pass it.
+
+## Measured, both sides of the fix
+
+```
+pre-#633   oasgen 05546c0   provision warnings: 2, power warnings: 2   FAIL
+post-#633  oasgen 4b5191d   provision warnings: 1, power warnings: 2   PASS
+```
+
+Provision drops the harmful warning; **power keeps both**. So the fix is targeted rather
+than a blanket silencing — which is exactly what the control is there to distinguish.
+
+## Two things this file had to be rescued from
+
+1. **It called the wrong stage.** The first version used `BuildSpecSchema()` and both
+   arms reported **zero** warnings — the matchability warning is appended by `Generate()`
+   one stage further out (`generator.go:103`). The arm I cared about was passing because
+   nothing had been measured. **The control is what said so**, by demanding the warning
+   be present on the non-action-only kind and failing.
+2. **It reads the manifests rather than transcribing them.** A sibling consumer's port of
+   a different screen was defeated by exactly that: their fixture drifted from the shipped
+   shape, so the arm passed while testing nothing.
+
+Assertions are on **what the author is told**, not on internal codes — oasgen's own
+request. A reworded message still carrying the harmful advice fails these arms.
+
+`TestIronicCorpusGenerates` is the smoke arm: all seven shipped RestDefinitions must
+generate against their own documents. It asserts nothing about warnings (several are
+expected and documented by this repo's own screen), only that generation does not break
+for a real seven-kind corpus.
