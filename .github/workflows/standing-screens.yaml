@@ -1,0 +1,46 @@
+# `make check` on every pull request.
+#
+# WHY THIS EXISTS. The standing screens ran in exactly ONE place --
+# release-chart.yaml, which fires `on: push: tags`. So they guarded the release and
+# nothing else, and a pull request could merge green while leaving main's `make check`
+# red. That is not hypothetical: #71 merged with all checks passing and broke main,
+# because it added `deprecated: true` to a Chart.yaml without bumping the version, and
+# nothing on the pull-request path ran the screen that catches exactly that. It was
+# found by running `make check` by hand afterwards.
+#
+# A gate that only runs at release time tells you about a defect when the cost of
+# acting on it is highest.
+name: standing-screens
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Tags and full history: check-chart-version-moved.py compares the working
+          # tree against the newest tag that is not HEAD's own, and a shallow checkout
+          # has no tags at all. It VOIDs rather than passing in that state -- which is
+          # correct, and also means this job would fail for the wrong reason.
+          fetch-depth: 0
+
+      - name: Install helm
+        # check-chart-renders.py renders every chart and screens the kinds it produces.
+        # Without helm it VOIDs, which is honest but tells nobody anything.
+        uses: azure/setup-helm@v5
+        with:
+          # MATCHES release-chart.yaml's HELM_VERSION. These two jobs must render with
+          # the same helm: this one screens what the charts produce, that one packages
+          # and pushes them, and a version skew between them means the screen cleared
+          # output the release never built. Keep them in step.
+          version: v3.19.0
+
+      - name: make check
+        run: make check
