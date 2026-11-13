@@ -36,7 +36,11 @@ jobs:
         # Without helm it VOIDs, which is honest but tells nobody anything.
         uses: azure/setup-helm@v5
         with:
-          version: v3.16.3
+          # MATCHES release-chart.yaml's HELM_VERSION. These two jobs must render with
+          # the same helm: this one screens what the charts produce, that one packages
+          # and pushes them, and a version skew between them means the screen cleared
+          # output the release never built. Keep them in step.
+          version: v3.19.0
 
       - name: make check
         run: make check
