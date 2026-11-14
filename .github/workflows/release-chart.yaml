@@ -265,7 +265,7 @@ jobs:
     #
     # .github/dependabot.yml advances this; a SHA pin with nothing advancing it
     # is worse than @main because it looks deliberate while going stale.
-    uses: krateo-blueprints/charts/.github/workflows/publish-chart.yaml@36ea357cb0fe4b49628cc984d9939babf0049d03 # 1.0.1
+    uses: krateo-blueprints/charts/.github/workflows/publish-chart.yaml@1e6210ab2a8b66ff1a8d6da86287e671154f44a2 # 1.0.4
     with:
       source_repo: ${{ github.repository }}
       git_tag: ${{ github.ref_name }}
