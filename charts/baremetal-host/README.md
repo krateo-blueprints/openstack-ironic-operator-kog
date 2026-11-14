@@ -48,7 +48,7 @@ kubectl apply -f compositiondefinition.yaml     # ships inside the chart
 `core-provider` reads the chart's `values.schema.json`, generates the
 `BaremetalHost` CRD from it, and starts a controller **for this chart version**.
 The chart version *is* the served apiVersion: `0.6.3` is served as
-`composition.krateo.io/v0-6-5`. Registering a new version stops the previous one
+`composition.krateo.io/v0-7-0`. Registering a new version stops the previous one
 being served, so anything that renders `BaremetalHost` resources at a pinned
 apiVersion — the `kubernetes-cluster` blueprint does — has to move in the same
 step.
@@ -56,7 +56,7 @@ step.
 Then one host:
 
 ```yaml
-apiVersion: composition.krateo.io/v0-6-5
+apiVersion: composition.krateo.io/v0-7-0
 kind: BaremetalHost
 metadata:
   name: blade03
@@ -67,8 +67,11 @@ spec:
   driver_info:
     redfish_address: https://192.0.2.103
     redfish_username: admin
-    redfish_password: <…>
     redfish_system_id: /redfish/v1/Systems/1
+  # The BMC password comes from a Secret, not from driver_info. See
+  # "BMC password from a Secret" below.
+  bmcSecret:
+    name: blade03-bmc
   ports:
     - address: "00:00:5e:00:53:01"
       pxe_enabled: true
@@ -146,3 +149,39 @@ default is added again.
 The hosts provisioned before 0.6.3 keep the stanza. It is harmless — the value
 it asserts is the one the chart would have used anyway — but it is not
 removable, and that is the point of the check.
+
+## BMC password from a Secret
+
+`bmcSecret` is the supported way to supply the BMC password. Set it and leave
+`redfish_password` out of `driver_info`:
+
+```yaml
+bmcSecret:
+  name: blade03-bmc      # Secret in the namespace the node CR is rendered into
+  key: redfish_password  # optional; this is the default
+```
+
+```sh
+kubectl create secret generic blade03-bmc -n openstack \
+  --from-literal=redfish_password="$REDFISH_PASSWORD"
+```
+
+The chart renders `spec.extra.bmc_secret` on the `BaremetalNode`, and that is a
+**pointer, not the value**. `manifests/restdefinition-node.yaml` declares a
+`secretRef` resolver on the create and update verbs which reads the named Secret
+-- always in the CR's own namespace -- and fills `driver_info.redfish_password`
+in the request body to Ironic. So the password is absent from values, from the
+rendered CR, from `helm get values`, and from etcd outside the Secret.
+
+**Setting both `bmcSecret` and `driver_info.redfish_password` fails the render.**
+That is deliberate. rdc writes the spec's plaintext into the body first and the
+resolver overwrites it afterwards, so the plaintext would sit in the CR achieving
+nothing while looking load-bearing, and nothing downstream would report it.
+
+Rotating the password means updating the Secret -- no CR edit. The resolver
+fingerprints what it resolved, so the next reconcile issues the update.
+
+Two things this does **not** do. It does not cover `ipmi_password`: the resolver
+writes `driver_info.redfish_password` specifically. And the chart does not check
+your driver -- `values.schema.json` already says driver keys are not validated
+here, and Ironic rejects an unusable set when the host is registered.

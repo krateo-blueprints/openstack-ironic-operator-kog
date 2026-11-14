@@ -9,8 +9,14 @@
 #     (removed in 0.13.25; the CP publishes through Ironic instead)
 #
 #   kubectl apply -f manifests/kubernetescluster-example.yaml
+#
+# THIS FILE STILL CARRIES THE BMC PASSWORD IN PLAINTEXT, deliberately, and it is
+# not the recommended form. `bmcSecret` (baremetal-host 0.7.0, kubernetes-cluster
+# 0.16.0) moves it into a Secret; see manifests/baremetalhost-blade03.yaml for the
+# child shape and manifests/kubernetescluster-ettore-ha.example.yaml for a real
+# deployment that commits no password at all. Left as-is here because its job is to be applyable with one command and no prerequisites.
 ---
-apiVersion: composition.krateo.io/v0-15-5
+apiVersion: composition.krateo.io/v0-16-0
 kind: KubernetesCluster
 metadata:
   name: lab

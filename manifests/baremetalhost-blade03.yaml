@@ -9,8 +9,34 @@
 #
 # `online: true|false` drives BMC power continuously (CR is renamed on observed-vs-desired
 # mismatch so KOG re-fires after Ironic's deploy-time auto-power-on).
+#
+# THE BMC PASSWORD IS IN A SECRET, not in driver_info. `bmcSecret` makes the chart
+# render `spec.extra.bmc_secret`, and the node RestDefinition's secretRef resolver
+# reads that Secret -- in the node CR's namespace -- and fills
+# `driver_info.redfish_password` in the request to Ironic. So the password is absent
+# from the BaremetalHost spec, from the rendered BaremetalNode, and from
+# `helm get values`.
+#
+# The Secret is INLINE below only because this is a lab manifest with a throwaway
+# password, and a self-contained `kubectl apply -f` is worth more here than
+# pretending otherwise. For a real deployment do NOT commit the Secret -- see
+# manifests/kubernetescluster-ettore-ha.example.yaml, which carries the pointer and
+# a `kubectl create secret` line instead.
+#
+# Setting bmcSecret AND driver_info.redfish_password FAILS the render on purpose:
+# the resolver overwrites whatever driver_info carried, so the plaintext would sit
+# in the CR achieving nothing.
 ---
-apiVersion: composition.krateo.io/v0-6-5
+apiVersion: v1
+kind: Secret
+metadata:
+  name: blade03-bmc
+  namespace: openstack
+type: Opaque
+stringData:
+  redfish_password: baremetal
+---
+apiVersion: composition.krateo.io/v0-7-0
 kind: BaremetalHost
 metadata:
   name: blade03
@@ -25,8 +51,9 @@ spec:
     redfish_address: http://172.19.74.11:8000
     redfish_verify_ca: false
     redfish_username: ironic
-    redfish_password: baremetal
     redfish_system_id: /redfish/v1/Systems/blade03
+  bmcSecret:
+    name: blade03-bmc
   ports:
     - address: "00:60:2f:33:81:01"
       pxe_enabled: true

@@ -319,3 +319,48 @@
   {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{/* --- spec.extra, and the BMC password pointer inside it ----------------------
+     Renders `spec.extra`, which carries `bmc_secret` -- the POINTER that
+     manifests/restdefinition-node.yaml's secretRef resolver reads. The resolver
+     fills `driver_info.redfish_password` in the REQUEST BODY from the named
+     Secret, read in the CR's own namespace, so the password never appears in
+     values.yaml, in the rendered CR, or in etcd anywhere but the Secret.
+
+     THIS CHART ONLY, and that is the whole scope. The sibling leaf charts
+     baremetal-lifecycle and baremetal-discovery also render a node from
+     driver_info, and both are DEPRECATED and render `kind: Node` -- which no
+     RestDefinition in this repo declares, so their output cannot be applied at
+     all (`no matches for kind Node`). The secretRef resolver lives on
+     BaremetalNode, so a bmc_secret pointer in either of them would be
+     unreachable by construction: unexercisable code added to a chart whose
+     documented decision is "deprecated rather than fixed". Both were migrated
+     and then reverted on 2026-11-14 once that was checked.
+
+     ONE GUARD, AND DELIBERATELY ONLY ONE: both set is an error. If driver_info
+     already carries redfish_password, rdc writes the plaintext first
+     (processFields) and the resolver then OVERWRITES it (applyFieldMapping runs
+     later), so the password would sit in the CR achieving nothing while looking
+     load-bearing. Nothing downstream reports that. Failing the render is the only
+     way the author finds out.
+
+     NOT guarded: which driver this is. The resolver writes
+     driver_info.redfish_password, and whether a driver accepts that key is
+     Ironic's call -- values.schema.json already states that driver keys are not
+     validated here and that Ironic rejects an unusable set at registration.
+     Inventing a driver taxonomy in a Helm template would reject working
+     configurations to catch a mistake Ironic already reports. */}}
+{{- define "baremetal-host.nodeExtra" -}}
+{{- $extra := deepCopy (.Values.extra | default dict) -}}
+{{- $s := .Values.bmcSecret | default dict -}}
+{{- $name := $s.name | default "" -}}
+{{- if $name -}}
+{{- if (.Values.driver_info | default dict).redfish_password -}}
+{{- fail "bmcSecret.name and driver_info.redfish_password are both set. Remove redfish_password from driver_info: the secretRef resolver fills it from the Secret and overwrites whatever driver_info carried, so the plaintext would stay in the CR for nothing." -}}
+{{- end -}}
+{{- $_ := set $extra "bmc_secret" (dict "name" $name "key" ($s.key | default "redfish_password")) -}}
+{{- end -}}
+{{- if $extra -}}
+{{- toYaml $extra -}}
+{{- end -}}
+{{- end -}}

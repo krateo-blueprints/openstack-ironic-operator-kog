@@ -50,6 +50,14 @@ spec:
   driver_info:
     {{- toYaml . | nindent 4 }}
   {{- end }}
+  {{- /* The BMC password pointer, passed through to baremetal-host, which
+         renders it as spec.extra.bmc_secret for the secretRef resolver to read.
+         Set it INSTEAD OF driver_info.redfish_password -- the child chart fails
+         the render if one node declares both. */}}
+  {{- with $cp.bmcSecret }}
+  bmcSecret:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   {{- with $cp.ports }}
   ports:
     {{- toYaml . | nindent 4 }}
