@@ -211,6 +211,46 @@ def find_oas(rd, slug, oas_dir):
     return None
 
 
+def segs(path):
+    """A path as its segment list, so comparisons are PARSED rather than syntactic."""
+    return [x for x in (path or "").split(".") if x]
+
+
+def strip_cr_prefix(path):
+    """Mirror stripResolverSources' normalization EXACTLY.
+
+    rdc does strings.TrimPrefix(strings.TrimPrefix(p, "spec."), "status."), so the two
+    trims are CHAINED, not alternatives: "spec.status.x" becomes "x". Reimplementing
+    them as an either/or would disagree with the runtime on exactly that input.
+    """
+    path = path or ""
+    if path.startswith("spec."):
+        path = path[len("spec."):]
+    if path.startswith("status."):
+        path = path[len("status."):]
+    return path
+
+
+def request_mappings(verb):
+    """Every REQUEST-direction mapping on a verb, read from BOTH lists.
+
+    `requestFieldMapping` is deprecated and oasgen treats each of its entries "as an
+    equivalent request-direction FieldMappingItem at load time" (types.go:591-593). A
+    screen reading only one list goes blind the moment a definition uses the other --
+    and this repo's node definition has to: a resolver CANNOT live on the deprecated
+    field, which "carries no value transform".
+
+    This screen read only the deprecated list until 2026-11-14, which is the day the
+    node definition stopped using it for one verb. Nothing failed; the screen simply
+    stopped looking. An `inResponse` entry is not request-direction and is excluded.
+    """
+    out = list(verb.get("requestFieldMapping") or [])
+    for m in (verb.get("fieldMapping") or []):
+        if m.get("inPath") or m.get("inQuery") or m.get("inBody"):
+            out.append(m)
+    return out
+
+
 def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
     """Return a list of (check, subject, message, actionable). Raises Void.
 
@@ -241,7 +281,7 @@ def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
     # it ABSENT. tests/oasgen-generator/ironic_port_uuid_test.go.
     unmapped_params = {}
     for v in verbs:
-        mapped = {m.get("inPath") for m in (v.get("requestFieldMapping") or [])}
+        mapped = {m.get("inPath") for m in request_mappings(v)}
         for pp in re.findall(r"\{(\w+)\}", v.get("path") or ""):
             if pp not in mapped:
                 unmapped_params.setdefault(pp, v.get("action"))
@@ -250,7 +290,7 @@ def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
 
     suppressed_params = {}
     for v in verbs:
-        for m in v.get("requestFieldMapping") or []:
+        for m in request_mappings(v):
             pp = m.get("inPath")
             if not pp or pp in spec:
                 continue                       # clause 1 or 3 already rescued it
@@ -408,7 +448,14 @@ def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
 
     # C -- mapping sources must resolve
     for v in verbs:
-        for m in v.get("requestFieldMapping") or []:
+        for m in request_mappings(v):
+            # A RESOLVER SUPPLIES ITS OWN VALUE, so its inCustomResource is not a read
+            # path -- it is the pointer stripResolverSources removes from the body.
+            # Demanding it resolve as a value source is oasgen's #455 over-reach, which
+            # refused working configurations; their own mapping_source_resolvable.go
+            # skips resolver entries here for the same reason. Check H screens these.
+            if m.get("resolver"):
+                continue
             src = m.get("inCustomResource", "")
             root, leaf = (src.split(".") + [""])[0], src.split(".")[-1]
             pool, pname = (spec, "the create body") if root == "spec" else (status, "status")
@@ -598,6 +645,59 @@ def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
                    "self-referencing (reads %s) and no body schema declares it, so "
                    "spec.%s does not exist at any version" % (src or "?", pp))
         out.append(("E", pp, msg, False))
+    # H -- A RESOLVER WHOSE inCustomResource ALIASES inBody DELETES WHAT IT RESOLVED;
+    #      AND A GUARD THAT READS ELSEWHERE CAN BE FALSE WHILE THE VALUE EXISTS.
+    #
+    # stripResolverSources (rdc internal/tools/client/builder/builder.go:472) removes
+    # inCustomResource from the assembled body for EVERY entry carrying a resolver,
+    # UNCONDITIONALLY: the function never reads `resolved`. It strips because an entry
+    # HAS a resolver, never because the resolver produced anything.
+    #
+    #   H1  inCustomResource resolving to inBody's own location -> the strip deletes the
+    #       value the resolver just wrote. Silent: the request goes out short a field,
+    #       the vendor is never told, and the CR reports reconciled.
+    #   H2  a `when` guard reading a path OTHER than nameFromCustomResource -> the guard
+    #       can be FALSE while the Secret pointer exists, skipping the mapping with no
+    #       error. The opposite direction (guard true, read fails) is a loud error from
+    #       readStringPath and needs no screen; only this one is silent.
+    #
+    # MEASURED, NOT REASONED. H1 is the shape this repo's own node definition had in its
+    # first draft: inBody `driver_info.redfish_password` with inCustomResource
+    # `spec.driver_info.redfish_password`. oasgen-provider is filing both predicates as a
+    # generation-time screen -- their mapping_source_resolvable.go:120 flagged the gap as
+    # a follow-up -- and this is the consumer-side reference implementation.
+    #
+    # THE COMPARISON IS NORMALIZED, NOT SYNTACTIC, AND THAT IS THE WHOLE POINT. Those two
+    # paths DIFFER AS STRINGS: one carries the `spec.` prefix. rdc trims a leading
+    # `spec.`/`status.` before parsing, so they collide at runtime while a string compare
+    # calls them distinct. A syntactic check would miss the only case anyone has hit.
+    for v in verbs:
+        for m in request_mappings(v):
+            r = m.get("resolver") or {}
+            if not r:
+                continue
+            icr = m.get("inCustomResource") or ""
+            inbody = m.get("inBody") or ""
+            if icr and inbody and segs(strip_cr_prefix(icr)) == segs(inbody):
+                out.append(("H", "%s %s" % (v.get("action"), inbody),
+                            "ALIASED: the resolver writes its value to inBody `%s`, and "
+                            "inCustomResource `%s` NORMALIZES TO THE SAME PATH. "
+                            "stripResolverSources then deletes it from the body "
+                            "unconditionally, so the field never reaches the API and "
+                            "nothing errors. Point inCustomResource at the POINTER object "
+                            "-- the {name,key} parent -- which is plumbing to strip, not "
+                            "the destination" % (inbody, icr), True))
+            guard = (r.get("when") or {}).get("customResourceFieldPresent") or ""
+            namep = (r.get("secretRef") or {}).get("nameFromCustomResource") or ""
+            if guard and namep and segs(guard) != segs(namep):
+                out.append(("H", "%s guard %s" % (v.get("action"), guard),
+                            "GUARD READS ELSEWHERE: the `when` guard tests `%s` but the "
+                            "resolver reads its Secret name from `%s`. The guard can be "
+                            "FALSE while the pointer exists, which SKIPS the mapping with "
+                            "no error -- the request goes out without the resolved value. "
+                            "Guard the path the resolver actually reads" % (guard, namep),
+                            True))
+
     # dedupe E
     seen, deduped = set(), []
     for row in out:
@@ -810,6 +910,28 @@ def selftest():
     case("D substring collision stays ACTIONABLE", colliding, thin, "D", True,
          "no responseTransform")
 
+    # ========================================================================
+    # LOAD-BEARING SYNTHETIC ARMS -- DO NOT DELETE AS "UNEXERCISED".
+    #
+    # Every F arm below is synthetic, and that is PERMANENT, not provisional.
+    # F fires only on a kind whose create is unreachable -- one that performs
+    # nothing. There is no healthy configuration in which F is correct AND the
+    # resource works, so no manifest in this repo, and none a working consumer
+    # ever ships, can exercise F's positive case. A growing corpus cannot help:
+    # adoption means WORKING definitions. The evidence is not scarce here, it
+    # is unobtainable.
+    #
+    # So the instinct on a future cleanup -- "drop the case nothing real
+    # exercises" -- would delete the only positive coverage F will ever have.
+    # Same for the `identifiersMatchPolicy: AND` arm below, which neither this
+    # repo's corpus nor nova's can produce.
+    #
+    # Named by the oasgen-provider session on 2026-11-13 about its own
+    # CreateUnreachable diagnostic. Our 0.64.0 canary measured the NEGATIVE
+    # direction only -- both arms silent, which is what correct looks like. It
+    # could not confirm, and nothing on a healthy cluster can confirm, that F
+    # fires when it should. These arms are that confirmation.
+    # ========================================================================
     # F -- AN ACTION-ONLY KIND WHOSE FINDBY CAN MATCH PERFORMS NOTHING.
     # Three arms over one variable: the presence of a verb that can act. Only
     # the kind with neither `get` nor `update` is at risk, because only there
@@ -868,6 +990,104 @@ def selftest():
     cases.append(("...and declaring AND silences F (one variable: the policy)", _ok))
     if not _ok:
         failures.append("AND declared: expected 0 F rows, got %s" % [(r[1], r[3]) for r in _f_and])
+
+    # H -- THE RESOLVER PREDICATES. See the block in evaluate() for the mechanism.
+    #
+    # LOAD-BEARING SYNTHETIC ARMS: same reasoning as F's. H fires only on a definition
+    # whose resolver silently drops a field, so no healthy manifest here can exercise its
+    # positive case -- except that H1's arm is NOT synthetic in origin. It is the exact
+    # shape this repo's node definition had before measurement, kept as a fixture because
+    # a historical bad state is worth more than a constructed one.
+    def _hcase(name, ok):
+        """H's arms assert on ROW SHAPE, so they use the raw list like F's do -- the
+        `case` helper above drives a whole document through one expected row."""
+        cases.append((name, ok))
+        if not ok:
+            failures.append(name)
+
+    def _rverb(inbody, icr, guard="spec.extra.bmc_secret.name",
+               namep="spec.extra.bmc_secret.name"):
+        e = {"inBody": inbody, "inCustomResource": icr,
+             "resolver": {"type": "secretRef",
+                          "secretRef": {"nameFromCustomResource": namep,
+                                        "keyFromCustomResource": "spec.extra.bmc_secret.key"}}}
+        if guard is not None:
+            e["resolver"]["when"] = {"customResourceFieldPresent": guard}
+        return {"action": "create", "method": "POST", "path": "/v1/things", "fieldMapping": [e]}
+
+    def _rows_for(verb, code):
+        d = rd()
+        vd = d["spec"]["resource"]["verbsDescription"]
+        d["spec"]["resource"]["verbsDescription"] = [vd[0], verb, vd[2]]
+        return [r for r in evaluate(d, BASE_OAS, "thing") if r[0] == code]
+
+    # THE REAL BUG. It must fire DESPITE the two paths differing as strings -- which is
+    # the one thing a syntactic implementation would get wrong.
+    _h = _rows_for(_rverb("driver_info.redfish_password",
+                          "spec.driver_info.redfish_password"), "H")
+    _hcase("H1 FIRES on inCustomResource aliasing inBody after normalization",
+         len(_h) == 1 and _h[0][3] and "ALIASED" in _h[0][2])
+
+    # ...and the fix must be silent. One variable: where inCustomResource points.
+    _h = _rows_for(_rverb("driver_info.redfish_password", "spec.extra.bmc_secret"), "H")
+    _hcase("H1 silent when inCustomResource is the POINTER object", len(_h) == 0)
+
+    # A PLAIN RELOCATION IS NOT AN ALIAS. Without a resolver nothing is stripped, so the
+    # source legitimately stays in the body; flagging it would refuse working documents.
+    _d = rd()
+    _vd = _d["spec"]["resource"]["verbsDescription"]
+    _d["spec"]["resource"]["verbsDescription"] = [_vd[0], {
+        "action": "create", "method": "POST", "path": "/v1/things",
+        "fieldMapping": [{"inBody": "name", "inCustomResource": "spec.name"}]}, _vd[2]]
+    _hcase("H1 silent for a NON-resolver entry whose source matches its destination",
+         len([r for r in evaluate(_d, BASE_OAS, "thing") if r[0] == "H"]) == 0)
+
+    # H2 -- a guard that reads something other than what the resolver reads.
+    _h = _rows_for(_rverb("driver_info.redfish_password", "spec.extra.bmc_secret",
+                          guard="spec.extra.bmc_secret.key"), "H")
+    _hcase("H2 FIRES when the `when` guard path != nameFromCustomResource",
+         len(_h) == 1 and _h[0][3] and "GUARD READS ELSEWHERE" in _h[0][2])
+
+    _h = _rows_for(_rverb("driver_info.redfish_password", "spec.extra.bmc_secret",
+                          guard="spec.extra.bmc_secret.name"), "H")
+    _hcase("H2 silent when the guard reads exactly what the resolver reads", len(_h) == 0)
+
+    # AN UNGUARDED RESOLVER IS NOT SCREENED, DELIBERATELY. Whether a missing pointer
+    # SHOULD hard-error cannot be decided from the document: for a kind whose Secret is
+    # mandatory it is correct, and for an optional one it breaks every legacy CR. A
+    # warning with no decidable action is how readers learn to ignore warnings.
+    _h = _rows_for(_rverb("driver_info.redfish_password", "spec.extra.bmc_secret",
+                          guard=None), "H")
+    _hcase("H does not flag a resolver with NO guard (not statically decidable)",
+         len(_h) == 0)
+
+    # AND CHECK C MUST NOT TOUCH A RESOLVER ENTRY. Merging `fieldMapping` into the read
+    # sites exposed C to resolver entries for the first time; demanding their
+    # inCustomResource resolve as a value source is oasgen's own #455 over-reach, which
+    # refused working configurations. `spec.extra.bmc_secret` resolves in no spec pool.
+    _hcase("C does NOT demand a resolver's inCustomResource resolve (#455 over-reach)",
+         len(_rows_for(_rverb("driver_info.redfish_password",
+                              "spec.extra.bmc_secret"), "C")) == 0)
+
+    # BOTH LISTS ARE READ. The screen read only the deprecated one until the node
+    # definition moved a verb to `fieldMapping`; nothing failed, it just stopped looking.
+    _both = rd()
+    _bvd = _both["spec"]["resource"]["verbsDescription"]
+    _bvd[2] = {"action": "get", "method": "GET", "path": "/v1/things/{uuid}",
+               "fieldMapping": [{"inPath": "uuid", "inCustomResource": "spec.name"}]}
+    _hcase("a mapping declared on `fieldMapping` is seen (not only requestFieldMapping)",
+         len(request_mappings(_bvd[2])) == 1 and
+         request_mappings(_bvd[2])[0]["inPath"] == "uuid")
+
+    # ...and an inResponse entry is NOT request-direction, so it must be excluded.
+    _hcase("an inResponse-only fieldMapping entry is not read as request-direction",
+         request_mappings({"fieldMapping": [{"inResponse": "x", "inCustomResource": "status.x"}]}) == [])
+
+    # strip_cr_prefix must CHAIN its trims, matching rdc exactly.
+    _hcase("strip_cr_prefix chains spec. then status. like rdc's TrimPrefix pair",
+         strip_cr_prefix("spec.status.x") == "x" and
+         strip_cr_prefix("spec.driver_info.redfish_password") == "driver_info.redfish_password" and
+         strip_cr_prefix("extra.bmc_secret") == "extra.bmc_secret")
 
     # THE POLICY IS A PER-VERB FIELD. Three arms over one variable: WHERE the key sits.
     #

@@ -179,3 +179,45 @@ request. A reworded message still carrying the harmful advice fails these arms.
 generate against their own documents. It asserts nothing about warnings (several are
 expected and documented by this repo's own screen), only that generation does not break
 for a real seven-kind corpus.
+
+---
+
+# `ironic_secretref_crd_stability_test.go` — does the `secretRef` resolver regenerate the node CRD?
+
+Moving the BMC password out of plaintext needs a `secretRef` resolver on the node
+definition's create and update verbs. The question that decided **how** to do it:
+
+> does adding that resolver change what oasgen GENERATES?
+
+## Why it decides the shape of the change
+
+Regenerating the node CRD unserves its previous version, and that wedges every
+`kubernetes-cluster` render here until the parent chart's pin moves — measured twice in
+this repo. So the answer is the difference between a manifest-only edit and a coordinated
+four-chart release.
+
+## Result, 2026-11-14, oasgen 0.61.0 (the pinned version)
+
+```
+ARM A  with the resolver      spec schema 2264 bytes
+ARM B  without the resolver   spec schema 2264 bytes   IDENTICAL
+CONTROL  ExcludedSpecFields=["extra"]   2264 -> 2183   the comparison CAN see a change
+```
+
+So the resolver is manifest-only: no regeneration, no chart lockstep.
+
+It is identical because the resolver needed **no OAS change**. `NodeCreate.required` is
+`[driver]`, so `dropResolverSuppliedRequired` has nothing to drop, and both `driver_info`
+and `extra` are `additionalProperties: true`, so the pointer carrier
+`spec.extra.bmc_secret` is expressible without declaring a property.
+
+## The control is not optional here
+
+Byte equality is exactly what a collapsed instrument produces — two renders agreeing to
+the byte is a tell, not a finding (this repo has one of those on record). So the control
+excludes `extra` and demands the bytes **move**. It also pins this file's premise: if
+excluding `extra` changed nothing, `extra` would not be a generated spec property and the
+carrier path could not resolve at all. One assertion, two failure modes caught.
+
+`loadNodeForSecretRef` also VOIDs if the shipped manifest declares no resolver entries,
+because then both arms are the same input and byte equality is a tautology.

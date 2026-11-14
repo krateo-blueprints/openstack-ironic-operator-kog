@@ -147,6 +147,74 @@ spec:
         headers:
           - name: X-OpenStack-Ironic-API-Version
             value: "1.109"
+        # THE BMC PASSWORD COMES FROM A SECRET, NOT FROM THE CR.
+        #
+        # Until now `driver_info.redfish_password` sat in plaintext in every
+        # BaremetalNode CR and in every example manifest here. A secretRef resolver
+        # substitutes the value from a Secret in the CR's OWN namespace at request time
+        # (there is no field to name another one), so the CR carries only the name.
+        #
+        # WHY THE CARRIER IS `spec.extra.*` AND NOT A NEW SPEC FIELD. The resolver's
+        # nameFromCustomResource/keyFromCustomResource are JSONPaths into the CR, and the
+        # CR spec is generated from the OAS. oasgen has `additionalStatusFields` but NO
+        # spec counterpart, so a spec-only property cannot be declared at all. Ironic's
+        # `extra` is a free-form object (additionalProperties: true) intended for exactly
+        # this kind of operator metadata, so `spec.extra.bmc_secret.name` is expressible
+        # with NO OAS change and NO CRD regeneration -- which matters here, because
+        # regenerating the node CRD unserves its old version and wedges every
+        # kubernetes-cluster render until the parent chart's pin moves. The Secret's NAME
+        # is not sensitive, and Ironic storing it in `extra` makes the binding visible
+        # from the vendor side.
+        #
+        # THE `when` GUARD IS MANDATORY, NOT A NICETY. readStringPath
+        # (rdc internal/tools/fieldmapping/resolver.go:123) returns an ERROR when the path
+        # is absent, and ResolveRequestResolvers propagates it, so WITHOUT the guard every
+        # existing CR that names no Secret would stop reconciling. With it, a CR that omits
+        # bmc_secret.name skips the mapping entirely -- no Secret is read, nothing is
+        # written to the request -- and the plaintext value flows exactly as before.
+        # `bmc_secret.key` must be set alongside the name: it is a SECOND, UNGUARDED read,
+        # and its absence is a loud error naming the path.
+        #
+        # AND THE GUARD IS ONLY SAFE BECAUSE inCustomResource DOES NOT ALIAS inBody.
+        # oasgen warned that a guard which does not hold omits the field with no error.
+        # That is true when inCustomResource names inBody's own location, because
+        # stripResolverSources then deletes it. Here the pointer object is a different
+        # path, so a skipped mapping leaves the body exactly as step 3 assembled it from
+        # spec: a legacy CR's plaintext password still ships, unchanged.
+        #
+        # DO NOT ADD A jq valueMapping TO THIS ENTRY. On a request-direction entry a jq
+        # valueMapping makes BuildCallConfig skip the mapping ENTIRELY (rdc
+        # internal/tools/fieldmapping/fieldmapping.go:10-13 and 21-24), so the field would
+        # never reach the outgoing body and the password would silently stop shipping.
+        #
+        # `fieldMapping`, not the `requestFieldMapping` used by the other verbs here: the
+        # latter is deprecated and "carries no value transform" (oasgen types.go:591-595),
+        # so it cannot hold a resolver at all.
+        fieldMapping:
+          - inBody: driver_info.redfish_password
+            # POINTS AT THE POINTER OBJECT, AND MUST NOT ALIAS inBody.
+            #
+            # stripResolverSources (rdc builder/builder.go:472) removes inCustomResource
+            # from the assembled body for EVERY resolver entry, UNCONDITIONALLY -- it does
+            # not check whether the resolver actually resolved. That is right for its
+            # purpose: the {name,key} pointer is CR-domain plumbing no API expects, and a
+            # strict vendor 400s on it. But it means naming
+            # `spec.driver_info.redfish_password` here -- the same location inBody fills --
+            # would DELETE the resolved password from the body immediately after the
+            # resolver wrote it. Read in the source, not inferred; it was this entry's
+            # first shape.
+            #
+            # Pointing at the parent object instead strips both `name` and `key` in one
+            # pass and leaves inBody's target untouched. It is also what makes the `when`
+            # guard safe -- see the block above.
+            inCustomResource: spec.extra.bmc_secret
+            resolver:
+              type: secretRef
+              when:
+                customResourceFieldPresent: spec.extra.bmc_secret.name
+              secretRef:
+                nameFromCustomResource: spec.extra.bmc_secret.name
+                keyFromCustomResource: spec.extra.bmc_secret.key
       # Ironic's PATCH is RFC-6902 ONLY: it requires a JSON array of operations and
       # rejects a merge-style object with 400 "Schema error for patch: {} is not of type
       # 'array'". KOG emits a merge object, so this used to be translated by
@@ -168,9 +236,30 @@ spec:
             value: "1.109"
         requestTransform:
           inline: 'to_entries | map({op: "replace", path: ("/" + .key), value: .value})'
-        requestFieldMapping:
+        # Migrated from `requestFieldMapping` so this verb carries ONE list: the resolver
+        # below cannot live on the deprecated field. Semantically identical -- oasgen
+        # treats each requestFieldMapping entry "as an equivalent request-direction
+        # FieldMappingItem at load time" (types.go:591-593).
+        fieldMapping:
           - inPath: uuid
             inCustomResource: spec.name
+          # The resolved password lands in the body BEFORE the requestTransform above runs:
+          # ApplyRequestTransform is called from Create/Update/Delete AFTER the body is
+          # assembled (rdc fieldmapping.go:25-26). So `to_entries` sees driver_info already
+          # carrying the secret value and emits it inside the /driver_info replace op. If
+          # that order were reversed the rotation would silently never ship, because the
+          # transform's output is an ARRAY of ops with no driver_info key to fill.
+          - inBody: driver_info.redfish_password
+            # The pointer object, NOT inBody's own path -- see the create verb above:
+            # stripResolverSources would otherwise delete the value just resolved.
+            inCustomResource: spec.extra.bmc_secret
+            resolver:
+              type: secretRef
+              when:
+                customResourceFieldPresent: spec.extra.bmc_secret.name
+              secretRef:
+                nameFromCustomResource: spec.extra.bmc_secret.name
+                keyFromCustomResource: spec.extra.bmc_secret.key
       - action: delete
         method: DELETE
         path: /v1/nodes/{uuid}
