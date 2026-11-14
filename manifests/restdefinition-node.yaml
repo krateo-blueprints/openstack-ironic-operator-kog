@@ -192,22 +192,41 @@ spec:
         # so it cannot hold a resolver at all.
         fieldMapping:
           - inBody: driver_info.redfish_password
-            # POINTS AT THE POINTER OBJECT, AND MUST NOT ALIAS inBody.
+            # NO inCustomResource, AND THAT IS THE FIX -- MEASURED, NOT REASONED.
             #
-            # stripResolverSources (rdc builder/builder.go:472) removes inCustomResource
-            # from the assembled body for EVERY resolver entry, UNCONDITIONALLY -- it does
-            # not check whether the resolver actually resolved. That is right for its
-            # purpose: the {name,key} pointer is CR-domain plumbing no API expects, and a
-            # strict vendor 400s on it. But it means naming
-            # `spec.driver_info.redfish_password` here -- the same location inBody fills --
-            # would DELETE the resolved password from the body immediately after the
-            # resolver wrote it. Read in the source, not inferred; it was this entry's
-            # first shape.
+            # This entry first named `spec.driver_info.redfish_password` here, which aliases
+            # inBody and would have had stripResolverSources delete the resolved value.
+            # It then named `spec.extra.bmc_secret`, the pointer object, which avoided the
+            # aliasing and introduced a WORSE failure that only a cluster showed:
             #
-            # Pointing at the parent object instead strips both `name` and `key` in one
-            # pass and leaves inBody's target untouched. It is also what makes the `when`
-            # guard safe -- see the block above.
-            inCustomResource: spec.extra.bmc_secret
+            #   stripResolverSources removes inCustomResource from the REQUEST body, so
+            #   Ironic stored `extra: {}` while the CR's spec kept `extra.bmc_secret`.
+            #   The drift comparison reports that as
+            #     "field extra: object is set in the custom resource but empty on the
+            #      remote; the update has been issued 5 times without resolving it"
+            #   -> five real PATCHes against the vendor, then Ready=False/DriftNotConverging
+            #   permanently. Measured on a kind cluster at oasgen 0.61.0, 2026-11-14.
+            #
+            # Omitting inCustomResource skips the strip entirely (builder.go:474 returns
+            # early on an empty value), so the pointer rides into Ironic's `extra`, spec and
+            # response agree, and the node reaches Ready=True/Available with ZERO updates.
+            # Three arms, one variable each, same cluster:
+            #
+            #   inCustomResource = pointer object   DriftNotConverging  extra={}  5 PATCHes
+            #   inCustomResource OMITTED            Available           extra={bmc_secret}  0
+            #   no pointer at all (control)         no updates          -- baseline is clean
+            #
+            # `driver_info.redfish_password` came back `******` in BOTH arms, so the resolver
+            # works either way; only convergence differs.
+            #
+            # THE COST, ACCEPTED: the Secret's NAME and KEY are stored in Ironic's `extra`.
+            # Neither is sensitive, `extra` exists for operator metadata, and it makes the
+            # binding visible from the vendor side. The alternative -- stripping it -- is
+            # what breaks, because Ironic echoes `extra` back.
+            #
+            # DO NOT "RESTORE" inCustomResource FOR BETTER ERROR MESSAGES. It is the label
+            # rdc uses when a resolver fails, which is a real loss, and it is not worth five
+            # vendor writes and a permanently non-Ready CR.
             resolver:
               type: secretRef
               when:
@@ -250,9 +269,9 @@ spec:
           # that order were reversed the rotation would silently never ship, because the
           # transform's output is an ARRAY of ops with no driver_info key to fill.
           - inBody: driver_info.redfish_password
-            # The pointer object, NOT inBody's own path -- see the create verb above:
-            # stripResolverSources would otherwise delete the value just resolved.
-            inCustomResource: spec.extra.bmc_secret
+            # NO inCustomResource -- see the create verb above. Naming the pointer object
+            # here makes stripResolverSources empty Ironic's `extra`, which is permanent
+            # non-converging drift. Measured; do not restore it.
             resolver:
               type: secretRef
               when:

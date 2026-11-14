@@ -695,6 +695,18 @@ def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
     # read against the WHOLE CR by fieldpath, so `spec.` is meaningful there; only
     # inCustomResource is compared against a body location, after the runtime's trim. Two
     # predicates, two normalizations, sharing nothing but the word "path".
+    # WHAT THE VENDOR ECHOES BACK, for H3. Taken from the `get` verb's 2xx response
+    # (response_item_props' "(unwrapped)" branch is the single-object case), falling back
+    # to the findby collection item when a kind has no get. A field the vendor never
+    # returns cannot produce the "empty on the remote" drift, so H3 must not fire on it.
+    echoed = set()
+    for _v in verbs:
+        if (_v.get("action") or "") in ("get", "findby") and _v.get("path"):
+            try:
+                _w, _props = response_item_props(oas, _v["path"], (_v.get("method") or "GET").lower())
+                echoed |= set(_props or ())
+            except Exception:
+                pass          # a document this screen cannot read is handled by checks A/B
     for v in verbs:
         for m in request_mappings(v):
             r = m.get("resolver") or {}
@@ -711,6 +723,40 @@ def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
                             "nothing errors. Point inCustomResource at the POINTER object "
                             "-- the {name,key} parent -- which is plumbing to strip, not "
                             "the destination" % (inbody, icr), True))
+            # H3 -- STRIPPING A POINTER OUT OF A VENDOR-ECHOED OBJECT IS DRIFT.
+            #
+            # MEASURED ON A CLUSTER, which is the only reason this predicate exists: no
+            # amount of reading the comparison code produced it. stripResolverSources
+            # removes inCustomResource from the REQUEST, so if that path sits inside an
+            # object the vendor echoes back, the remote copy comes back EMPTY while the
+            # spec still carries the pointer. rdc reports
+            #   "field <x>: object is set in the custom resource but empty on the remote"
+            # and issues the update five times before the non-convergence guard latches
+            # the CR at Ready=False/DriftNotConverging -- five real vendor writes.
+            #
+            # Measured 2026-11-14, oasgen 0.61.0, three arms one variable:
+            #   inCustomResource = spec.extra.bmc_secret  DriftNotConverging, 5 PATCHes
+            #   inCustomResource OMITTED                  Ready=Available,    0 PATCHes
+            #   no pointer at all                         baseline clean
+            #
+            # THE FIX IS ALWAYS AVAILABLE: inCustomResource is optional on `fieldMapping`,
+            # and omitting it skips the strip (builder.go:474 returns early on ""). The
+            # pointer then rides into the vendor, which for a name+key is harmless.
+            #
+            # Fires only when the stripped root is a property this document's OWN response
+            # schema declares -- a vendor that never echoes it cannot produce the drift,
+            # and flagging that would refuse a working definition.
+            if icr and strip_cr_prefix(icr) and segs(strip_cr_prefix(icr))[0] in echoed:
+                root = segs(strip_cr_prefix(icr))[0]
+                out.append(("H", "%s %s" % (v.get("action"), icr),
+                            "STRIPPED FROM A VENDOR-ECHOED OBJECT: stripResolverSources "
+                            "removes `%s` from the request, but `%s` is declared in this "
+                            "document's response schema, so the remote copy comes back EMPTY "
+                            "while spec still carries the pointer. That is non-converging "
+                            "drift: measured as five vendor writes and then "
+                            "Ready=False/DriftNotConverging. OMIT inCustomResource -- it is "
+                            "optional, and omitting it skips the strip so the pointer rides "
+                            "through and the two agree" % (icr, root), True))
             guard = (r.get("when") or {}).get("customResourceFieldPresent") or ""
             namep = (r.get("secretRef") or {}).get("nameFromCustomResource") or ""
             if guard and namep and segs(guard) != segs(namep):
@@ -1112,6 +1158,33 @@ def selftest():
          strip_cr_prefix("spec.status.x") == "x" and
          strip_cr_prefix("spec.driver_info.redfish_password") == "driver_info.redfish_password" and
          strip_cr_prefix("extra.bmc_secret") == "extra.bmc_secret")
+
+    # H3 ON THE REAL DOCUMENTS, which is the only arm that could have caught what shipped.
+    # The fixture IS the historical bad state: the shape merged in #80 and measured on a
+    # cluster as five vendor PATCHes then Ready=False/DriftNotConverging. Two arms over one
+    # variable -- whether the resolver entries declare inCustomResource at all.
+    import copy as _copy
+    try:
+        _rdn = yaml.safe_load(open("manifests/restdefinition-node.yaml").read())
+        _oasn = yaml.safe_load(open("oas/ironic-node.yaml").read())
+    except Exception as _e:
+        _rdn = _oasn = None
+        _hcase("H3 real documents: node manifest readable", False)
+    if _rdn and _oasn:
+        _h_fixed = [r for r in evaluate(_rdn, _oasn, "node") if r[0] == "H"]
+        _hcase("H3 real documents: the SHIPPED node definition has no H row",
+               len(_h_fixed) == 0)
+        _bk = _copy.deepcopy(_rdn)
+        # NOT `_v`/`_e`: the policy arms below bind `_v` to the verb LIST, and shadowing
+        # it here turned their `_v[0]` into a KeyError. Caught by running the suite.
+        for _h3v in _bk["spec"]["resource"]["verbsDescription"]:
+            for _h3e in (_h3v.get("fieldMapping") or []):
+                if _h3e.get("resolver"):
+                    _h3e["inCustomResource"] = "spec.extra.bmc_secret"
+        _h_bk = [r for r in evaluate(_bk, _oasn, "node") if r[0] == "H"]
+        _hcase("H3 real documents: re-injecting inCustomResource FIRES on both verbs",
+               len(_h_bk) == 2 and all(r[3] for r in _h_bk)
+               and "VENDOR-ECHOED" in _h_bk[0][2])
 
     # THE POLICY IS A PER-VERB FIELD. Three arms over one variable: WHERE the key sits.
     #
