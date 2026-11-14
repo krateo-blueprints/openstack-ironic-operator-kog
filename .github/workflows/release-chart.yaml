@@ -250,22 +250,50 @@ jobs:
     # property rather than a convenience one.
     #
     # Verified before pinning, not taken on report:
-    #   git ls-remote .../charts 'refs/tags/1.0.1^{}' -> 36ea357cb0fe4b49628cc984d9939babf0049d03
+    #   git ls-remote .../charts 'refs/tags/1.0.4^{}' -> 1e6210ab2a8b66ff1a8d6da86287e671154f44a2
+    #
+    # THE `^{}` IS LOAD-BEARING. The annotated tag OBJECT 1.0.4 is a98bd9db, a
+    # DIFFERENT sha from the commit it points at. Pinning the tag object would pin
+    # something that is not the reviewed tree, and upstream's own #9 is about
+    # exactly that ("pin the tag's commit, not the tag object").
+    #
     # (This block described 1.0.0 / a2d63ba for a while after the pin moved to
-    #  1.0.1 in fd45819, whose subject was about the chartrepo ConfigMap. A
-    #  reader auditing the supply-chain pin would have read a verification of a
-    #  SHA that was not in use. /code-review caught it. When Dependabot advances
-    #  this pin, this record has to move with it.)
-    # and at that SHA the publisher really does contain #6 and #7 --
-    # `RELEASES_BASE` is hardcoded to the CHARTS repo's own releases
-    # (github.com/krateo-blueprints/charts/releases/download), with zero
-    # occurrences derived from `inputs.source_repo`, and the served-index check
-    # runs `env -u GH_TOKEN helm pull --repo`, which strips the token so the pull
-    # is genuinely anonymous.
+    #  1.0.1 in fd45819, whose subject was about the chartrepo ConfigMap. A reader
+    #  auditing the supply-chain pin would have read a verification of a SHA that
+    #  was not in use. /code-review caught it, and the note then PREDICTED, in its
+    #  last sentence, that Dependabot advancing the pin would do it again. It did:
+    #  #79 moved the pin to 1.0.4 while this record still read 1.0.1 / 36ea357.
+    #  Twice now. A record that has to be moved by hand is a record that gets left
+    #  behind, so treat the prediction as the finding rather than the warning.)
+    #
+    # RE-MEASURED at 1e6210a rather than carried across, because 1.0.2/1.0.3/1.0.4
+    # changed this very file (+57/-40):
+    #   RELEASES_BASE   still hardcoded to
+    #                   github.com/krateo-blueprints/charts/releases/download --
+    #                   3 occurrences, ZERO derived from `inputs.source_repo`
+    #   served index    still `env -u GH_TOKEN helm pull --repo`, the line
+    #                   byte-identical to 36ea357's
+    #
+    # AND SCOPED DELIBERATELY, where the old wording was absolute. `env -u GH_TOKEN`
+    # removes the only token this workflow puts in the environment: GH_TOKEN, set at
+    # workflow level from PUBLISH_TOKEN, with no GITHUB_TOKEN, HELM_REGISTRY_CONFIG
+    # or HELM_REPOSITORY_CONFIG anywhere in the file. That is what was measured. It
+    # is NOT a proof that helm sends no credential from some other source, which is
+    # what the old "genuinely anonymous" claimed. Upstream dropped an unmeasured
+    # "trims it" from their own docs in 545626e6 for the same reason; this is that
+    # correction applied on the caller's side.
+    #
+    # INPUT CONTRACT UNCHANGED across the bump, checked rather than assumed: inputs
+    # [artifact, channel*, git_tag*, source_repo*] and secret [PUBLISH_TOKEN*] are
+    # identical at 36ea357 and 1e6210a, so the `with:` block below needs no edit --
+    # and a contract break here would surface only at tag time, on the one path
+    # that publishes. The three upstream fixes are a fresh-clone index push that
+    # retries on a concurrent publish (1.0.2), a case-insensitive repository name
+    # compare (1.0.3), and Node 24 actions pinned by SHA (1.0.4).
     #
     # .github/dependabot.yml advances this; a SHA pin with nothing advancing it
     # is worse than @main because it looks deliberate while going stale.
-    uses: krateo-blueprints/charts/.github/workflows/publish-chart.yaml@36ea357cb0fe4b49628cc984d9939babf0049d03 # 1.0.1
+    uses: krateo-blueprints/charts/.github/workflows/publish-chart.yaml@1e6210ab2a8b66ff1a8d6da86287e671154f44a2 # 1.0.4
     with:
       source_repo: ${{ github.repository }}
       git_tag: ${{ github.ref_name }}
