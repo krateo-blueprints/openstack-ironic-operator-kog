@@ -41,7 +41,21 @@ spec:
       # X-OpenStack-Ironic-API-Version 6x in oas/ironic-port.yaml. It resolves to
       # nothing and produces a generation warning.
       #
-      # It is here because `configurationFields` is IMMUTABLE once the CRD has been
+      # It is here because `configurationFields` is IMMUTABLE -- UNCONDITIONALLY, and
+      # NOT "once the CRD has been generated" as the refusal message claims. The rule is
+      # `self == oldSelf` (oasgen types.go:994), which has no CRD precondition; the
+      # message on the SAME annotation line invents one. aruba-provider-kog measured the
+      # sibling field's identical refusal on a cluster where no CRD had ever been
+      # generated. So this entry was unremovable from the moment the RestDefinition
+      # existed. Quoting an error message is not reading the mechanism, and here the
+      # mechanism was one clause to the left of the quote.
+      #
+      # oasgen #573 will make a DEAD entry removable -- dead meaning the document no
+      # longer declares the field, so no Configuration object can hold a value at that
+      # path. A LIVE removal stays refused, because configurationFields MOVES a field
+      # (out of the generated kind's spec, into the Configuration CRD) rather than hiding
+      # it, so removing a live entry prunes stored Configuration values. Not in the same
+      # release as #666. Revisit this comment when it ships; until then, unremovable
       # generated, and this entry is in what the cluster already STORED. PR #27
       # removed it from this file on 2026-11-11 as dead, which silently made
       # restdefinition-port.yaml UN-APPLIABLE on every existing install:

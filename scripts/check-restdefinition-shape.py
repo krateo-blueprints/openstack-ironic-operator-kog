@@ -184,6 +184,67 @@ def body_props(oas, path, method):
     return set()
 
 
+def deref(schema, oas, depth=0):
+    """Follow a $ref to the schema it names. Bounded, like resolve()."""
+    if not isinstance(schema, dict) or depth > 12:
+        return schema if isinstance(schema, dict) else None
+    if "$ref" in schema:
+        name = schema["$ref"].split("/")[-1]
+        return deref((oas.get("components") or {}).get("schemas", {}).get(name), oas, depth + 1)
+    return schema
+
+
+def subschema_at(schema, oas, segments, depth=0):
+    """The subschema at a dotted path, or None. Follows $ref and composition.
+
+    WHY A PATH WALK AND NOT A FLAT NAME SET. check H's first version asked whether the
+    pointer path's FIRST segment appeared among the response's top-level property names.
+    That is wrong twice: a container nested two levels down is judged by its root, and a
+    root name that merely coincides with an unrelated response property is a false
+    positive -- and H's message tells an author to change their manifest, so a false
+    positive costs someone real work. oasgen-provider pointed out they already had the
+    right primitive (lookupTypeByPath) for exactly this reason.
+
+    A FREE-FORM OBJECT CONTAINS ANY KEY. `additionalProperties: true` with no declared
+    properties is how Ironic describes `extra` and `driver_info`, and the vendor echoes
+    back whatever was stored in them -- so such a container counts as present even though
+    no sub-property is declared.
+    """
+    schema = deref(schema, oas, depth)
+    if not isinstance(schema, dict) or depth > 12:
+        return None
+    if not segments:
+        return schema
+    head, rest = segments[0], segments[1:]
+    props = schema.get("properties") or {}
+    if head in props:
+        return subschema_at(props[head], oas, rest, depth + 1)
+    for key in ("allOf", "anyOf", "oneOf"):
+        for sub in schema.get(key) or []:
+            got = subschema_at(sub, oas, segments, depth + 1)
+            if got is not None:
+                return got
+    if schema.get("additionalProperties") is True:
+        return {"type": "object", "additionalProperties": True}
+    return None
+
+
+def response_schema_for(oas, path, method):
+    """The raw 2xx response schema for one operation, unwrapped if it is a collection."""
+    op = (oas.get("paths") or {}).get(path, {}).get(method, {})
+    for code, resp in (op.get("responses") or {}).items():
+        if not str(code).startswith("2"):
+            continue
+        for _ct, media in (resp.get("content") or {}).items():
+            schema = deref(media.get("schema"), oas) or {}
+            for _w, sub in (schema.get("properties") or {}).items():
+                sub = deref(sub, oas) or {}
+                if sub.get("type") == "array":
+                    return deref(sub.get("items"), oas)
+            return schema
+    return None
+
+
 def response_item_props(oas, path, method):
     """For a collection endpoint, the properties of ONE item."""
     op = (oas.get("paths") or {}).get(path, {}).get(method, {})
@@ -695,6 +756,35 @@ def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
     # read against the WHOLE CR by fieldpath, so `spec.` is meaningful there; only
     # inCustomResource is compared against a body location, after the runtime's trim. Two
     # predicates, two normalizations, sharing nothing but the word "path".
+    # WHAT THE VENDOR ECHOES BACK, for H3 -- the raw schema, walked by PATH.
+    # A field the vendor never returns cannot produce the "empty on the remote" drift,
+    # so H3 must not fire on it. Prefer the `get` verb's single-object response; fall
+    # back to findby's collection item for a kind with no get.
+    resp_schemas = []
+    for _v in verbs:
+        if (_v.get("action") or "") in ("get", "findby") and _v.get("path"):
+            try:
+                _sc = response_schema_for(oas, _v["path"], (_v.get("method") or "GET").lower())
+                if _sc:
+                    resp_schemas.append(_sc)
+            except Exception:
+                pass          # an unreadable document is checks A/B's business
+
+    def container_echoed(container_segs):
+        """Does the vendor echo back an OBJECT at this container path?
+
+        Requires an object, not merely a name match: a string-typed property that
+        happens to share the name cannot be a container the strip empties.
+        """
+        for _sc in resp_schemas:
+            got = subschema_at(_sc, oas, list(container_segs))
+            if not isinstance(got, dict):
+                continue
+            if got.get("type") == "object" or got.get("properties") \
+               or got.get("additionalProperties") is True:
+                return True
+        return False
+
     for v in verbs:
         for m in request_mappings(v):
             r = m.get("resolver") or {}
@@ -711,6 +801,62 @@ def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
                             "nothing errors. Point inCustomResource at the POINTER object "
                             "-- the {name,key} parent -- which is plumbing to strip, not "
                             "the destination" % (inbody, icr), True))
+            # H3 -- STRIPPING A POINTER OUT OF A VENDOR-ECHOED OBJECT IS DRIFT.
+            #
+            # MEASURED ON A CLUSTER, which is the only reason this predicate exists: no
+            # amount of reading the comparison code produced it. stripResolverSources
+            # removes inCustomResource from the REQUEST, so if that path sits inside an
+            # object the vendor echoes back, the remote copy comes back EMPTY while the
+            # spec still carries the pointer. rdc reports
+            #   "field <x>: object is set in the custom resource but empty on the remote"
+            # and issues the update five times before the non-convergence guard latches
+            # the CR at Ready=False/DriftNotConverging -- five real vendor writes.
+            #
+            # Measured 2026-11-14, oasgen 0.61.0, three arms one variable:
+            #   inCustomResource = spec.extra.bmc_secret  DriftNotConverging, 5 PATCHes
+            #   inCustomResource OMITTED                  Ready=Available,    0 PATCHes
+            #   no pointer at all                         baseline clean
+            #
+            # THE FIX IS ALWAYS AVAILABLE: inCustomResource is optional on `fieldMapping`,
+            # and omitting it skips the strip (builder.go:474 returns early on ""). The
+            # pointer then rides into the vendor, which for a name+key is harmless.
+            #
+            # Fires only when the stripped root is a property this document's OWN response
+            # schema declares -- a vendor that never echoes it cannot produce the drift,
+            # and flagging that would refuse a working definition.
+            # THE SAME-CONTAINER EXCEPTION, AND IT IS PROVABLY SAFE RATHER THAN A
+            # WEAKENING. applyFieldMapping writes the resolved value at inBody
+            # (builder.go:212 -> SetNestedField at :380) and stripResolverSources runs
+            # AFTER it, at :221. So when inBody and inCustomResource share a container,
+            # that container already holds the inBody key when the pointer is removed --
+            # the strip CANNOT empty it, and comparison.go:184 (len(mg)>0 && len(rm)==0)
+            # cannot fire. Verified in the rdc source here, not taken on report.
+            #
+            # This is a property of the DEFINITION, not of the clock, which is the
+            # distinction that matters: a runtime-written sibling (this repo's
+            # extra.etcd_ip, written by scripts/ironic-node-extra-bridge.py) makes the
+            # shape converge only AFTER the bridge runs, so it is not a mitigation. A
+            # same-container inBody is always true. Raised by oasgen-provider from
+            # azuredevops-provider-kog's four kinds, which sit exactly on this boundary:
+            # their secret is the container's ONLY parameter and they are clear solely
+            # because of this ordering.
+            #
+            # A top-level pointer has container [] and so does a top-level inBody; equal,
+            # and correctly so -- the body root still holds the inBody key.
+            _icr_segs = segs(strip_cr_prefix(icr)) if icr else []
+            _body_segs = segs(inbody)
+            _same_container = bool(_icr_segs) and _icr_segs[:-1] == _body_segs[:-1]
+            if icr and _icr_segs and not _same_container and container_echoed(_icr_segs[:-1]):
+                root = ".".join(_icr_segs[:-1]) or _icr_segs[0]
+                out.append(("H", "%s %s" % (v.get("action"), icr),
+                            "STRIPPED FROM A VENDOR-ECHOED OBJECT: stripResolverSources "
+                            "removes `%s` from the request, but `%s` is declared in this "
+                            "document's response schema, so the remote copy comes back EMPTY "
+                            "while spec still carries the pointer. That is non-converging "
+                            "drift: measured as five vendor writes and then "
+                            "Ready=False/DriftNotConverging. OMIT inCustomResource -- it is "
+                            "optional, and omitting it skips the strip so the pointer rides "
+                            "through and the two agree" % (icr, root), True))
             guard = (r.get("when") or {}).get("customResourceFieldPresent") or ""
             namep = (r.get("secretRef") or {}).get("nameFromCustomResource") or ""
             if guard and namep and segs(guard) != segs(namep):
@@ -1112,6 +1258,68 @@ def selftest():
          strip_cr_prefix("spec.status.x") == "x" and
          strip_cr_prefix("spec.driver_info.redfish_password") == "driver_info.redfish_password" and
          strip_cr_prefix("extra.bmc_secret") == "extra.bmc_secret")
+
+    # H3 ON THE REAL DOCUMENTS, which is the only arm that could have caught what shipped.
+    # The fixture IS the historical bad state: the shape merged in #80 and measured on a
+    # cluster as five vendor PATCHes then Ready=False/DriftNotConverging. Two arms over one
+    # variable -- whether the resolver entries declare inCustomResource at all.
+    import copy as _copy
+    try:
+        _rdn = yaml.safe_load(open("manifests/restdefinition-node.yaml").read())
+        _oasn = yaml.safe_load(open("oas/ironic-node.yaml").read())
+    except Exception as _e:
+        _rdn = _oasn = None
+        _hcase("H3 real documents: node manifest readable", False)
+    if _rdn and _oasn:
+        _h_fixed = [r for r in evaluate(_rdn, _oasn, "node") if r[0] == "H"]
+        _hcase("H3 real documents: the SHIPPED node definition has no H row",
+               len(_h_fixed) == 0)
+        _bk = _copy.deepcopy(_rdn)
+        # NOT `_v`/`_e`: the policy arms below bind `_v` to the verb LIST, and shadowing
+        # it here turned their `_v[0]` into a KeyError. Caught by running the suite.
+        for _h3v in _bk["spec"]["resource"]["verbsDescription"]:
+            for _h3e in (_h3v.get("fieldMapping") or []):
+                if _h3e.get("resolver"):
+                    _h3e["inCustomResource"] = "spec.extra.bmc_secret"
+        _h_bk = [r for r in evaluate(_bk, _oasn, "node") if r[0] == "H"]
+        _hcase("H3 real documents: re-injecting inCustomResource FIRES on both verbs",
+               len(_h_bk) == 2 and all(r[3] for r in _h_bk)
+               and "VENDOR-ECHOED" in _h_bk[0][2])
+
+        # ...AND THE SAME-CONTAINER EXCEPTION, which is the discriminator for H3. Without
+        # it H3 is "any resolver with an inCustomResource in an echoed object", which
+        # over-fires on a shape that provably cannot break: applyFieldMapping writes
+        # inBody BEFORE stripResolverSources runs, so a shared container is never emptied.
+        # One variable against the arm above -- the pointer's container, not its presence.
+        _sm = _copy.deepcopy(_rdn)
+        for _h3v2 in _sm["spec"]["resource"]["verbsDescription"]:
+            for _h3e2 in (_h3v2.get("fieldMapping") or []):
+                if _h3e2.get("resolver"):
+                    _h3e2["inCustomResource"] = "spec.driver_info.bmc_secret"
+        _h_sm = [r for r in evaluate(_sm, _oasn, "node") if r[0] == "H"]
+        _hcase("H3 real documents: a SAME-CONTAINER pointer is silent (azuredevops shape)",
+               len(_h_sm) == 0)
+
+        # PATH-AWARENESS, which the first version of H3 lacked. It asked whether the
+        # pointer's FIRST segment appeared in a flat set of response property names.
+        # Both arms below passed that test wrongly: `name` IS a top-level response
+        # property, so a coincidental name fired; and a container the response does not
+        # declare at all was judged by a root that happened to match. H's message tells
+        # an author to change their manifest, so a false positive costs real work.
+        def _h3_icr(icr):
+            _d = _copy.deepcopy(_rdn)
+            for _v3 in _d["spec"]["resource"]["verbsDescription"]:
+                for _e3 in (_v3.get("fieldMapping") or []):
+                    if _e3.get("resolver"):
+                        _e3["inCustomResource"] = icr
+            return [r for r in evaluate(_d, _oasn, "node") if r[0] == "H"]
+
+        _hcase("H3: a STRING-typed response property is not a container (spec.name.*)",
+               len(_h3_icr("spec.name.bmc_secret")) == 0)
+        _hcase("H3: a container the response never declares is silent (spec.nope.*)",
+               len(_h3_icr("spec.nope.bmc_secret")) == 0)
+        _hcase("H3: DISCRIMINATOR -- the echoed free-form object still FIRES",
+               len(_h3_icr("spec.extra.bmc_secret")) == 2)
 
     # THE POLICY IS A PER-VERB FIELD. Three arms over one variable: WHERE the key sits.
     #

@@ -133,7 +133,11 @@ BLOCKED_UPSTREAM = [
         "signature": "set in configurationFields not found in schema",
         "issue": "immutable configurationFields (see docs/IMPLEMENTATION.md §9.13b)",
         "why": ("the dead X-Ironic-Endpoint entry is removed in the manifests, but "
-                "`configurationFields` is IMMUTABLE once the CRD has been generated -- "
+                "`configurationFields` is IMMUTABLE UNCONDITIONALLY (rule `self == oldSelf`, "
+                "oasgen types.go:994) -- NOT \"once the CRD has been generated\", which is "
+                "what the refusal MESSAGE on that same line claims and is a condition the "
+                "rule does not express; measured by aruba-provider-kog on a cluster with no "
+                "generated CRD. oasgen #573 will make a DEAD entry removable. "
                 "the apply is refused. It clears only on a fresh install."),
     },
 ]

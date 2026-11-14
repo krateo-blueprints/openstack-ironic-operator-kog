@@ -86,6 +86,23 @@ def audit(root="."):
             for v in verbs:
                 for k in ("fieldMapping", "requestFieldMapping"):
                     for m in (v.get(k) or []):
+                        # A RESOLVER SUPPLIES ITS OWN VALUE, so skip the entry entirely.
+                        #
+                        # Its inCustomResource is not a read path -- it is the pointer
+                        # stripResolverSources removes from the request -- and it may
+                        # legitimately be ABSENT, which is now the shipped shape on
+                        # restdefinition-node.yaml: naming it there made the vendor echo
+                        # back an empty object and produced non-converging drift.
+                        #
+                        # THIS SCREEN FALSE-POSITIVED ON EXACTLY THAT FIX, reporting
+                        # "None <- (unrecognised source) (on 2 verbs)". Its sibling,
+                        # check-restdefinition-shape.py's check C, had already been taught
+                        # to skip resolvers for oasgen's own #455 reason; this one reads the
+                        # same field and was missed. When you change how a thing is written,
+                        # grep for EVERY screen that reads it -- one was not enough, twice
+                        # in one day.
+                        if m.get("resolver"):
+                            continue
                         src, name = m.get("inCustomResource") or "", m.get("inPath")
                         # IS THIS A PATH PARAMETER? Decidable from the document:
                         # it is one iff `{name}` appears in this verb's own path.
