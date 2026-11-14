@@ -2067,6 +2067,46 @@ blade's next deploy. [[rendered-vs-stored]].
 
 ### §9.19 — `observedGeneration` is absent on every KOG-generated resource
 
+> **RETRACTED IN ITS EXPLANATION, 2026-11-14. The measurement stands; the cause was
+> mine and it was wrong — and this section already contained the evidence against
+> itself.**
+>
+> `observedGeneration` **is** a declared field of the generated status schema. Read
+> from a real generated CRD captured during this repo's own ARM 1 run:
+>
+> ```
+> observedGeneration:
+>   description: ObservedGeneration is the metadata.generation the controller last
+>     reconciled.
+>   format: int64
+>   type: integer
+> ```
+>
+> What removed the VALUE was rest-dynamic-controller's `clearStatusFields`, which
+> deletes the whole `status` subtree on any update with a body. So a reader saw
+> **absent**, which is indistinguishable from "the field does not exist" and harder
+> to notice than a stale number. Fixed upstream as oasgen-provider #668, whose scope
+> this repo's review widened from the digest condition to `conditions` wholesale.
+>
+> **Point 2 below is false** ("nothing declares it... no synthetic fields"), and
+> **point 3 is the evidence I had and dismissed**: I found
+> `observe_restaction.go:177` guarding `conditions` and `observedGeneration`, called
+> it *"a guard on a field nothing manages, which the schema would prune anyway"*, and
+> used that dismissal to support point 2. The guard exists because the field is
+> managed and declared. Two sites disagreed about one rule — one guarded it, the
+> other wiped the subtree — and reading either alone gives the wrong answer, which is
+> why oasgen found it only from the guarded side.
+>
+> **The general form, which is the part to keep: an absent field invites a conclusion
+> about the API when it usually deserves a question about the writer.** And a guard
+> that looks vestigial is a claim that something, somewhere, manages the field — that
+> is evidence, not decoration.
+>
+> What still stands: a **label** edit does not bump `generation`, so the second half
+> of the gap below is real and is a Kubernetes property, not a bug. Do not read this
+> section as wholly retracted.
+
+
 Noticed while trying to tell "reconciled, this is the steady state" from "not
 looked at yet", and initially reported with the wrong controller attached. The
 split is by **generator**:
