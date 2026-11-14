@@ -221,3 +221,29 @@ carrier path could not resolve at all. One assertion, two failure modes caught.
 
 `loadNodeForSecretRef` also VOIDs if the shipped manifest declares no resolver entries,
 because then both arms are the same input and byte equality is a tautology.
+
+## This result EXPIRES at the next oasgen tag, and the reason is already known
+
+`2264 == 2264` was measured at **0.61.0**. It is not a permanent property of the change,
+and the thing that will invalidate it is already merged upstream:
+
+> oasgen-provider **#646** declares `status.resolvedResolversDigest` on the generated CRD,
+> **gated on the update verb carrying a `secretRef`** — which is exactly the shape
+> `manifests/restdefinition-node.yaml` now has.
+
+So at any version containing #646 the node kind is expected to gain that status field, the
+status schema moves, and "manifest-only, no regeneration" stops being true. The arms here
+would still pass — they compare *with* against *without* the resolver at one version — so
+**the suite will not notice**, which is why this is written down rather than left to the
+next reader of a green run.
+
+**Re-run this against the tag before running the validation arms**, and treat a changed
+spec/status schema as the expected result rather than a regression. The lesson from the
+`#421` boundary is the same one: a measurement is answered FOR a version, and this repo
+already prints "answered FOR oasgen X" on its other version-dependent screens for exactly
+this reason.
+
+Consequence worth stating plainly: adopting a `secretRef` here makes this repo the first
+consumer to take a CRD regeneration from #646, and regenerating the node CRD is the thing
+that wedges every `kubernetes-cluster` render until the parent chart's pin moves. That is
+a cost of the upgrade, not of this change — but it lands on whoever upgrades first.
