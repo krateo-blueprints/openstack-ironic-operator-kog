@@ -746,7 +746,29 @@ def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
             # Fires only when the stripped root is a property this document's OWN response
             # schema declares -- a vendor that never echoes it cannot produce the drift,
             # and flagging that would refuse a working definition.
-            if icr and strip_cr_prefix(icr) and segs(strip_cr_prefix(icr))[0] in echoed:
+            # THE SAME-CONTAINER EXCEPTION, AND IT IS PROVABLY SAFE RATHER THAN A
+            # WEAKENING. applyFieldMapping writes the resolved value at inBody
+            # (builder.go:212 -> SetNestedField at :380) and stripResolverSources runs
+            # AFTER it, at :221. So when inBody and inCustomResource share a container,
+            # that container already holds the inBody key when the pointer is removed --
+            # the strip CANNOT empty it, and comparison.go:184 (len(mg)>0 && len(rm)==0)
+            # cannot fire. Verified in the rdc source here, not taken on report.
+            #
+            # This is a property of the DEFINITION, not of the clock, which is the
+            # distinction that matters: a runtime-written sibling (this repo's
+            # extra.etcd_ip, written by scripts/ironic-node-extra-bridge.py) makes the
+            # shape converge only AFTER the bridge runs, so it is not a mitigation. A
+            # same-container inBody is always true. Raised by oasgen-provider from
+            # azuredevops-provider-kog's four kinds, which sit exactly on this boundary:
+            # their secret is the container's ONLY parameter and they are clear solely
+            # because of this ordering.
+            #
+            # A top-level pointer has container [] and so does a top-level inBody; equal,
+            # and correctly so -- the body root still holds the inBody key.
+            _icr_segs = segs(strip_cr_prefix(icr)) if icr else []
+            _body_segs = segs(inbody)
+            _same_container = bool(_icr_segs) and _icr_segs[:-1] == _body_segs[:-1]
+            if icr and _icr_segs and not _same_container and _icr_segs[0] in echoed:
                 root = segs(strip_cr_prefix(icr))[0]
                 out.append(("H", "%s %s" % (v.get("action"), icr),
                             "STRIPPED FROM A VENDOR-ECHOED OBJECT: stripResolverSources "
@@ -1185,6 +1207,20 @@ def selftest():
         _hcase("H3 real documents: re-injecting inCustomResource FIRES on both verbs",
                len(_h_bk) == 2 and all(r[3] for r in _h_bk)
                and "VENDOR-ECHOED" in _h_bk[0][2])
+
+        # ...AND THE SAME-CONTAINER EXCEPTION, which is the discriminator for H3. Without
+        # it H3 is "any resolver with an inCustomResource in an echoed object", which
+        # over-fires on a shape that provably cannot break: applyFieldMapping writes
+        # inBody BEFORE stripResolverSources runs, so a shared container is never emptied.
+        # One variable against the arm above -- the pointer's container, not its presence.
+        _sm = _copy.deepcopy(_rdn)
+        for _h3v2 in _sm["spec"]["resource"]["verbsDescription"]:
+            for _h3e2 in (_h3v2.get("fieldMapping") or []):
+                if _h3e2.get("resolver"):
+                    _h3e2["inCustomResource"] = "spec.driver_info.bmc_secret"
+        _h_sm = [r for r in evaluate(_sm, _oasn, "node") if r[0] == "H"]
+        _hcase("H3 real documents: a SAME-CONTAINER pointer is silent (azuredevops shape)",
+               len(_h_sm) == 0)
 
     # THE POLICY IS A PER-VERB FIELD. Three arms over one variable: WHERE the key sits.
     #
