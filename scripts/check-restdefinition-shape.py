@@ -184,6 +184,67 @@ def body_props(oas, path, method):
     return set()
 
 
+def deref(schema, oas, depth=0):
+    """Follow a $ref to the schema it names. Bounded, like resolve()."""
+    if not isinstance(schema, dict) or depth > 12:
+        return schema if isinstance(schema, dict) else None
+    if "$ref" in schema:
+        name = schema["$ref"].split("/")[-1]
+        return deref((oas.get("components") or {}).get("schemas", {}).get(name), oas, depth + 1)
+    return schema
+
+
+def subschema_at(schema, oas, segments, depth=0):
+    """The subschema at a dotted path, or None. Follows $ref and composition.
+
+    WHY A PATH WALK AND NOT A FLAT NAME SET. check H's first version asked whether the
+    pointer path's FIRST segment appeared among the response's top-level property names.
+    That is wrong twice: a container nested two levels down is judged by its root, and a
+    root name that merely coincides with an unrelated response property is a false
+    positive -- and H's message tells an author to change their manifest, so a false
+    positive costs someone real work. oasgen-provider pointed out they already had the
+    right primitive (lookupTypeByPath) for exactly this reason.
+
+    A FREE-FORM OBJECT CONTAINS ANY KEY. `additionalProperties: true` with no declared
+    properties is how Ironic describes `extra` and `driver_info`, and the vendor echoes
+    back whatever was stored in them -- so such a container counts as present even though
+    no sub-property is declared.
+    """
+    schema = deref(schema, oas, depth)
+    if not isinstance(schema, dict) or depth > 12:
+        return None
+    if not segments:
+        return schema
+    head, rest = segments[0], segments[1:]
+    props = schema.get("properties") or {}
+    if head in props:
+        return subschema_at(props[head], oas, rest, depth + 1)
+    for key in ("allOf", "anyOf", "oneOf"):
+        for sub in schema.get(key) or []:
+            got = subschema_at(sub, oas, segments, depth + 1)
+            if got is not None:
+                return got
+    if schema.get("additionalProperties") is True:
+        return {"type": "object", "additionalProperties": True}
+    return None
+
+
+def response_schema_for(oas, path, method):
+    """The raw 2xx response schema for one operation, unwrapped if it is a collection."""
+    op = (oas.get("paths") or {}).get(path, {}).get(method, {})
+    for code, resp in (op.get("responses") or {}).items():
+        if not str(code).startswith("2"):
+            continue
+        for _ct, media in (resp.get("content") or {}).items():
+            schema = deref(media.get("schema"), oas) or {}
+            for _w, sub in (schema.get("properties") or {}).items():
+                sub = deref(sub, oas) or {}
+                if sub.get("type") == "array":
+                    return deref(sub.get("items"), oas)
+            return schema
+    return None
+
+
 def response_item_props(oas, path, method):
     """For a collection endpoint, the properties of ONE item."""
     op = (oas.get("paths") or {}).get(path, {}).get(method, {})
@@ -695,18 +756,35 @@ def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
     # read against the WHOLE CR by fieldpath, so `spec.` is meaningful there; only
     # inCustomResource is compared against a body location, after the runtime's trim. Two
     # predicates, two normalizations, sharing nothing but the word "path".
-    # WHAT THE VENDOR ECHOES BACK, for H3. Taken from the `get` verb's 2xx response
-    # (response_item_props' "(unwrapped)" branch is the single-object case), falling back
-    # to the findby collection item when a kind has no get. A field the vendor never
-    # returns cannot produce the "empty on the remote" drift, so H3 must not fire on it.
-    echoed = set()
+    # WHAT THE VENDOR ECHOES BACK, for H3 -- the raw schema, walked by PATH.
+    # A field the vendor never returns cannot produce the "empty on the remote" drift,
+    # so H3 must not fire on it. Prefer the `get` verb's single-object response; fall
+    # back to findby's collection item for a kind with no get.
+    resp_schemas = []
     for _v in verbs:
         if (_v.get("action") or "") in ("get", "findby") and _v.get("path"):
             try:
-                _w, _props = response_item_props(oas, _v["path"], (_v.get("method") or "GET").lower())
-                echoed |= set(_props or ())
+                _sc = response_schema_for(oas, _v["path"], (_v.get("method") or "GET").lower())
+                if _sc:
+                    resp_schemas.append(_sc)
             except Exception:
-                pass          # a document this screen cannot read is handled by checks A/B
+                pass          # an unreadable document is checks A/B's business
+
+    def container_echoed(container_segs):
+        """Does the vendor echo back an OBJECT at this container path?
+
+        Requires an object, not merely a name match: a string-typed property that
+        happens to share the name cannot be a container the strip empties.
+        """
+        for _sc in resp_schemas:
+            got = subschema_at(_sc, oas, list(container_segs))
+            if not isinstance(got, dict):
+                continue
+            if got.get("type") == "object" or got.get("properties") \
+               or got.get("additionalProperties") is True:
+                return True
+        return False
+
     for v in verbs:
         for m in request_mappings(v):
             r = m.get("resolver") or {}
@@ -768,8 +846,8 @@ def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
             _icr_segs = segs(strip_cr_prefix(icr)) if icr else []
             _body_segs = segs(inbody)
             _same_container = bool(_icr_segs) and _icr_segs[:-1] == _body_segs[:-1]
-            if icr and _icr_segs and not _same_container and _icr_segs[0] in echoed:
-                root = segs(strip_cr_prefix(icr))[0]
+            if icr and _icr_segs and not _same_container and container_echoed(_icr_segs[:-1]):
+                root = ".".join(_icr_segs[:-1]) or _icr_segs[0]
                 out.append(("H", "%s %s" % (v.get("action"), icr),
                             "STRIPPED FROM A VENDOR-ECHOED OBJECT: stripResolverSources "
                             "removes `%s` from the request, but `%s` is declared in this "
@@ -1221,6 +1299,27 @@ def selftest():
         _h_sm = [r for r in evaluate(_sm, _oasn, "node") if r[0] == "H"]
         _hcase("H3 real documents: a SAME-CONTAINER pointer is silent (azuredevops shape)",
                len(_h_sm) == 0)
+
+        # PATH-AWARENESS, which the first version of H3 lacked. It asked whether the
+        # pointer's FIRST segment appeared in a flat set of response property names.
+        # Both arms below passed that test wrongly: `name` IS a top-level response
+        # property, so a coincidental name fired; and a container the response does not
+        # declare at all was judged by a root that happened to match. H's message tells
+        # an author to change their manifest, so a false positive costs real work.
+        def _h3_icr(icr):
+            _d = _copy.deepcopy(_rdn)
+            for _v3 in _d["spec"]["resource"]["verbsDescription"]:
+                for _e3 in (_v3.get("fieldMapping") or []):
+                    if _e3.get("resolver"):
+                        _e3["inCustomResource"] = icr
+            return [r for r in evaluate(_d, _oasn, "node") if r[0] == "H"]
+
+        _hcase("H3: a STRING-typed response property is not a container (spec.name.*)",
+               len(_h3_icr("spec.name.bmc_secret")) == 0)
+        _hcase("H3: a container the response never declares is silent (spec.nope.*)",
+               len(_h3_icr("spec.nope.bmc_secret")) == 0)
+        _hcase("H3: DISCRIMINATOR -- the echoed free-form object still FIRES",
+               len(_h3_icr("spec.extra.bmc_secret")) == 2)
 
     # THE POLICY IS A PER-VERB FIELD. Three arms over one variable: WHERE the key sits.
     #
