@@ -154,6 +154,34 @@
       "title": "Ironic resource class",
       "default": "",
       "description": "Ironic resource class for this node, rendered as spec.resource_class. The only thing that makes a node eligible for an Ironic Allocation: POST /v1/allocations requires a resource_class and matches only nodes declaring the same one. Empty means do not set it, leaving the node unallocatable -- the right default for hardware that belongs to a named cluster rather than to a pool."
+    },
+    "bmcSecret": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "title": "BMC password from a Secret",
+      "description": "Read the BMC password from a Kubernetes Secret instead of writing it into `driver_info`. Set `name` and remove `redfish_password` from `driver_info`: the chart renders `spec.extra.bmc_secret`, and the node RestDefinition's secretRef resolver reads the Secret in the CR's own namespace and fills `driver_info.redfish_password` in the request to Ironic. The password never appears in values, in the rendered CR, or in etcd outside the Secret. Declaring both this and `driver_info.redfish_password` fails the render on purpose -- the resolver would overwrite the plaintext, leaving it in the CR for nothing.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "title": "Secret name",
+          "description": "Secret in the same namespace as the rendered node CR. Empty disables the pointer."
+        },
+        "key": {
+          "type": "string",
+          "title": "Key within the Secret",
+          "description": "Defaults to `redfish_password` when omitted."
+        }
+      }
+    },
+    "extra": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "title": "Ironic node `extra` metadata",
+      "description": "Arbitrary key/value metadata stored on the Ironic node. Merged with the `bmc_secret` pointer that `bmcSecret` renders, so both can be used together."
     }
   }
 }

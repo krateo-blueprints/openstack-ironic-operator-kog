@@ -198,6 +198,23 @@ controlPlane:
     parentNode:
     driver: redfish
     driver_info:
+    # Read the BMC password from a Secret instead of putting it in driver_info.
+    # Passed through to the baremetal-host child, which renders
+    # spec.extra.bmc_secret; the node RestDefinition's secretRef resolver then
+    # reads that Secret -- in the node CR's namespace -- and fills
+    # driver_info.redfish_password in the request to Ironic. The password never
+    # reaches these values, a rendered child CR, or `helm get values`.
+    #
+    #   bmcSecret:
+    #     name: blade01-bmc     # Secret in the node CR's namespace
+    #     key: redfish_password # optional, this is the default
+    #
+    # Available on every node shape here: controlPlane.node, controlPlane.nodes[],
+    # controlPlane.recovery.failedNodes[], workers.nodes[], workers.removed[] and
+    # workers.failedNodes[]. Setting it AND driver_info.redfish_password on one
+    # node fails the child render on purpose -- the resolver would overwrite the
+    # plaintext, leaving it in the CR for nothing.
+    bmcSecret:
     ports:
   # Day-2 — rolling k8s upgrade (Milestone 5a). Set this to one CP
   # nodeName at a time to drive it through undeploy -> redeploy so it

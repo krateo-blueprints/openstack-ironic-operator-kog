@@ -600,6 +600,19 @@ check-release-table:   # docs/release.md's table must agree with charts/*/Chart.
 	python3 -I scripts/check-release-table.py --selftest && \
 		python3 -I scripts/check-release-table.py
 
+check-bmc-passthrough:   # the BMC-secret pointer survives parent -> child -> resolver
+# WHY A SCREEN AND NOT A RENDER, in one line because the script says it at length:
+# every BaremetalHost render in kubernetes-cluster is gated on a `lookup` of a live
+# Secret, and `lookup` returns nothing under `helm template` -- so the parent emits
+# its PKI Secret and NOTHING ELSE offline. There is no flag that fakes it. The
+# alternative to this screen is a cluster, not a better template.
+#
+# It checks COUNTS per node variable, not names. lifecycle-workers.yaml passes $w
+# through at three sites, and a set-membership version of this check called
+# two-of-three a pass -- caught by its own positive control before it shipped.
+	python3 -I scripts/check-bmc-secret-passthrough.py --self-test && \
+		python3 -I scripts/check-bmc-secret-passthrough.py
+
 check-chart-renders:   # what a chart RENDERS must be a kind that exists, at a served version
 	# check-examples screens manifests, examples and README fences -- everything a reader
 	# COPIES. Nothing screened what a chart PRODUCES. So baremetal-discovery shipped,
@@ -726,7 +739,7 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 	python3 -I scripts/check-blueprint-metadata.py --self-test && \
 		python3 -I scripts/check-blueprint-metadata.py $(if $(BLUEPRINT_ONLINE),--online,)
 
-check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set check-chart-version-moved check-chart-renders check-release-table   # every standing screen
+check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set check-chart-version-moved check-chart-renders check-release-table check-bmc-passthrough   # every standing screen
 	@echo "all standing screens passed"
 
 chart-host-pinned:   # add the chart versions the LIVE CompositionDefinitions pin

@@ -205,3 +205,26 @@ debug:
 # kubernetes-cluster chart's `workers.removed[]`, which sets `undeploy: true`
 # on the BaremetalHost, renders templates/transition-undeploy.yaml through
 # cdc, waits for `available`, and only then drops the node from the render.
+
+# --- BMC password from a Secret, instead of plaintext in driver_info ---
+# Set bmcSecret.name and REMOVE redfish_password from driver_info above. The
+# chart then renders spec.extra.bmc_secret, and restdefinition-node.yaml's
+# secretRef resolver reads the Secret -- in the CR's own namespace -- and fills
+# driver_info.redfish_password in the request body to Ironic. The password never
+# reaches values.yaml, the rendered CR, or etcd outside the Secret.
+#
+# Setting both bmcSecret.name and driver_info.redfish_password FAILS the render,
+# on purpose: the resolver would overwrite the plaintext, leaving it in the CR
+# doing nothing while looking load-bearing.
+#
+#   kubectl create secret generic blade03-bmc -n openstack \
+#     --from-literal=redfish_password="$REDFISH_PASSWORD"
+#
+# key defaults to redfish_password when omitted.
+bmcSecret:
+  name: ""
+  key: ""
+
+# --- extra: arbitrary Ironic node `extra` metadata ---
+# Merged with bmc_secret above, so both can be used together.
+extra:

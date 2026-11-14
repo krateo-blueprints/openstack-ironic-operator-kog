@@ -17,8 +17,10 @@
 # ORDER MATTERS. Register baremetal-host FIRST. This blueprint renders
 # BaremetalHost resources at the apiVersion in its `lifecycleApiVersion` input,
 # which defaults to the baremetal-host version this chart was released against
-# (v0-6-3). Registering this one first leaves every render failing against an
-# apiVersion nothing serves yet.
+# (v0-7-0). This note read "(v0-6-3)" while the default was already v0-6-5, so
+# treat _helpers.tpl as the source and this line as a comment that drifts.
+# Registering this one first leaves every render failing against an apiVersion
+# nothing serves yet.
 ---
 apiVersion: core.krateo.io/v1alpha1
 kind: CompositionDefinition
@@ -28,7 +30,7 @@ metadata:
 spec:
   chart:
     url: oci://ghcr.io/krateo-blueprints/charts/kubernetes-cluster
-    version: "0.15.5"
+    version: "0.16.0"
     # Served from the Marketplace's classic Helm channel instead of OCI:
     #   url: https://krateo-blueprints.github.io/charts/blueprints
     #   repo: kubernetes-cluster

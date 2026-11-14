@@ -64,10 +64,10 @@ been updated, where a rebase dropped the hunk. It is now enforced by
 
 | chart | version |
 |---|---|
-| `baremetal-host` | `0.6.5` |
+| `baremetal-host` | `0.7.0` |
 | `baremetal-lifecycle` | `0.3.5` |
 | `baremetal-discovery` | `0.1.4` |
-| `kubernetes-cluster` | `0.15.5` |
+| `kubernetes-cluster` | `0.16.0` |
 
 > **`kubernetes-cluster` 0.15.2 is published and must not be used.** Its bundled
 > `compositiondefinition.yaml` pins `version: "0.15.1"` while the chart is `0.15.2`, so a

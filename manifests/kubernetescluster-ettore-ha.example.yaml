@@ -5,7 +5,25 @@
 #
 # Placeholders you MUST replace before applying:
 #   - <KEYSTONE_ADMIN_PASSWORD>  admin password for the Ironic Keystone
-#   - <REDFISH_PASSWORD>         Redfish account password (per-node)
+#
+# THE BMC PASSWORD IS NOT IN THIS FILE, and that is the point. Each node names a
+# Secret through `bmcSecret`, the chart renders it as `spec.extra.bmc_secret`, and
+# the node RestDefinition's secretRef resolver reads that Secret -- in the node
+# CR's namespace -- and fills `driver_info.redfish_password` in the request to
+# Ironic. The password never reaches this manifest, the composition values, any
+# rendered child CR, or `helm get values`.
+#
+# Create one Secret per node BEFORE applying (the same Redfish account here, so
+# the same value six times; use different values if your BMCs differ):
+#
+#   for n in blade04 blade05 blade06 blade07 blade08 blade10; do
+#     kubectl create secret generic "$n-bmc" -n openstack \
+#       --from-literal=redfish_password="$REDFISH_PASSWORD"
+#   done
+#
+# `bmcSecret.key` defaults to `redfish_password`; set it if your Secret uses
+# another key. Setting bmcSecret AND driver_info.redfish_password on one node
+# FAILS the render on purpose -- the resolver would overwrite the plaintext.
 #
 # Everything else here is illustrative (lab-specific node UUIDs, MACs,
 # OOB IPs, the enclosure parent UUID). Replace with your own inventory.
@@ -26,7 +44,7 @@
 # the same blade — failure → BH auto-redeploy via v0.4.0 baremetal-host
 # (Task #89) → fresh OS → fresh kubeadm join attempt.
 ---
-apiVersion: composition.krateo.io/v0-15-5
+apiVersion: composition.krateo.io/v0-16-0
 kind: KubernetesCluster
 metadata:
   name: ettore-ha
@@ -68,10 +86,11 @@ spec:
         driver:      redfish
         driver_info:
           redfish_address:   http://172.19.74.11:8000
-          redfish_password:  <REDFISH_PASSWORD>
           redfish_system_id: /redfish/v1/Systems/blade06
           redfish_username:  ironic
           redfish_verify_ca: false
+        bmcSecret:
+          name: blade06-bmc
         ports:
           - { address: "00:60:2f:36:81:01", pxe_enabled: true  }
           - { address: "00:60:2f:36:81:02", pxe_enabled: false }
@@ -82,10 +101,11 @@ spec:
         driver:      redfish
         driver_info:
           redfish_address:   http://172.19.74.11:8000
-          redfish_password:  <REDFISH_PASSWORD>
           redfish_system_id: /redfish/v1/Systems/blade05
           redfish_username:  ironic
           redfish_verify_ca: false
+        bmcSecret:
+          name: blade05-bmc
         ports:
           - { address: "00:60:2f:35:81:01", pxe_enabled: true  }
           - { address: "00:60:2f:35:81:02", pxe_enabled: false }
@@ -96,10 +116,11 @@ spec:
         driver:      redfish
         driver_info:
           redfish_address:   http://172.19.74.11:8000
-          redfish_password:  <REDFISH_PASSWORD>
           redfish_system_id: /redfish/v1/Systems/blade04
           redfish_username:  ironic
           redfish_verify_ca: false
+        bmcSecret:
+          name: blade04-bmc
         ports:
           - { address: "00:60:2f:34:81:01", pxe_enabled: true  }
           - { address: "00:60:2f:34:81:02", pxe_enabled: false }
@@ -112,10 +133,11 @@ spec:
         driver:      redfish
         driver_info:
           redfish_address:   http://172.19.74.11:8000
-          redfish_password:  <REDFISH_PASSWORD>
           redfish_system_id: /redfish/v1/Systems/blade10
           redfish_username:  ironic
           redfish_verify_ca: false
+        bmcSecret:
+          name: blade10-bmc
         ports:
           - { address: "00:60:2f:3a:81:01", pxe_enabled: true  }
           - { address: "00:60:2f:3a:81:02", pxe_enabled: false }
@@ -125,10 +147,11 @@ spec:
         driver:      redfish
         driver_info:
           redfish_address:   http://172.19.74.11:8000
-          redfish_password:  <REDFISH_PASSWORD>
           redfish_system_id: /redfish/v1/Systems/blade07
           redfish_username:  ironic
           redfish_verify_ca: false
+        bmcSecret:
+          name: blade07-bmc
         ports:
           - { address: "00:60:2f:37:81:01", pxe_enabled: true  }
           - { address: "00:60:2f:37:81:02", pxe_enabled: false }
@@ -138,10 +161,11 @@ spec:
         driver:      redfish
         driver_info:
           redfish_address:   http://172.19.74.11:8000
-          redfish_password:  <REDFISH_PASSWORD>
           redfish_system_id: /redfish/v1/Systems/blade08
           redfish_username:  ironic
           redfish_verify_ca: false
+        bmcSecret:
+          name: blade08-bmc
         ports:
           - { address: "00:60:2f:38:81:01", pxe_enabled: true  }
           - { address: "00:60:2f:38:81:02", pxe_enabled: false }

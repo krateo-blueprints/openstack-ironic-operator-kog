@@ -4,8 +4,15 @@
 # - Gaps 1+2: same blade exercises the bytes-different configdrive swap +
 #   cloud-init SSH verification via dome jump. Round 1 of the marker
 #   (/etc/cfgdrive-round-1) — bump to round-2 between deploys.
+#
+# THIS FILE STILL CARRIES THE BMC PASSWORD IN PLAINTEXT, deliberately, and it is
+# not the recommended form. `bmcSecret` (baremetal-host 0.7.0, kubernetes-cluster
+# 0.16.0) moves it into a Secret; see manifests/baremetalhost-blade03.yaml for the
+# child shape and manifests/kubernetescluster-ettore-ha.example.yaml for a real
+# deployment that commits no password at all. Left as-is here because it is an undeploy-mode fixture, and a Secret dependency would add a variable
+# the test is not about.
 ---
-apiVersion: composition.krateo.io/v0-6-5
+apiVersion: composition.krateo.io/v0-7-0
 kind: BaremetalHost
 metadata:
   name: blade11

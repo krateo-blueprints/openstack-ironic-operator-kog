@@ -334,6 +334,26 @@
                 ],
                 "title": "Network ports",
                 "description": "The blade's NICs, each with an `address` (MAC) and optional `pxe_enabled`. Ironic writes the per-MAC PXE configuration only for ports that exist before the deploy starts, so a blade whose ports are missing PXE-boot-loops. Declare every NIC that can boot."
+              },
+              "bmcSecret": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "title": "BMC password from a Secret",
+                "description": "Read this node's BMC password from a Kubernetes Secret instead of writing it into `driver_info`. Set `name` and remove `redfish_password` from `driver_info`: it is passed through to the `baremetal-host` child, which renders `spec.extra.bmc_secret`, and the node RestDefinition's secretRef resolver reads the Secret in the CR's own namespace and fills `driver_info.redfish_password` in the request to Ironic. Declaring both this and `driver_info.redfish_password` fails the child render on purpose.",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "title": "Secret name",
+                    "description": "Secret in the namespace the node CR is rendered into. Empty disables the pointer."
+                  },
+                  "key": {
+                    "type": "string",
+                    "title": "Key within the Secret",
+                    "description": "Defaults to `redfish_password` when omitted."
+                  }
+                }
               }
             },
             "title": "Control plane node",
@@ -392,6 +412,26 @@
               ],
               "title": "Network ports",
               "description": "The blade's NICs, each with an `address` (MAC) and optional `pxe_enabled`. Ironic writes the per-MAC PXE configuration only for ports that exist before the deploy starts, so a blade whose ports are missing PXE-boot-loops. Declare every NIC that can boot."
+            },
+            "bmcSecret": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "title": "BMC password from a Secret",
+              "description": "Read this node's BMC password from a Kubernetes Secret instead of writing it into `driver_info`. Set `name` and remove `redfish_password` from `driver_info`: it is passed through to the `baremetal-host` child, which renders `spec.extra.bmc_secret`, and the node RestDefinition's secretRef resolver reads the Secret in the CR's own namespace and fills `driver_info.redfish_password` in the request to Ironic. Declaring both this and `driver_info.redfish_password` fails the child render on purpose.",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "title": "Secret name",
+                  "description": "Secret in the namespace the node CR is rendered into. Empty disables the pointer."
+                },
+                "key": {
+                  "type": "string",
+                  "title": "Key within the Secret",
+                  "description": "Defaults to `redfish_password` when omitted."
+                }
+              }
             }
           },
           "title": "Control plane node (single, legacy)"
@@ -489,6 +529,26 @@
                     ],
                     "title": "Cleaning on release",
                     "description": "What Ironic does between tearing the deployment down and offering the blade again. `full` runs the standard clean steps, including the disk erase. `none` skips cleaning entirely -- seconds instead of hours, with this cluster's data still on disk. Private labs only."
+                  },
+                  "bmcSecret": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "title": "BMC password from a Secret",
+                    "description": "Read this node's BMC password from a Kubernetes Secret instead of writing it into `driver_info`. Set `name` and remove `redfish_password` from `driver_info`: it is passed through to the `baremetal-host` child, which renders `spec.extra.bmc_secret`, and the node RestDefinition's secretRef resolver reads the Secret in the CR's own namespace and fills `driver_info.redfish_password` in the request to Ironic. Declaring both this and `driver_info.redfish_password` fails the child render on purpose.",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "title": "Secret name",
+                        "description": "Secret in the namespace the node CR is rendered into. Empty disables the pointer."
+                      },
+                      "key": {
+                        "type": "string",
+                        "title": "Key within the Secret",
+                        "description": "Defaults to `redfish_password` when omitted."
+                      }
+                    }
                   }
                 },
                 "title": "Control plane node to recover",
@@ -573,6 +633,26 @@
                 ],
                 "title": "Network ports",
                 "description": "The blade's NICs, each with an `address` (MAC) and optional `pxe_enabled`. Ironic writes the per-MAC PXE configuration only for ports that exist before the deploy starts, so a blade whose ports are missing PXE-boot-loops. Declare every NIC that can boot."
+              },
+              "bmcSecret": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "title": "BMC password from a Secret",
+                "description": "Read this node's BMC password from a Kubernetes Secret instead of writing it into `driver_info`. Set `name` and remove `redfish_password` from `driver_info`: it is passed through to the `baremetal-host` child, which renders `spec.extra.bmc_secret`, and the node RestDefinition's secretRef resolver reads the Secret in the CR's own namespace and fills `driver_info.redfish_password` in the request to Ironic. Declaring both this and `driver_info.redfish_password` fails the child render on purpose.",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "title": "Secret name",
+                    "description": "Secret in the namespace the node CR is rendered into. Empty disables the pointer."
+                  },
+                  "key": {
+                    "type": "string",
+                    "title": "Key within the Secret",
+                    "description": "Defaults to `redfish_password` when omitted."
+                  }
+                }
               }
             },
             "title": "Worker node",
@@ -650,6 +730,26 @@
                 ],
                 "description": "What Ironic does between tearing the deployment down and offering the blade again. `full` runs the standard clean steps, including the disk erase. `none` skips cleaning entirely -- seconds instead of hours, with this cluster's data still on disk. Private labs only.",
                 "title": "Cleaning on release"
+              },
+              "bmcSecret": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "title": "BMC password from a Secret",
+                "description": "Read this node's BMC password from a Kubernetes Secret instead of writing it into `driver_info`. Set `name` and remove `redfish_password` from `driver_info`: it is passed through to the `baremetal-host` child, which renders `spec.extra.bmc_secret`, and the node RestDefinition's secretRef resolver reads the Secret in the CR's own namespace and fills `driver_info.redfish_password` in the request to Ironic. Declaring both this and `driver_info.redfish_password` fails the child render on purpose.",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "title": "Secret name",
+                    "description": "Secret in the namespace the node CR is rendered into. Empty disables the pointer."
+                  },
+                  "key": {
+                    "type": "string",
+                    "title": "Key within the Secret",
+                    "description": "Defaults to `redfish_password` when omitted."
+                  }
+                }
               }
             },
             "title": "Worker to remove",
@@ -712,6 +812,26 @@
                 ],
                 "title": "Network ports",
                 "description": "The blade's NICs, each with an `address` (MAC) and optional `pxe_enabled`. Ironic writes the per-MAC PXE configuration only for ports that exist before the deploy starts, so a blade whose ports are missing PXE-boot-loops. Declare every NIC that can boot."
+              },
+              "bmcSecret": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "title": "BMC password from a Secret",
+                "description": "Read this node's BMC password from a Kubernetes Secret instead of writing it into `driver_info`. Set `name` and remove `redfish_password` from `driver_info`: it is passed through to the `baremetal-host` child, which renders `spec.extra.bmc_secret`, and the node RestDefinition's secretRef resolver reads the Secret in the CR's own namespace and fills `driver_info.redfish_password` in the request to Ironic. Declaring both this and `driver_info.redfish_password` fails the child render on purpose.",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "title": "Secret name",
+                    "description": "Secret in the namespace the node CR is rendered into. Empty disables the pointer."
+                  },
+                  "key": {
+                    "type": "string",
+                    "title": "Key within the Secret",
+                    "description": "Defaults to `redfish_password` when omitted."
+                  }
+                }
               }
             },
             "title": "Failed worker",

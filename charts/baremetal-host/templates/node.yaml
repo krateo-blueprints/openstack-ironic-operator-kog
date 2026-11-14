@@ -40,6 +40,10 @@ spec:
   name: {{ .Values.nodeName }}
   driver: {{ .Values.driver }}
   driver_info: {{- toYaml (.Values.driver_info | default dict) | nindent 4 }}
+  {{- $extra := include "baremetal-host.nodeExtra" . }}
+  {{- if $extra }}
+  extra: {{- $extra | nindent 4 }}
+  {{- end }}
   {{- if .Values.nodeUuid }}
   uuid: {{ .Values.nodeUuid | quote }}
   {{- end }}
