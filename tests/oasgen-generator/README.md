@@ -221,3 +221,51 @@ carrier path could not resolve at all. One assertion, two failure modes caught.
 
 `loadNodeForSecretRef` also VOIDs if the shipped manifest declares no resolver entries,
 because then both arms are the same input and byte equality is a tautology.
+
+## The result EXPIRED at 0.65.0, exactly as predicted — and the suite did not notice
+
+`2264 == 2264` was measured at **0.61.0**. The note below was written as a prediction before
+0.65.0 existed; it is now a measurement, and the prediction's second half — *the suite will
+not notice* — was the part that mattered.
+
+```
+oasgen 0.61.0   SPEC identical (2264)   STATUS identical (1860), digest absent from BOTH arms
+oasgen 0.65.0   SPEC identical (2264)   STATUS MOVED 1860 -> 2447 (+587)
+                                        resolvedResolversDigest present WITH the resolver,
+                                        absent WITHOUT it
+```
+
+oasgen-provider **#646** declares `status.resolvedResolversDigest` gated on the update verb
+carrying a `secretRef` — a **status-side** change. **This test compared only `SpecSchema`**,
+so at 0.65.0 it reported PASS, logged "spec schema IDENTICAL", and said nothing about a node
+CRD that now regenerates. The warning predicted that and the code still had the hole; writing
+the prediction down is not the same as closing it.
+
+It now reads both schemas, and asserts on the MECHANISM rather than on a version, so one
+assertion holds either side of #646:
+
+- the digest field must **never** appear in the without-resolver arm (if it does, #646's gate
+  is not holding and every consumer gets the field — that is a finding for oasgen, not for us)
+- if it appears in the with-resolver arm, the status schemas **must** differ
+- status schemas differing with the field in neither arm is an error, because then something
+  other than #646 moved and this test cannot say what
+
+The 0.65.0 run is therefore also generation-level confirmation that #646's gate works — the
+field is absent from the arm whose update verb carries no resolver. Worth noting because
+oasgen's own tag message states that no part of #598 has been exercised on a cluster by them.
+
+### What it costs us
+
+Adopting the `secretRef` means the node CRD regenerates on the upgrade to 0.65.0, which
+unserves its previous version and stalls every `kubernetes-cluster` render until the parent
+chart's pin moves. The provider's `OASGEN_PROVIDER_REGENERATE_ON_UPGRADE=false` defers a
+regeneration caused by the *upgrade*; it does **not** defer this one, because the gate is an
+OR and adopting the resolver is itself a `spec.resource` change that moves `resourceHash`. So
+the wedge is owed — the only choice is when to pay it, with the parent pin move planned.
+
+### The general lesson, which is why this section stays
+
+A comparison between two arms **at one version** keeps reporting PASS after its conclusion
+stops holding, because both arms move together. Pin the mechanism, not the number: the
+assertion that survived the version change is the one about *which field appears where*, not
+the one about 2264 bytes.
