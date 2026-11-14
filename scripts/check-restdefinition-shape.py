@@ -237,8 +237,16 @@ def request_mappings(verb):
     `requestFieldMapping` is deprecated and oasgen treats each of its entries "as an
     equivalent request-direction FieldMappingItem at load time" (types.go:591-593). A
     screen reading only one list goes blind the moment a definition uses the other --
-    and this repo's node definition has to: a resolver CANNOT live on the deprecated
-    field, which "carries no value transform".
+    and this repo's node definition has no choice. `RequestFieldMappingItem` has exactly
+    four fields (inPath, inQuery, inBody, inCustomResource) and the CRD is generated from
+    that struct, so the APISERVER REFUSES a resolver written into the deprecated list.
+    Adopting a resolver therefore REQUIRES leaving it.
+
+    Confirmed by oasgen-provider, who also checked their own side is unaffected: one
+    construction site (render/helper.go toDomainFieldMapping) merges both lists, so every
+    generator validator sees a complete model whichever list an author used. The hazard is
+    specific to CONSUMER-SIDE screens like this one, and nothing upstream can warn about a
+    screen it cannot see.
 
     This screen read only the deprecated list until 2026-11-14, which is the day the
     node definition stopped using it for one verb. Nothing failed; the screen simply
@@ -671,6 +679,22 @@ def evaluate(rd, oas, slug, version=MIN_SELFREF_SURVIVES):
     # paths DIFFER AS STRINGS: one carries the `spec.` prefix. rdc trims a leading
     # `spec.`/`status.` before parsing, so they collide at runtime while a string compare
     # calls them distinct. A syntactic check would miss the only case anyone has hit.
+    #
+    # AND THE NEGATIVE HALF OF THE SUITE CANNOT TELL THE TWO IMPLEMENTATIONS APART.
+    # Measured by mutation: with `icr == inbody`, every "H is silent" arm still passes and
+    # only H1's positive arm fails. So anyone who built this syntactically and ran just the
+    # safety checks would have shipped it green. That is why the positive arm is the one to
+    # keep -- a stronger statement than "parsed is correct".
+    #
+    # strip_cr_prefix MIRRORS rdc's CHAINED TrimPrefix pair rather than reimplementing the
+    # idea: `spec.status.x` normalizing to `x` is not obviously right, it is simply what the
+    # runtime does, and a screen that disagrees with the runtime on any input is worse than
+    # no screen on that input. It has its own arm for exactly that string.
+    #
+    # H2 DELIBERATELY DOES NOT NORMALIZE. The guard path and nameFromCustomResource are both
+    # read against the WHOLE CR by fieldpath, so `spec.` is meaningful there; only
+    # inCustomResource is compared against a body location, after the runtime's trim. Two
+    # predicates, two normalizations, sharing nothing but the word "path".
     for v in verbs:
         for m in request_mappings(v):
             r = m.get("resolver") or {}
