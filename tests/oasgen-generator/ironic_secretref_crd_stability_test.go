@@ -140,7 +140,15 @@ func loadNodeForSecretRef(t *testing.T, withResolver bool) (*ResourceConfig, []b
 	return cfg, spec
 }
 
-func srSpecSchema(t *testing.T, cfg *ResourceConfig, spec []byte) []byte {
+// srSchemas returns the generated SPEC and STATUS schemas.
+//
+// IT RETURNED ONLY THE SPEC UNTIL 2026-11-14, WHICH WAS THE DEFECT THIS FILE WARNED ABOUT
+// IN ITS OWN README. oasgen#646 declares `status.resolvedResolversDigest` gated on the
+// update verb carrying a secretRef -- a STATUS-side change. A spec-only comparison is blind
+// to it, so this suite would have gone on reporting "no regeneration" at a version where
+// the node CRD does in fact regenerate. The note predicting that was written before the
+// tag existed; this is the fix, applied before the prediction could come true in use.
+func srSchemas(t *testing.T, cfg *ResourceConfig, spec []byte) (specSchema, statusSchema []byte) {
 	t.Helper()
 	doc, err := NewLibOASParser().Parse(spec)
 	if err != nil {
@@ -153,37 +161,78 @@ func srSpecSchema(t *testing.T, cfg *ResourceConfig, spec []byte) []byte {
 	if len(res.SpecSchema) == 0 {
 		t.Fatalf("VOID: the generated spec schema is EMPTY, so comparing it proves nothing")
 	}
-	return res.SpecSchema
+	return res.SpecSchema, res.StatusSchema
 }
+
+const resolverDigestField = "resolvedResolversDigest"
 
 func TestIronicSecretRefDoesNotRegenerateTheNodeCRD(t *testing.T) {
 	withCfg, spec := loadNodeForSecretRef(t, true)
 	withoutCfg, _ := loadNodeForSecretRef(t, false)
 
-	a := srSpecSchema(t, withCfg, spec)
-	b := srSpecSchema(t, withoutCfg, spec)
+	specA, statusA := srSchemas(t, withCfg, spec)
+	specB, statusB := srSchemas(t, withoutCfg, spec)
 
-	if !bytes.Equal(a, b) {
-		t.Errorf("the secretRef resolver CHANGED the generated spec schema (%d vs %d bytes).\n"+
-			"That means adding it regenerates the node CRD, which unserves the previous\n"+
-			"version and wedges every kubernetes-cluster render until the parent pin moves.\n"+
-			"This change can no longer ship as a manifest-only edit.\nwith:    %s\nwithout: %s",
-			len(a), len(b), string(a), string(b))
-		return
+	// THE SPEC SIDE. Unchanged at every version so far, and for a reason that does not
+	// depend on the version: NodeCreate.required is [driver], so dropResolverSuppliedRequired
+	// has nothing to drop, and the carrier rides in a free-form `extra`.
+	if !bytes.Equal(specA, specB) {
+		t.Errorf("the resolver CHANGED the generated SPEC schema (%d vs %d bytes), so adding "+
+			"it regenerates the node CRD and can no longer ship as a manifest-only edit.\n"+
+			"with:    %s\nwithout: %s", len(specA), len(specB), string(specA), string(specB))
+	} else {
+		t.Logf("SPEC schema identical with and without the resolver (%d bytes)", len(specA))
 	}
-	t.Logf("spec schema IDENTICAL with and without the resolver (%d bytes) -- "+
-		"no CRD regeneration, so no chart lockstep", len(a))
+
+	// THE STATUS SIDE, which is where #646 lands and which this test used not to read.
+	//
+	// The assertion is on the MECHANISM rather than on a version, so it holds either side
+	// of #646: the digest field is gated on the update verb carrying a secretRef, so it must
+	// NEVER appear in the without-resolver arm. If it appears in the with-resolver arm, the
+	// status schemas must differ -- and that difference IS the CRD regeneration this repo
+	// pays for adopting a resolver.
+	hasA := bytes.Contains(statusA, []byte(resolverDigestField))
+	hasB := bytes.Contains(statusB, []byte(resolverDigestField))
+
+	if hasB {
+		t.Errorf("UNGATED: %q appears in the status schema of the arm with NO resolver. "+
+			"#646 declares it gated on the update verb carrying a secretRef, so this means "+
+			"the gate is not holding and every consumer gets the field.\nwithout: %s",
+			resolverDigestField, string(statusB))
+	}
+
+	switch {
+	case hasA && bytes.Equal(statusA, statusB):
+		t.Errorf("INCOHERENT: %q is present with the resolver yet the status schemas are "+
+			"byte-identical (%d bytes). One of the two reads is wrong.",
+			resolverDigestField, len(statusA))
+	case hasA:
+		t.Logf("STATUS schema MOVED: %q present with the resolver, absent without "+
+			"(%d vs %d bytes). This oasgen build contains #646, so adopting the resolver "+
+			"REGENERATES the node CRD -- the unserved-version wedge is owed here, and is "+
+			"deferred only by choosing when to turn regeneration back on. Expected, not a "+
+			"regression.", resolverDigestField, len(statusA), len(statusB))
+	case bytes.Equal(statusA, statusB):
+		t.Logf("STATUS schema identical (%d bytes) and %q absent from both -- this oasgen "+
+			"build predates #646, so the change is still manifest-only here.",
+			len(statusA), resolverDigestField)
+	default:
+		t.Errorf("the status schemas differ (%d vs %d bytes) but %q is in NEITHER, so "+
+			"something other than #646 moved and this test cannot say what.\n"+
+			"with:    %s\nwithout: %s", len(statusA), len(statusB), resolverDigestField,
+			string(statusA), string(statusB))
+	}
 }
 
 // THE CONTROL. Without this, the test above passes against any comparison that cannot
 // see a difference -- and it also pins the premise that makes the carrier work at all.
 func TestIronicSecretRefCRDStabilityControl(t *testing.T) {
 	cfg, spec := loadNodeForSecretRef(t, true)
-	base := srSpecSchema(t, cfg, spec)
+	base, _ := srSchemas(t, cfg, spec)
 
 	excluded, _ := loadNodeForSecretRef(t, true)
 	excluded.ExcludedSpecFields = []string{"extra"}
-	moved := srSpecSchema(t, excluded, spec)
+	moved, _ := srSchemas(t, excluded, spec)
 
 	if bytes.Equal(base, moved) {
 		t.Fatalf("CONTROL FAILED: excluding `extra` from the spec did not change the generated\n"+
