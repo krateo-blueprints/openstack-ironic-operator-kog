@@ -19,10 +19,10 @@
 # WHAT `Ready=False/Pending` MEANS ON THIS KIND, and it is not "done":
 # after an update's 202 the CR sits at Ready=False/Pending with status.power_state STALE
 # while Ironic moves the node (measured 2026-11-08, isolated cluster, fake Ironic: one
-# `event:update` and no observe after it inside a ~2 minute window). Whether it returns to
-# Ready=True on a longer resync is UNMEASURED -- do not assume either way. So a rollup must
-# NOT count a Pending NodePower as healthy or as terminal; on this kind it means a real
-# transition is in flight, or stuck, and the two are indistinguishable from the condition.
+# `event:update` and no observe after it inside a ~2 minute window). IT DOES RETURN:
+# measured 2026-11-14, Ready back to Available 190s after the patch. So a rollup must still
+# NOT count a Pending NodePower as healthy or as terminal -- it means a real transition is
+# in flight -- but it IS transient, not a latch. See the measured block below.
 # The kind that IS terminal by design is NodeProvision, which has no `update` verb on
 # purpose because converging it would retry a disk-wiping deploy.
 #
@@ -282,8 +282,36 @@ spec:
     # node is 'power off'. In a ~2 minute window the rdc logged exactly one event
     # for that CR -- `event:update`, "Successfully requested update of external
     # resource" -- and no observe after it. So Ready never returned to True
-    # within the window. Whether it converges on a longer resync is UNMEASURED;
-    # do not assume either way.
+    # within the window.
+    #
+    # IT CONVERGES, MEASURED 2026-11-14 on a throwaway cluster at the pinned
+    # 0.61.0, fake Ironic, fake-hardware. Ready returned to Available 190s after
+    # the patch:
+    #
+    #   reached Ready=True BEFORE the patch         1        <- VOID gate
+    #   Ironic updated_at moved after the patch     1        <- VOID gate
+    #   samples with Ready OFF Available            17 of 78 <- VOID gate
+    #   CONTROL node updated_at moved               0
+    #   recovery observed at                        190s
+    #   IRONIC power_state / the CR's               power off / power off
+    #
+    # 78 samples at 10s = 13 min, so >4 resyncs. Every sample read IRONIC's own
+    # power_state next to the condition, because "stayed Pending" is only a defect
+    # if the vendor has already converged -- if the node has not reached the
+    # target, Pending is CORRECT and the run says nothing about rdc. Ironic
+    # reached `power off` while the CR was still Pending, then the CR caught up.
+    #
+    # WHY THE 2026-11-08 READING SAID NOTHING, and this is the part worth keeping:
+    # it was a ~2 MINUTE window and recovery takes 190s, against a 180s resync. The
+    # window closed before the first resync that could clear the condition could
+    # even run. Every number in it was right; it could not contain the event. A
+    # window shorter than the loop's period can only ever report "nothing
+    # happened". That is why it was left as not-measured rather than called
+    # "stuck", and rounding it off would have been the wrong call -- oasgen was one
+    # hour from designing around a second bug that does not exist.
+    #
+    # NOT transferable: the LATENCY. This is the fake power interface; a real
+    # Redfish transition is slower. What transfers is that it recovers at all.
     #
     # The consequence for the composition roll-up, stated plainly because I got
     # this wrong earlier: the six live CRs report Ready=True only because they
