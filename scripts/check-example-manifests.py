@@ -229,17 +229,36 @@ def doc_snippets(tmpdir, root=None):
     return out, unparseable
 
 
-def _manifests_with_composition_crs(root=None):
-    """Every manifests/*.yaml declaring at least one composition.krateo.io CR.
+def _manifests_with_krateo_crs(root=None):
+    """Every manifests/*.yaml declaring at least one CR in a krateo.io API group.
 
     `root` exists so the self-test can drive this against fixtures. A selector that
     can only be exercised against the real tree is a selector nothing tests -- and
     this function replaced one whose bug was invisible for months precisely because
     no arm ever ran it.
 
-    Parse failures are INCLUDED rather than skipped. A file this screen cannot read
-    is not a file it has cleared, and silently dropping it is how a filter turns an
-    unreadable manifest into a pass -- the same mistake in a different costume. The
+    WIDENED 2026-11-14, AND THE PREVIOUS PREDICATE WAS THE SAME MISTAKE IN A NEW
+    COSTUME. It selected on the substring "composition.krateo.io/", which excluded
+    every GENERATED-CRD CR -- `baremetal.ogen.krateo.io` BaremetalNode, the
+    *Configuration kinds -- although a reader is told to apply those too.
+    Demonstrated rather than inferred: planting an impossible
+    `baremetal.ogen.krateo.io/v9-9-9` in manifests/baremetalnode-quickstart.yaml left
+    this screen at EXIT 0, with "v9-9-9" appearing nowhere in its output, and
+    targets() did not contain the file at all. That manifest's own header says it is
+    "screened by `make check-examples` so it cannot drift from the generated CRDs".
+    It was not. A comment describing a guarantee that does not hold is worse than no
+    comment, because it stops the next reader looking.
+
+    And these are the CRs where the drift actually happens: a generated CRD's served
+    version moves whenever oasgen regenerates it, which is this repo's most frequent
+    wedge. The class the filter excluded was the class most likely to rot.
+
+    SELECTED BY PARSED apiVersion, not by substring. The old test would also match a
+    group named in a comment or in prose, and this file is full of both.
+
+    Parse failures are INCLUDED rather than skipped. A file this screen cannot read is
+    not a file it has cleared, and silently dropping it is how a filter turns an
+    unreadable manifest into a pass -- the same mistake in yet another costume. The
     caller already reports unparsable documents.
     """
     out = []
@@ -249,8 +268,18 @@ def _manifests_with_composition_crs(root=None):
         except OSError:
             out.append(f)
             continue
-        if "composition.krateo.io/" in text:
-            out.append(f)
+        try:
+            docs = list(yaml.safe_load_all(text))
+        except Exception:
+            out.append(f)          # unreadable is not cleared
+            continue
+        for d in docs:
+            if not isinstance(d, dict):
+                continue
+            av = d.get("apiVersion")
+            if isinstance(av, str) and ".krateo.io/" in av:
+                out.append(f)
+                break
     return out
 
 
@@ -280,7 +309,7 @@ def targets():
     # So: take every manifests/*.yaml that CARRIES a composition CR. A file's
     # content is what makes it a thing a reader applies; its name is a convention
     # nobody is obliged to follow.
-    out += sorted(_manifests_with_composition_crs())
+    out += sorted(_manifests_with_krateo_crs())
     # The RestDefinitions themselves, for the multi-identifier rule. They are
     # not "manifests a reader applies" but they are where the identifier hazard
     # would be introduced, and a rule over a file list that excludes its own
@@ -293,7 +322,17 @@ def targets():
     # exclusion is asserted in self_test() rather than assumed, so moving or
     # deleting the fixture cannot quietly empty it.
     out += sorted(glob.glob(os.path.join(REPO, "manifests/restdefinition-*.yaml")))
-    return out
+    # DEDUPE. The widened selector also matches the RestDefinitions themselves
+    # (`ogen.krateo.io/v1alpha1`), which the line above adds explicitly. Screening a
+    # file twice changes no finding but doubles its resource count, and a count this
+    # screen prints is a number a reader trusts.
+    seen, uniq = set(), []
+    for f in out:
+        if f in seen:
+            continue
+        seen.add(f)
+        uniq.append(f)
+    return uniq
 
 
 def self_test():
@@ -328,7 +367,7 @@ def self_test():
             "metadata:\n  name: x\n")
         broken_yaml = write("broken.yaml", "apiVersion: [unclosed\n")
 
-        # SELECTION IS BY CONTENT, NOT BY FILENAME. _manifests_with_composition_crs
+        # SELECTION IS BY CONTENT, NOT BY FILENAME. _manifests_with_krateo_crs
         # replaced a filter that read `"example" in basename or "quickstart" in
         # basename`, under which FOURTEEN applyable manifests went unscreened for
         # months -- every one of them a CR a reader is told to apply, several
@@ -345,7 +384,7 @@ def self_test():
                      "metadata:\n  name: x\n")
         with open(os.path.join(mdir, "example-nothing.yaml"), "w") as fh:
             fh.write("apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n")
-        picked = {os.path.basename(f) for f in _manifests_with_composition_crs(td)}
+        picked = {os.path.basename(f) for f in _manifests_with_krateo_crs(td)}
         cases += 1
         if "blade42-concurrent.yaml" not in picked:
             failures.append(
@@ -358,6 +397,46 @@ def self_test():
                 "selection is OVER-EAGER: a file with no composition CR was selected merely "
                 "for having 'example' in its name. The rule is content, not filename, in BOTH "
                 "directions")
+
+        # THE GENERATED-CRD CLASS, which the predicate excluded until 2026-11-14.
+        # `composition.krateo.io/` missed every `*.ogen.krateo.io` CR, so
+        # manifests/baremetalnode-quickstart.yaml -- whose own header claims it is
+        # screened -- was not in targets() at all, and an impossible v9-9-9 planted in
+        # it left this screen at exit 0. These arms are that defect, kept.
+        with open(os.path.join(mdir, "generated-kind.yaml"), "w") as fh:
+            fh.write("apiVersion: baremetal.ogen.krateo.io/v1-0-0\nkind: BaremetalNode\n"
+                     "metadata:\n  name: x\n")
+        with open(os.path.join(mdir, "plain-secret.yaml"), "w") as fh:
+            fh.write("apiVersion: v1\nkind: Secret\nmetadata:\n  name: x\n")
+        # A krateo group named only in PROSE must not select the file. The old
+        # substring test would have taken this; the parsed test cannot.
+        with open(os.path.join(mdir, "prose-only.yaml"), "w") as fh:
+            fh.write("# see composition.krateo.io/v0-1-0 for the chart's own CR\n"
+                     "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: x\n")
+        # A multi-document file whose krateo CR is NOT the first document. My own new
+        # example is exactly this shape: a Secret, then the BaremetalNode.
+        with open(os.path.join(mdir, "secret-then-cr.yaml"), "w") as fh:
+            fh.write("apiVersion: v1\nkind: Secret\nmetadata:\n  name: s\n---\n"
+                     "apiVersion: baremetal.ogen.krateo.io/v1-0-0\nkind: BaremetalNode\n"
+                     "metadata:\n  name: x\n")
+        picked = {os.path.basename(f) for f in _manifests_with_krateo_crs(td)}
+        for name, want in (("generated-kind.yaml", True), ("plain-secret.yaml", False),
+                           ("prose-only.yaml", False), ("secret-then-cr.yaml", True)):
+            cases += 1
+            if (name in picked) != want:
+                failures.append(
+                    "selector regressed on %s: expected selected=%s, got %s. The generated-CRD "
+                    "class is the one most likely to rot, because a generated CRD's served "
+                    "version moves whenever oasgen regenerates it" % (name, want, name in picked))
+
+        # AND THE DISCRIMINATOR FOR THIS SELECTOR: it must be able to say NO. Every arm
+        # above that expects False would also pass against a selector that returned
+        # nothing at all, which is the shape that left 14 manifests unscreened.
+        cases += 1
+        if not picked:
+            failures.append(
+                "the selector returned NOTHING for a fixture tree containing krateo CRs, so "
+                "every negative arm above is vacuous")
 
         # OVER-EAGERNESS ARMS. Four of the original five cases tested rules I
         # was thinking about while writing them; only "a correct manifest
