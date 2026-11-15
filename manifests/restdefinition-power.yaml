@@ -310,8 +310,39 @@ spec:
     # "stuck", and rounding it off would have been the wrong call -- oasgen was one
     # hour from designing around a second bug that does not exist.
     #
-    # NOT transferable: the LATENCY. This is the fake power interface; a real
-    # Redfish transition is slower. What transfers is that it recovers at all.
+    # THE OBVIOUS OBJECTION WAS REMOVED, 2026-11-15: it converges on the REDFISH
+    # power driver too, in 180s against the fake path's 190s.
+    #
+    # The objection to the measurement above was "that is the fake interface, and
+    # a real BMC may behave differently" -- fair, and it could not be answered
+    # here, because until that day the local stack had NO BMC at all
+    # (local/ironic.conf enabled only fake-hardware/fake, and the lab's
+    # sushy-emulator lives outside the cluster). So `make sushy-up` now puts a
+    # Redfish BMC in-cluster and enables Ironic's redfish interfaces, and the run
+    # was redone through the real Redfish protocol path -- Ironic issuing
+    # GET /redfish/v1/Systems/{id} and POST .../Actions/ComputerSystem.Reset.
+    #
+    #   power_interface read back from Ironic   redfish    <- the gate
+    #   reached Ready=True before the patch     1          <- VOID gate
+    #   Ironic updated_at moved after the patch 1          <- VOID gate
+    #   samples with Ready OFF Available        16 of 78   <- VOID gate
+    #   recovery observed at                    180s
+    #   THE BMC's own PowerState                Off  (target was Off)
+    #   Ironic's power_state / the CR's         power off / power off
+    #
+    # THE GATE IS THE LOAD-BEARING PART. `BaremetalNode` cannot express
+    # `power_interface` -- it is not in oas/ironic-node.yaml -- so a node inherits
+    # Ironic's cluster default, which `sushy-up` switches. Had that switch quietly
+    # failed, the arm would have measured the FAKE interface while printing
+    # "redfish" at the top: a true measurement under a false heading, the error
+    # this file already records once (the #670 attribution). So the arm reads
+    # power_interface BACK from Ironic and refuses to run unless it says redfish.
+    #
+    # NOT transferable, and now for two reasons: the LATENCY. There is no hardware
+    # behind the emulator, and its amd64-only image runs under qemu on an arm64
+    # host, so 180s and 190s are two emulators agreeing rather than a BMC figure.
+    # A transferable transition latency needs the real blades. What transfers is
+    # that it recovers at all, on both power paths.
     #
     # The consequence for the composition roll-up, stated plainly because I got
     # this wrong earlier: the six live CRs report Ready=True only because they
