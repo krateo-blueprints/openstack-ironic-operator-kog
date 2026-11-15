@@ -5,6 +5,7 @@
 
 HELM_NAMESPACE ?= default
 IRONIC_NS ?= openstack
+SCRATCH_CONF ?= /tmp/ironic.conf.redfish
 
 # --- Local test environment (isolated kind cluster; never touches ~/.kube/config) ---
 KIND_CLUSTER ?= ironic-kog
@@ -219,6 +220,34 @@ ironic-up: ironic-image  # deploy standalone Ironic (fake drivers, noauth) into 
 		--from-file=ironic.conf=local/ironic.conf --dry-run=client -o yaml | $(KUBECTL) apply -f -
 	$(KUBECTL) -n $(IRONIC_NS) rollout restart deploy/ironic
 	$(KUBECTL) -n $(IRONIC_NS) rollout status deploy/ironic --timeout=240s
+
+sushy-up:   # a Redfish BMC in-cluster, and switch Ironic's default power interface to redfish
+# NOT part of local-up, on purpose: nothing in the default stack needs a BMC, and
+# an idle emulator is one more pod on a contended host.
+#
+# THE DEFAULT SWITCH IS THE POINT, and it is why this is a target rather than just
+# a manifest. `BaremetalNode` cannot express `power_interface` -- it is not in
+# oas/ironic-node.yaml, so the CR has no field for it -- so the only way to put a
+# node on the redfish power driver through the KOG path is to make it Ironic's
+# DEFAULT. That is a whole-cluster switch, hence the lab guard: throwaway clusters
+# only.
+	$(call PROTECT_LAB,$(KIND_CLUSTER))
+	$(KUBECTL) apply -f local/sushy-emulator.yaml
+	$(KUBECTL) -n $(IRONIC_NS) rollout status deploy/sushy-emulator --timeout=180s
+	sed -e 's/^default_power_interface = fake$$/default_power_interface = redfish/' \
+	    -e 's/^default_management_interface = fake$$/default_management_interface = redfish/' \
+	    local/ironic.conf > $(SCRATCH_CONF)
+	@grep -q '^default_power_interface = redfish$$' $(SCRATCH_CONF) || \
+		{ echo "SUBSTITUTION FAILED: default_power_interface not switched"; exit 1; }
+	@grep -q '^default_management_interface = redfish$$' $(SCRATCH_CONF) || \
+		{ echo "SUBSTITUTION FAILED: default_management_interface not switched"; exit 1; }
+	$(KUBECTL) -n $(IRONIC_NS) create configmap ironic-config \
+		--from-file=ironic.conf=$(SCRATCH_CONF) --dry-run=client -o yaml | $(KUBECTL) apply -f -
+	$(KUBECTL) -n $(IRONIC_NS) rollout restart deploy/ironic
+	$(KUBECTL) -n $(IRONIC_NS) rollout status deploy/ironic --timeout=240s
+	@echo "redfish BMC at http://sushy-emulator.$(IRONIC_NS).svc:8000 -- the system UUID is"
+	@echo "an undocumented constant of this image's fake driver -- discover it from"
+	@echo "/redfish/v1/Systems rather than pinning it to one image digest."
 
 ironic-down:  # remove standalone Ironic from the kind cluster
 	-$(KUBECTL) delete -f local/ironic-standalone.yaml
