@@ -223,6 +223,60 @@ spec:
       # BaremetalNode CR, which has a working responseTransform, and that is why
       # nothing has broken. Decided by the user 2026-11-07 when offered the
       # convergent option.
+      #
+      # THIS KIND OWES A DECLARATION, agreed across three repos on 2026-11-15 and
+      # recorded here because the agreement otherwise lives only in a chat thread
+      # that no later reader gets.
+      #
+      # The contract. rdc will gain a per-verb
+      # `verbsDescription[].restsAtNotReady` carrying its reason, so the emitted
+      # literal comes from plumbing (`conditions.ReasonTerminalByDesign`) rather
+      # than being invented by the producer, and core-provider's rollup and
+      # oasgen's producer share the bytes. core-provider#498's recorded decisions:
+      # a declared child is counted childHealthy AND is never stalled -- "A
+      # declared (TerminalByDesign) child is never stalled" -- so it is exempt
+      # from the 1h ChildStalled deadline whatever its age.
+      #
+      # WHY THIS KIND AND NOT BaremetalNode. BaremetalNode converges: it reaches
+      # Ready=True/Available in about 120s, measured at 0.61.0 in two arms. Its
+      # failure to get there is precisely the signal ChildStalled exists to raise,
+      # so declaring it would silence the thing the feature is for. This kind
+      # cannot converge -- `target` takes `active`, and driving there wipes the
+      # disk -- which is why the declaration is right HERE and wrong one kind
+      # over.
+      #
+      # NOT POSSIBLE YET, and the version matters: `restsAtNotReady` does not
+      # exist in any oasgen build. Zero matches at 0.67.0, 0.68.0, 0.69.0 and
+      # origin/main, checked 2026-11-15. Three tags were cut after the name was
+      # settled and none carries it, so there is nothing to wire to and no version
+      # to pin.
+      #
+      # WHAT I OWE WHEN IT SHIPS, in this order: declare it here, then measure it
+      # on a THROWAWAY cluster, reading the declaration back out of the GENERATED
+      # CRD rather than trusting this file. "The manifest says it" is not "the CRD
+      # has it" -- the same gate ARM 5 used when it read power_interface back from
+      # Ironic instead of believing `make sushy-up`. core-provider ships the
+      # ChildStalled half only after that measurement, because until this kind
+      # declares, every healthy BaremetalHost and the cluster composition above it
+      # would go stalled after an hour.
+      #
+      # THE EXPOSURE, counted with a stated predicate because two of us got it
+      # wrong first: `grep -rn '^kind: NodeProvision$' charts/*/templates/*.yaml`
+      # gives ELEVEN render sites -- baremetal-host 6, baremetal-lifecycle 3,
+      # baremetal-discovery 2, one per file, no indented variants, no file that
+      # mentions the kind without rendering it. Of those only the baremetal-host
+      # SIX are renderable: the other two charts are deprecated and emit `kind:
+      # Node`, which no RestDefinition declares, so their output cannot be applied
+      # at all. 11 is the template count; 6 is the fleet's.
+      #
+      # AND A PRECEDENT WORTH CARRYING, because it points the other way. The same
+      # shape already happened once: six live NodePower CRs latched at
+      # Ready=False/Pending made every BaremetalHost read Ready=False/Creating
+      # permanently, naming the power CR, with zero live NodeProvision CRs
+      # (2026-11-07). The right fix THERE was to make the child converge, not to
+      # declare it terminal -- see restdefinition-power.yaml. So "latched child,
+      # declare it terminal" is not a general rule. It is right here only because
+      # converging this kind would retry a disk wipe.
       - action: create
         method: PUT
         path: /v1/nodes/{node_id}/states/provision
