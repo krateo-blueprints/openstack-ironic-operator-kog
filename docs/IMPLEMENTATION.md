@@ -2838,14 +2838,24 @@ not to be one.
 So "every blade loses its publisher at the next reinstall" is true only for (b) and (c), and
 the deadline should be written as those three events rather than as "a reinstall".
 
-**The open input that decides which deadline is real: the version the lab runs.** If it is
-older than 0.3.52, then (a) is the live deadline — and it is an **upgrade**, not a reinstall,
-which is a much more ordinary thing to do by accident. `openstack-as-a-service` does not know
-the lab's version and asked that it not be taken from them. That question is Diego's.
+**That open input is now closed. Diego confirmed 2026-11-15 that the lab runs 0.3.52 or
+newer**, so **(a) does not apply** — the rotation it describes has either already happened or
+never will. `openstack-as-a-service` does not know the lab's version and asked that it not be
+taken from them, which is why this came from Diego rather than from the umbrella's side.
 
-That still reframes the migration — hygiene with a deadline somebody else sets — but the
-deadline is one of three specific events, one of them an upgrade, and which one applies is
-not yet known.
+So the only remaining triggers are **(b)** a new install into a new namespace or cluster and
+**(c)** someone deleting the credential root. Both are deliberate acts, not routine
+maintenance, and neither is on anyone's calendar.
+
+**Which changes what this migration is.** It is no longer hygiene with a deadline somebody
+else sets — the accidental-upgrade path is gone. It is hygiene with **no imminent deadline**,
+whose cost of delay is that a cloud-admin credential sits in plaintext in five cloud-init
+sites and in every blade's config drive, readable by any Ironic reader, for as long as it is
+left there. That is a reason to do it, but not a reason to do it *today*, and §9.10's
+"unblocked but not applied" is the right status rather than an overdue one.
+
+The failure mode below still matters, because (b) and (c) are survivable-but-silent: if
+either happens, the symptom is an absence, not an error.
 
 #### How the failure looks, so it is recognised rather than diagnosed
 
