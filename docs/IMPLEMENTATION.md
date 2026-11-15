@@ -1172,7 +1172,9 @@ node, but it changes node ownership semantics, so it is a separate decision rath
 than something to fold in here.
 
 **Status: unblocked but not applied.** Nothing here runs without creating a live
-credential, which is yours.
+credential, which is yours. The verification half is now a script —
+`scripts/verify-publisher-scope.sh`, see §9.23 — so what is left on this side is only the
+four creation commands above; everything after them is run and judged by the script.
 
 #### Re-measured 2026-11-15: five render sites, not three — and it is now also a
 #### functional failure, not only an exposure
@@ -2747,6 +2749,50 @@ openstack --os-system-scope all --os-username ironic-publisher \
 Reading 3 is the one that is easy to skip and is the whole point: three refusals prove a
 credential is scoped only if an unscoped credential is accepted by the same path at the same
 moment. Otherwise they prove the API is down. Same shape as every zero in this document.
+
+#### Corrected 2026-11-15: those probes are now a script, because two of them were destructive
+
+The pre-flight above has a defect that survived being written down, reviewed and
+referenced: **reading 3 performs the writes it describes.** As the publisher,
+`node set --driver fake-hardware blade01` and `node power off blade01` are expected to be
+refused and are harmless. As **admin** — which is exactly what reading 3 asks for — they
+succeed. The positive control as written changes a live blade's driver and powers a live
+blade off. Manual power operations on blades are out by standing instruction, so the runbook
+was telling its reader to do something this repo does not do.
+
+`scripts/verify-publisher-scope.sh` is the pre-flight, rewritten so the control is kept and
+the destruction is not:
+
+| | how |
+|---|---|
+| the positive control | a **no-op privileged write**: `--driver` set to the value the node already holds. The whole policy-and-write path is exercised; the blade is unchanged. |
+| the publisher's write probe | the same shape — one existing `extra` key re-set to its own value. If `extra` is empty the probe reports **NOT PROBED** rather than inventing a key in the field the publishers own. |
+| power | **not probed at all.** There is no no-op form of a power command. §9.10 reads this rule out of the default policy, which is a document reading and not a measurement, and the script's summary says so rather than counting it as verified. |
+| `instance_info image_source` | not probed — a no-op set is possible, but this is the one field the repo never touches by hand. |
+
+Three further things it does that the prose version could not:
+
+- **VOID before PASS.** Both gates (admin can read; admin's no-op write is accepted) run
+  *first*, and if either fails the verdict is `VOID`, not a pass with a caveat. A 403 proves
+  scoping only if an unscoped credential is accepted at that same moment.
+- **It distinguishes a refusal from a failure.** `classify()` separates 403 from 401, 404 and
+  an unreachable endpoint, so a negative check cannot pass by failing for the wrong reason.
+  That classifier is self-tested in `make check` (`check-publisher-scope-selftest`) —
+  ten cases, including the two that must not read as `FORBIDDEN`.
+- **`--dry-run` prints every command without a cloud to point at**, so the sequence can be
+  reviewed before it is run.
+
+The password is read with `read -rs`: never echoed, never written to disk, never in argv.
+`OS_CLOUD` and every project-scope variable are cleared for the publisher's calls, because a
+`clouds.yaml` entry combined with `--os-system-scope all` is the collision that produced a
+spurious 403 on `port:create` once already.
+
+Run it as:
+
+```bash
+scripts/verify-publisher-scope.sh --dry-run blade01   # review the exact commands
+scripts/verify-publisher-scope.sh blade01             # then, with the admin env working
+```
 
 #### The rollout, and the only ordering that matters
 

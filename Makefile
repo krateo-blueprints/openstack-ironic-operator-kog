@@ -772,8 +772,17 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 	python3 -I scripts/check-blueprint-metadata.py --self-test && \
 		python3 -I scripts/check-blueprint-metadata.py $(if $(BLUEPRINT_ONLINE),--online,)
 
-check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set check-chart-version-moved check-chart-renders check-release-table check-bmc-passthrough   # every standing screen
+check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set check-chart-version-moved check-chart-renders check-release-table check-bmc-passthrough check-publisher-scope-selftest   # every standing screen
 	@echo "all standing screens passed"
+
+check-publisher-scope-selftest:   # the scope verifier can still tell a 403 from a failure
+# The verifier itself needs a live OpenStack and so cannot run in CI. Its CLASSIFIER
+# can: it is the part that decides whether a refusal is a reading, and the failure it
+# exists to prevent is reading "the command failed" as "permission denied" -- which
+# turns a wrong node name or an unreachable Keystone into a scoping PASS. So the
+# classifier is self-tested here, including the two cases that must NOT read as
+# FORBIDDEN (a 401 and a 404).
+	./scripts/verify-publisher-scope.sh --self-test
 
 chart-host-pinned:   # add the chart versions the LIVE CompositionDefinitions pin
 	# NO LONGER NEEDED ON EVERY RESUME. It used to be, because the chartrepo pod
