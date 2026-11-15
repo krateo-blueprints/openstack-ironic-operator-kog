@@ -2895,6 +2895,91 @@ token minted per deploy — is a different and larger change, and §9.10's "tigh
 (per-node `owner`, no system scope) is the step between. Narrowing the blast radius is worth
 doing first precisely because it is the cheap part.
 
+### §9.24 — raising rdc's log level, and why the obvious way fails silently
+
+Written because it cost most of an evening and the failure mode is invisible.
+
+#### The obvious way does not work, and reports that it did
+
+```bash
+kubectl -n openstack set env deploy/ironic-node-provision-controller REST_CONTROLLER_DEBUG=true
+kubectl -n openstack rollout status deploy/ironic-node-provision-controller
+```
+
+Both commands **report success**. Reading the Deployment back afterwards:
+
+```
+container: nodeprovisions-v1-0-0-controller
+args:      [-group=…, -version=v1-0-0, -resource=nodeprovisions, -label-selector=…]
+env:       (empty)                 <- the value is gone
+envFrom:   configMapRef: ironic-node-provision-controller-configmap
+```
+
+The generated controller takes its environment **via `envFrom`** from a ConfigMap that
+oasgen-provider renders, and oasgen reconciles both objects. So the env you set is removed
+on the next reconcile, with no error, no event and nothing to grep. Same shape as the
+apiserver pruning an undeclared field: the write is accepted and discarded.
+
+And at 0.61.0 that ConfigMap carries no debug key at all:
+
+```
+HOME=/tmp
+REST_CONTROLLER_ALLOW_ANY_HOST=false
+REST_CONTROLLER_ENDPOINT_ALLOWLIST=
+REST_CONTROLLER_SERVICEACCOUNT_NAME=nodeprovisions-baremetal.ogen.krateo.io-v1alpha1
+REST_CONTROLLER_SERVICEACCOUNT_NAMESPACE=openstack
+```
+
+#### The supported lever is on the provider chart, not the controller
+
+```yaml
+# values for the OASGEN-PROVIDER chart, not the generated controller
+rdc:
+  env:
+    REST_CONTROLLER_DEBUG: "true"
+```
+
+Use `--set-string`, not `--set`: the schema types those values as strings, and a bool
+`true` against a string schema is its own quiet failure.
+
+Three consequences worth knowing before reaching for it:
+
+- **it is fleet-wide.** There is no per-controller granularity, so debugging one kind turns
+  on verbose logging for every generated controller in the namespace;
+- **it requires redeploying the provider chart**, so debugging one generated controller
+  means changing the thing that generates it — a cluster-wide action, throwaway clusters
+  only;
+- **the obvious attempt fails silently**, as above. Filed with oasgen as an operability
+  gap: someone debugging a reconcile loop in a generated controller has no supported way to
+  turn on the logs that would explain it, where "supported" means without touching the
+  provider's own release.
+
+#### Prefer a counter the subject keeps about itself
+
+For the specific question "how many times was the create dispatched", the log is the wrong
+instrument regardless of verbosity, because rdc already maintains the number and persists
+it on the CR:
+
+```
+krateo.io/inferred-absence-repeats
+```
+
+`reportInferredAbsence` calls `inferredCounter.record`, logs the result at **Info**, and
+states the semantics in its own event text — *"has had its absence inferred … N times for
+the same spec generation: the create that followed the previous inference did not make it
+findable"*. One `kubectl get`, no verbosity dependency.
+
+**Two caveats, both load-bearing.** The counter is **per spec generation** and **resets when
+the generation changes**, so a window spanning a spec edit restarts it and a low number must
+not be read as a non-effect — sample `metadata.generation` alongside it and void the reading
+if it moves. And **absent is not zero**: absent means rdc has recorded no inference for that
+CR, which is an absence of instrument, not an absence of dispatches.
+
+**The general form, which is the part that transfers:** a count derived from someone else's
+default verbosity is a count with a hidden dependency. `REST_CONTROLLER_DEBUG` defaults
+false, so a log-derived dispatch count reads 0 whatever happens — a structurally-zero number
+sitting in a primary output. Prefer a value the measured thing maintains about itself.
+
 ### 9.13f — oasgen 0.61.0 adopted, and what #599 actually demonstrated
 
 **Digests verified BEFORE installing**, computed with
