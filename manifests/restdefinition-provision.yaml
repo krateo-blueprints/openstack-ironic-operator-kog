@@ -388,7 +388,7 @@ spec:
       # first, which is what the charts produce:
       #
       #   provision_state   enroll -> manageable     the transition LANDED
-      #   dispatch_repeats  1 -> 1                   exactly ONE dispatch
+      #   inferred-repeats  1 -> 1                   see the counter note below
       #   Ready             Pending                  73 of 74 samples
       #   Synced            ReconcileSuccess         no error anywhere
       #   Observed          ABSENT                   never set
@@ -411,6 +411,43 @@ spec:
       # silence. The chart gate still bounds the CR's lifetime, but it is not what
       # bounds the dispatching -- rdc does, by itself.
       #
+      # THE COUNTER I READ WAS THE WRONG ONE -- corrected the same evening, by
+      # oasgen, before this was merged. There are TWO counters with TWO annotations:
+      #
+      #   krateo.io/inferred-absence-repeats   reportInferredAbsence, the ELSE-IF
+      #                                        branch: notfound with NO Pending.
+      #                                        This kind writes it only on the very
+      #                                        FIRST observe, before the create.
+      #   krateo.io/latched-absence-repeats    reportLatchedInferredAbsence, called
+      #                                        INSIDE the Pending guard. This is the
+      #                                        one that increments on every latch
+      #                                        thereafter.
+      #
+      # I sampled the first. It reads a flat 1 because from the moment the create
+      # set Pending every miss takes the LATCHED path and increments the OTHER
+      # annotation -- so the number is flat because the counter stopped being the
+      # one in use, not because nothing further happened. A dead value that looks
+      # live, in a primary output, for the second time today.
+      #
+      # THE CONCLUSION SURVIVES, on the mechanism rather than on that number: the
+      # Pending guard returns exists-and-up-to-date, so no create is dispatched
+      # after the first. One dispatch is what the LATCH guarantees; the flat 1 was
+      # never the evidence for it. oasgen verified the guard exists at TWO sites,
+      # restResources.go:357 (get) and :522 (findby, this kind's).
+      #
+      # AND THE LATCHED DETECTOR'S SILENCE IS EXPLAINED, NOT A DEFECT. rdc emits a
+      # Warning (reasonAbsenceLatched) once the latch count reaches
+      # maxLatchedAbsenceRepeats = 5 (latched_absence.go:49) -- the detector built
+      # to separate "a create in flight" from "one that will never land", for which
+      # this kind is the canonical never-lands case. No such event appeared: the
+      # arm's event counter held at exactly 1 across all 74 samples. The reason is
+      # arithmetic, measured: Pending held t+10s..t+831s = 821s, which at a 180s
+      # resync is 4.6 latches against a threshold of 5. THE WINDOW WAS SHORT BY ONE
+      # LATCH. Same shape as the 2026-11-08 power reading that could not contain a
+      # 190s recovery -- a window shorter than the thing it is meant to observe --
+      # except here it was shorter than the THRESHOLD rather than the period.
+      # So the next run needs >5 latches of Pending, not >4 resyncs: budget 1100s+.
+      #
       # THREE PREDICTIONS, ALL WRONG, in this order: Ready=True-while-inert (that
       # is the findby-MATCHES branch, unreachable here); a sign inversion from
       # enforcement (moot); re-dispatch every resync (refuted above). The measured
@@ -429,7 +466,10 @@ spec:
       # as its own case.
       #
       # STILL OWED: the same reading at whatever tag serves the declaration, with
-      # `metadata.generation` sampled per row -- inferredCounter resets when the
+      # FOUR fixes -- read `latched-absence-repeats` as the latch counter, sample a
+      # window longer than 5 latches (1100s+) so the Warning can fire, evaluate the
+      # target-validity gate AT CR-CREATION TIME, and sample
+      # `metadata.generation` per row -- inferredCounter resets when the
       # generation changes, so a window spanning a spec edit restarts the count.
       # This window provably contains no spec edit (the CR is applied once per
       # ordering and never patched), but that is an argument from reading the
