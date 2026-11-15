@@ -235,7 +235,12 @@ spec:
       #     - action: update
       #       path: /v1/nodes/{uuid}/states/power
       #       method: PUT
-      #       restsAtNotReady: 240s        # <- expected settle bound
+      #       restsAtNotReady: 90s          # <- a PURE BACKEND figure
+      #
+      # and rdc publishes the SUM, which is the field core-provider reads:
+      #
+      #   status:
+      #     restsAtNotReadyEffective: 270s  # 90s declared + this deployment's 180s resync
       #
       # It is opt-in: a verb that does not declare it behaves exactly as today.
       # core-provider#498's recorded decisions stand -- a declared child is
@@ -288,11 +293,22 @@ spec:
       # wait -- and the resync interval is an env var on the rdc Deployment, an
       # operator's choice that this file cannot read. Raised to 5m, any 240s
       # declared here trips on a perfectly healthy drift correction. Put to oasgen
-      # on 2026-11-15: either rdc adds its own resync interval to the declared
-      # duration (it knows the value, this file never will), or it refuses a
-      # declaration <= resyncInterval at load. Unanswered as of this commit, and
-      # the number stays unpicked until it is -- a figure taken from the arms
-      # above would be a controller-wait bound wearing a backend-settle label.
+      # on 2026-11-15, and ANSWERED the same day: rdc adds its own resync interval
+      # and publishes the sum as `status.restsAtNotReadyEffective`. So the number
+      # written HERE is a pure backend figure, portable between deployments, and
+      # core-provider reads the STATUS field -- the spec value is deliberately
+      # wrong as a stall bound and must never be read as one. The
+      # validate-at-load alternative lost because it left the author's number
+      # unportable: the same RestDefinition correct on a 3m fleet and wrong on a
+      # 5m one, with no way to see which it was shipping to.
+      #
+      # WHICH MEANS THE NUMBER THIS FILE OWES IS A BACKEND SETTLE TIME, and this
+      # repo does not have one. The arms bound it at <=90s and never resolved
+      # below that. The backend-resolved arm -- backend read at the CR's own 10s
+      # cadence, on both the fake and the redfish interface -- is queued as the
+      # next session's measurement. Its result will be an EMULATOR backend term,
+      # flagged as one; the hardware margin stays an open input that only someone
+      # with real blades can close.
       #
       # WHAT I OWE WHEN IT SHIPS, in this order: declare it here, then measure it
       # on a THROWAWAY cluster, reading the declaration back out of the GENERATED
