@@ -2829,11 +2829,17 @@ The password the blades hold changes on exactly three events:
 | (b) | a **new install** into a new namespace or cluster |
 | (c) | **anyone deleting that root** — the generator then makes a new value |
 
-**And one path is explicitly unmeasured:** uninstall followed by reinstall into the *same*
-namespace. The `keep` policy means the root survives the uninstall and a reinstall would
-reuse it, so the password would **not** change — but nobody has run it. Every run on that
-side was a fresh cluster, deleted afterwards. So it is neither a trigger nor safely assumed
-not to be one.
+**The same-namespace path is now half measured** (`openstack-as-a-service`, 2026-11-15, on
+a 0.3.65 install on GKE, `osh-065`). After deleting the Openstack composition and waiting
+for every Helm release to be gone, **all 89 credential roots were still present** —
+ExternalSecret *and* Secret. `openstack-credential-identity-admin` survived, still owned by
+its ExternalSecret. So a reinstall into the same namespace finds the existing roots and
+`CreatedOnce` does not regenerate them: the admin password would stay the same.
+
+Still unmeasured: **the reinstall itself** — that a new release adopts the kept roots
+without a conflict. So "the password survives" is measured for the *deletion* half and
+inferred for the *adoption* half. That is a better position than the blanket "unmeasured"
+this section carried before, and it is not the same as verified.
 
 So "every blade loses its publisher at the next reinstall" is true only for (b) and (c), and
 the deadline should be written as those three events rather than as "a reinstall".
