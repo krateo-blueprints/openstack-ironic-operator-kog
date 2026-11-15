@@ -269,3 +269,35 @@ A comparison between two arms **at one version** keeps reporting PASS after its 
 stops holding, because both arms move together. Pin the mechanism, not the number: the
 assertion that survived the version change is the one about *which field appears where*, not
 the one about 2264 bytes.
+
+#### And it expired exactly that way on 2026-11-15 — from THIS side, not upstream
+
+`2264` no longer reproduces: adding `power_interface` to `oas/ironic-node.yaml` moved the
+node spec schema to **2413**. The rows above are still correct as measurements — both arms
+were identical, and they still are — but their absolute figure is now historical.
+
+Note which direction it expired from. The note above anticipated an oasgen version change
+moving the number. What actually moved it was a change in **this repo's own OAS**, which no
+upstream version pin protects against and no screen here watches. The mechanism assertion
+survived untouched, as predicted; the number died of something the prediction did not name.
+
+Re-measured with `-count=1` and the file state checked at each arm:
+
+```
+without power_interface   2264 bytes   (0 occurrences in the OAS)
+with it, terse description 2413 bytes  (3 occurrences)   +149
+with it, verbose description 3188 bytes               +924
+```
+
+**The third row is a finding in its own right.** oasgen copies an OAS `description` into the
+generated CRD, so prose there is stored in etcd and printed by `kubectl explain`. My first
+draft of the field put ~15 lines of repo rationale in its `description` and cost 924 bytes --
+six times the field itself -- to ship repo history as API documentation. Descriptions stay
+terse; rationale goes in a YAML `#` comment, which oasgen does not read.
+
+**And the first attempt to measure this read a cached result.** `go test` caches passing
+runs, and this test reads the OAS **at runtime**, so the file is not a build input and
+changing it does not invalidate the cache. Two arms that genuinely differed both printed
+2264 until `-count=1` was added. Any arm here that varies a file the test reads rather than
+compiles MUST pass `-count=1`, and should print something that proves which input it saw --
+the occurrence count above is there for that reason.

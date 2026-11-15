@@ -254,6 +254,26 @@ components:
             Available since API microversion 1.47.
         network_interface:
           type: string
+        # ADDED 2026-11-15 because the CR could not express it, and the gap had a
+        # cost: `make sushy-up` must switch Ironic's CLUSTER-WIDE default to put one
+        # node on the redfish power driver, which is why that target carries a lab
+        # guard. With this field a node asks for redfish by itself.
+        #
+        # NOT added: `management_interface`, the symmetric sibling. Nothing needs it
+        # -- the redfish POWER driver reads its connection from driver_info and does
+        # not require redfish management for a power get or set (measured 2026-11-15
+        # with management_interface=fake). Every property here is a permanent
+        # addition to a generated CRD's schema, so the bar is a use, not symmetry.
+        #
+        # THE RATIONALE IS A `#` COMMENT AND NOT A `description` ON PURPOSE. oasgen
+        # copies `description` into the generated CRD, so it lands in etcd and in
+        # `kubectl explain`. The first draft of this field put all of the above in a
+        # description and took the node spec schema from 2264 to 3188 bytes -- ~900
+        # bytes of repo history shipped as API documentation. Keep descriptions
+        # terse and user-facing; put the history in comments.
+        power_interface:
+          type: string
+          description: Ironic power interface, e.g. `redfish`. Omit to use Ironic's default.
         resource_class:
           type: string
         parent_node:
@@ -298,6 +318,26 @@ components:
           additionalProperties: true
         network_interface:
           type: string
+        # ADDED 2026-11-15 because the CR could not express it, and the gap had a
+        # cost: `make sushy-up` must switch Ironic's CLUSTER-WIDE default to put one
+        # node on the redfish power driver, which is why that target carries a lab
+        # guard. With this field a node asks for redfish by itself.
+        #
+        # NOT added: `management_interface`, the symmetric sibling. Nothing needs it
+        # -- the redfish POWER driver reads its connection from driver_info and does
+        # not require redfish management for a power get or set (measured 2026-11-15
+        # with management_interface=fake). Every property here is a permanent
+        # addition to a generated CRD's schema, so the bar is a use, not symmetry.
+        #
+        # THE RATIONALE IS A `#` COMMENT AND NOT A `description` ON PURPOSE. oasgen
+        # copies `description` into the generated CRD, so it lands in etcd and in
+        # `kubectl explain`. The first draft of this field put all of the above in a
+        # description and took the node spec schema from 2264 to 3188 bytes -- ~900
+        # bytes of repo history shipped as API documentation. Keep descriptions
+        # terse and user-facing; put the history in comments.
+        power_interface:
+          type: string
+          description: Ironic power interface, e.g. `redfish`. Omit to use Ironic's default.
         resource_class:
           type: string
         parent_node:
@@ -340,6 +380,26 @@ components:
           type: string
         network_interface:
           type: string
+        # ADDED 2026-11-15 because the CR could not express it, and the gap had a
+        # cost: `make sushy-up` must switch Ironic's CLUSTER-WIDE default to put one
+        # node on the redfish power driver, which is why that target carries a lab
+        # guard. With this field a node asks for redfish by itself.
+        #
+        # NOT added: `management_interface`, the symmetric sibling. Nothing needs it
+        # -- the redfish POWER driver reads its connection from driver_info and does
+        # not require redfish management for a power get or set (measured 2026-11-15
+        # with management_interface=fake). Every property here is a permanent
+        # addition to a generated CRD's schema, so the bar is a use, not symmetry.
+        #
+        # THE RATIONALE IS A `#` COMMENT AND NOT A `description` ON PURPOSE. oasgen
+        # copies `description` into the generated CRD, so it lands in etcd and in
+        # `kubectl explain`. The first draft of this field put all of the above in a
+        # description and took the node spec schema from 2264 to 3188 bytes -- ~900
+        # bytes of repo history shipped as API documentation. Keep descriptions
+        # terse and user-facing; put the history in comments.
+        power_interface:
+          type: string
+          description: Ironic power interface, e.g. `redfish`. Omit to use Ironic's default.
         description:
           type: string
         maintenance:
