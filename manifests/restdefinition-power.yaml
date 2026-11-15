@@ -344,6 +344,31 @@ spec:
     # A transferable transition latency needs the real blades. What transfers is
     # that it recovers at all, on both power paths.
     #
+    # AND A THIRD REASON, THE DECISIVE ONE (2026-11-15): these are not backend
+    # figures at all, they are RESYNC figures. On a 202 the pending branch
+    # (rest-dynamic-controller/internal/controllers/restResources.go:1328 and
+    # :1530) sets Pending and returns -- no RequeueAfter -- and this kind declares
+    # no async block, so nothing re-observes until the next resync tick:
+    # `REST_CONTROLLER_RESYNC_INTERVAL`, default `time.Minute*3` (main.go:89).
+    # Both arms therefore measured ONE RESYNC PERIOD, and the 10s between 180 and
+    # 190 is one sample interval of a 10s sampler -- 1 LSB of the instrument, not
+    # a difference between the two drivers.
+    #
+    # The backend had already finished long before either CR went Ready. At t+90
+    # arm 4 read Ironic `power off` with `target_power_state=None`, and arm 5 read
+    # that plus the BMC's own `PowerState=Off`. But both arms read the CR every
+    # 10s and the backend only every 90s (`[ $((i % 9)) -eq 0 ]` gates the Ironic
+    # and BMC reads), so the backend term is bounded at <=90s and UNRESOLVED below
+    # it. Separating the two terms needs a re-run that reads the backend at the
+    # CR's cadence.
+    #
+    # Why this matters outside this file: these two numbers were read as evidence
+    # that settle time is a property of the BACKEND, and on that basis shaped
+    # oasgen's per-verb `restsAtNotReady` -- see restdefinition-provision.yaml.
+    # They cannot carry that, because the backend is precisely the part they did
+    # not resolve. Quote them as "it recovers on both power paths, within one
+    # resync of the backend finishing", never as a latency.
+    #
     # The consequence for the composition roll-up, stated plainly because I got
     # this wrong earlier: the six live CRs report Ready=True only because they
     # were ALREADY converged when first observed -- target == observed, no call.

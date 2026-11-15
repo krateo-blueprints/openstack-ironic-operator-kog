@@ -228,14 +228,28 @@ spec:
       # recorded here because the agreement otherwise lives only in a chat thread
       # that no later reader gets.
       #
-      # The contract. rdc will gain a per-verb
-      # `verbsDescription[].restsAtNotReady` carrying its reason, so the emitted
-      # literal comes from plumbing (`conditions.ReasonTerminalByDesign`) rather
-      # than being invented by the producer, and core-provider's rollup and
-      # oasgen's producer share the bytes. core-provider#498's recorded decisions:
-      # a declared child is counted childHealthy AND is never stalled -- "A
-      # declared (TerminalByDesign) child is never stalled" -- so it is exempt
-      # from the 1h ChildStalled deadline whatever its age.
+      # The contract, SETTLED 2026-11-15 -- and not in the shape first recorded
+      # here. The field is a per-verb DURATION, not a reason string:
+      #
+      #   verbsDescription:
+      #     - action: update
+      #       path: /v1/nodes/{uuid}/states/power
+      #       method: PUT
+      #       restsAtNotReady: 240s        # <- expected settle bound
+      #
+      # It is opt-in: a verb that does not declare it behaves exactly as today.
+      # core-provider#498's recorded decisions stand -- a declared child is
+      # counted childHealthy AND is never stalled, so it is exempt from the 1h
+      # ChildStalled deadline whatever its age.
+      #
+      # A duration beat a boolean because a boolean forces core-provider to pick
+      # between suppressing ChildStalled forever for a kind, never reporting a
+      # real stall, and inventing a timeout in its own repo where the
+      # RestDefinition author's measurement cannot reach it. Per VERB rather than
+      # per kind because this repo's own two kinds differ: NodePower rests at
+      # nothing and converges, this kind rests permanently, and a kind with a slow
+      # `update` and a fast `delete` would otherwise let the slow one license
+      # silence on a stuck delete.
       #
       # WHY THIS KIND AND NOT BaremetalNode. BaremetalNode converges: it reaches
       # Ready=True/Available in about 120s, measured at 0.61.0 in two arms. Its
@@ -248,8 +262,37 @@ spec:
       # NOT POSSIBLE YET, and the version matters: `restsAtNotReady` does not
       # exist in any oasgen build. Zero matches at 0.67.0, 0.68.0, 0.69.0 and
       # origin/main, checked 2026-11-15. Three tags were cut after the name was
-      # settled and none carries it, so there is nothing to wire to and no version
-      # to pin.
+      # settled and none carries it, and 0.72.0 is scoped to other work, so there
+      # is nothing to wire to and no version to pin.
+      #
+      # DO NOT ADD IT EARLY -- it fails in the one way that looks like success. An
+      # undeclared field is pruned by the apiserver SILENTLY: the RestDefinition
+      # applies cleanly, the apply reports configured, and the value is simply
+      # gone. No error, no event, nothing to grep. So the field goes in no
+      # manifest and no chart here until oasgen names the tag that serves it --
+      # which is also why what I owe below is a read-back from the GENERATED CRD
+      # and not from this file.
+      #
+      # THE NUMBER IS NOT DERIVABLE FROM THIS REPO'S PUBLISHED FIGURES. The 180s
+      # and 190s in restdefinition-power.yaml are RESYNC-dominated: on a 202 the
+      # pending branch (restResources.go:1328/:1530) sets Pending and returns with
+      # no RequeueAfter, that kind declares no async block, so nothing re-observes
+      # until the next resync tick -- `REST_CONTROLLER_RESYNC_INTERVAL`, default
+      # 3m. Both arms measured one resync period, and the 10s between them is one
+      # sample of a 10s sampler. The backend term -- the only part a settle bound
+      # is about -- is bounded at <=90s in both arms and unresolved below that,
+      # because the arms read the CR every 10s and the backend only every 90s.
+      #
+      # AND THE BOUND HAS A FLOOR THE AUTHOR CANNOT SEE. If the duration is
+      # measured from the condition going Pending, the window CONTAINS one resync
+      # wait -- and the resync interval is an env var on the rdc Deployment, an
+      # operator's choice that this file cannot read. Raised to 5m, any 240s
+      # declared here trips on a perfectly healthy drift correction. Put to oasgen
+      # on 2026-11-15: either rdc adds its own resync interval to the declared
+      # duration (it knows the value, this file never will), or it refuses a
+      # declaration <= resyncInterval at load. Unanswered as of this commit, and
+      # the number stays unpicked until it is -- a figure taken from the arms
+      # above would be a controller-wait bound wearing a backend-settle label.
       #
       # WHAT I OWE WHEN IT SHIPS, in this order: declare it here, then measure it
       # on a THROWAWAY cluster, reading the declaration back out of the GENERATED
