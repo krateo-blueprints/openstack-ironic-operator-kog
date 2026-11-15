@@ -253,9 +253,39 @@ spec:
       # said core-provider reads `status.restsAtNotReadyEffective`; it does not,
       # and oasgen withdrew that. The status field exists for operators only.
       #
-      # THE EXEMPTION THIS KIND WAS PROMISED DOES NOT EXIST. Verified here, not
-      # relayed -- this clause changed three times in one day and each version
-      # arrived labelled as settled, so it was read off source with controls.
+      # RESOLVED 2026-11-15: rdc WILL PRODUCE THE REASON. Diego confirmed the shape
+      # directly (asked rather than taken from the relay, for the reason the next
+      # paragraph gives):
+      #
+      #   * this RestDefinition declares that the kind rests not-Ready;
+      #   * rdc writes `Ready=False/TerminalByDesign` once the transition has been
+      #     dispatched and Synced is clean;
+      #   * the cdc reads that reason as healthy, with the stall deadline never
+      #     applying. core-provider reports that half is already in place and
+      #     tested -- childhealth.go:975 plus terminalbydesign_test.go (relayed,
+      #     not verified here).
+      #
+      # So it is not a duration and not a bound. oasgen owns the trigger and the
+      # declaration's shape, and will tag it.
+      #
+      # TWO TRIGGER POINTS PUT TO THEM, both falling out of the measurement below.
+      # (a) The precondition is already true ~21s in -- Synced=ReconcileSuccess from
+      # the second sample -- so TerminalByDesign would be written almost immediately
+      # and hold for the CR's whole life. A steady state from the start, not an end
+      # state reached after a delay, and nobody will routinely see Pending on this
+      # kind. (b) It must RESET when `metadata.generation` changes, or a newly
+      # requested transition reads as resting-by-design while it is actually in
+      # flight -- a false healthy on live work. rdc already resets its absence
+      # counters on that signal. And "Synced is clean" is a CURRENT reading, not a
+      # never-failed one: a create that failed and then succeeded looks identical to
+      # one that succeeded first time.
+      #
+      # HOW IT GOT HERE, kept because the failure was in the transit and not in
+      # anyone's reasoning. The clause this replaces -- "forever-resting kinds keep
+      # TerminalByDesign" -- was carried as Reconciled across three repos while
+      # naming a reason NOTHING PRODUCED. Verified here, not relayed, because the
+      # clause changed three times in one day and each version arrived labelled as
+      # settled:
       #
       # At oasgen origin/main (052613a, 2026-11-15), in the live monorepo and not
       # the frozen rest-dynamic-controller repo:
@@ -465,8 +495,10 @@ spec:
       # evaluate validity AT CR-CREATION TIME and treat "already past the target"
       # as its own case.
       #
-      # STILL OWED: the same reading at whatever tag serves the declaration, with
-      # FOUR fixes -- read `latched-absence-repeats` as the latch counter, sample a
+      # STILL OWED, AND IT IS THE GATE: re-measure ORDERING A at the tag that
+      # serves the declaration. core-provider gates ChildStalled on THAT reading,
+      # not on 0.61.0's -- so this run is the premise and the next run is the
+      # acceptance test. Four fixes -- read `latched-absence-repeats` as the latch counter, sample a
       # window longer than 5 latches (1100s+) so the Warning can fire, evaluate the
       # target-validity gate AT CR-CREATION TIME, and sample
       # `metadata.generation` per row -- inferredCounter resets when the
@@ -538,12 +570,9 @@ spec:
       # this reads. It is the premise under every other decision here and the only
       # one nobody has taken.
       #
-      # (2) THE DECLARATION -- and as of this commit there is NOTHING TO DECLARE.
-      # The finite duration is wrong for this kind and the exemption that would
-      # have been right has no producer (see above). So the shape is open, not
-      # pending a tag: what this kind needs may not exist in any form yet. When
-      # oasgen settles it and names the tag, declare it here and then read the
-      # declaration back out of the GENERATED CRD rather than trusting this file.
+      # (2) THE DECLARATION -- now a real thing to declare, pending oasgen's field
+      # name and tag. When they name it: declare it here, then read the declaration
+      # back out of the GENERATED CRD rather than trusting this file.
       # "The manifest says it" is not "the CRD has it" -- the same gate ARM 5 used
       # when it read power_interface back from Ironic instead of believing
       # `make sushy-up`.
