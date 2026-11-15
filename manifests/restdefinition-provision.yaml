@@ -325,6 +325,31 @@ spec:
       # but a false HEALTHY, across the six renderable render sites, which is the
       # harder one to notice.
       #
+      # WHAT BOUNDS THE RE-DISPATCH, verified 2026-11-15 and worth knowing before the
+      # severity above is quoted anywhere. Because findby can never match (see the
+      # findby verb's own note), rdc re-dispatches the PUT every resync for as long
+      # as a CR exists. The chart is the only thing that limits that, and it does:
+      # all SIX renderable transitions in baremetal-host are gated on
+      # `baremetal-host.provisionState`, a `lookup` of the live BaremetalNode's
+      # status.provision_state. When the node leaves the gating state the gate
+      # closes, the CR stops being rendered and cdc removes it. An empty lookup
+      # returns "" and every `eq ... "<state>"` is then false, so the gates FAIL
+      # CLOSED -- the safe direction.
+      #
+      # So the re-dispatch is bounded by the composition's re-render latency, not
+      # unbounded. Two things that bound remains silent about, and they are runtime
+      # facts for the measurement rather than static ones: how LONG that window is,
+      # and whether Ironic rejects the repeated PUT (it should -- the node has left
+      # the state the transition was valid from). The dangerous shape is a node
+      # RE-ENTERING a gating state while a stale CR still exists, which is also the
+      # intended retry path, so it cannot be screened out.
+      #
+      # Enforced by scripts/check-transition-gates.py, in `make check`. The bound is
+      # invisible from either side alone: nothing here said "a chart limits my blast
+      # radius" and nothing in the chart said "without this gate the action re-fires
+      # forever", so a gate quietly changed to a values flag would remove it with no
+      # symptom but a transition re-issued every 3 minutes at a live node.
+      #
       # IT IS MEASURABLE HERE, SAFELY, AND THAT IS THE NEXT THING OWED.
       # local/ironic.conf runs `enabled_deploy_interfaces = fake` and
       # `default_deploy_interface = fake`, so driving a node to `target: active`

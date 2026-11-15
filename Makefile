@@ -797,8 +797,25 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 	python3 -I scripts/check-blueprint-metadata.py --self-test && \
 		python3 -I scripts/check-blueprint-metadata.py $(if $(BLUEPRINT_ONLINE),--online,)
 
-check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set check-chart-version-moved check-chart-renders check-release-table check-bmc-passthrough check-publisher-scope-selftest   # every standing screen
+check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set check-chart-version-moved check-chart-renders check-release-table check-bmc-passthrough check-publisher-scope-selftest check-transition-gates   # every standing screen
 	@echo "all standing screens passed"
+
+check-transition-gates:   # every NodeProvision render stays bounded by a live state gate
+# WHAT THIS PROTECTS, because neither side says it alone. NodeProvision's create is
+# dispatched by Observe reporting ABSENT, and for this kind findby can NEVER match
+# (node_id absent from /v1/nodes items; no responseTransform, deliberately). So rdc
+# re-dispatches the provision PUT on every resync for as long as the CR exists. The only
+# thing bounding that is the chart: each transition is gated on a `lookup` of the live
+# BaremetalNode's status.provision_state, so the gate closes when the node leaves the
+# gating state and cdc removes the CR. An empty lookup yields "" and every eq-comparison
+# is false, so the gates fail CLOSED.
+#
+# Nothing in the RestDefinition says "a chart limits my blast radius" and nothing in the
+# chart says "without this gate the action re-fires forever". Change a gate to a values
+# flag, or add a transition template without one, and the bound vanishes silently -- the
+# only symptom being a provision transition re-issued every 3 minutes at a live node.
+	python3 -I scripts/check-transition-gates.py --self-test && \
+		python3 -I scripts/check-transition-gates.py
 
 check-publisher-scope-selftest:   # the scope verifier can still tell a 403 from a failure
 # The verifier itself needs a live OpenStack and so cannot run in CI. Its CLASSIFIER
