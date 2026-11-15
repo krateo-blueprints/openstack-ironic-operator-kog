@@ -2709,6 +2709,104 @@ This repo's standing note says a null result is a claim about the instrument
 first. Two more belong beside it now: so is a falsification, and so is the
 *existence* of the thing being explained.
 
+### §9.23 — the runbook for §9.10, and the three things it does not tell you
+
+§9.10 established that a scoped `ironic-publisher` needs **no policy file** (the rules are
+`member`, not `admin`) and gave the `openstack` commands to create it. It stops there, at
+"unblocked but not applied". This is the operational half: the rollout, the verification,
+and the rollback. Nothing here has been run — there is no live deployment on this side to
+run it against — so every step says what to *read*, not what to expect.
+
+#### Pre-flight: three readings before anything changes
+
+```bash
+# 1. which blades are carrying a credential at all, and whose
+openstack baremetal node list -f value -c Name -c UUID
+for n in $(openstack baremetal node list -f value -c Name); do
+  echo -n "$n  config_drive present: "
+  openstack baremetal node show "$n" -f json \
+    | python3 -c 'import sys,json;d=json.load(sys.stdin);print("yes" if (d.get("instance_info") or {}).get("config_drive") else "no")'
+done
+
+# 2. the NEGATIVE case, which §9.10 is right to insist on. `member` at system scope is
+#    broader than update_extra alone, so MEASURE what the new user can reach:
+openstack --os-system-scope all --os-username ironic-publisher \
+  baremetal node show blade01 -f value -c extra            # expect: succeeds
+openstack --os-system-scope all --os-username ironic-publisher \
+  baremetal node set --driver fake-hardware blade01        # expect: 403
+openstack --os-system-scope all --os-username ironic-publisher \
+  baremetal node power off blade01                         # expect: 403
+openstack --os-system-scope all --os-username ironic-publisher \
+  baremetal node set --instance-info image_source=http://x blade01   # expect: 403
+
+# 3. the positive control for the probe itself: the same four commands as `admin`.
+#    If the DRIVER set also fails as admin, the cluster is refusing for some other
+#    reason and the three 403s above mean nothing.
+```
+
+Reading 3 is the one that is easy to skip and is the whole point: three refusals prove a
+credential is scoped only if an unscoped credential is accepted by the same path at the same
+moment. Otherwise they prove the API is down. Same shape as every zero in this document.
+
+#### The rollout, and the only ordering that matters
+
+All five render sites read the same `.Values.ironicAuth.password`, so they move **together**
+in a single render — there is no partial-pickup risk *within* a blade. The partial state is
+**across** blades, and it is unavoidable:
+
+```
+set ironicAuth.username/password on the KubernetesCluster CR
+   -> every blade's NEXT deploy bakes the new credential into its config drive
+   -> blades not redeployed keep the admin password until they are
+```
+
+So the fleet sits mixed for as long as you let it, and that is fine: both credentials work
+until the admin password changes. Which leads to the deadline.
+
+#### The deadline nobody set, and it is not ours
+
+`openstack-as-a-service` confirmed (2026-11-14) that their Keystone admin password is
+**generated fresh on every install**. So the mixed state has an expiry that **this side does
+not control**: the next OpenStack reinstall invalidates the admin password, and every blade
+still carrying it loses its publisher. The scoped user does not escape this — it would have
+to be recreated after a reinstall too — but it is recreated by **us**, on our schedule,
+rather than disappearing without notice.
+
+That reframes the migration. It is not hygiene with no deadline; it is hygiene with a
+deadline set by somebody else's install.
+
+#### How the failure looks, so it is recognised rather than diagnosed
+
+A blade whose baked credential no longer authenticates does **not** report a credential
+problem anywhere a cluster operator looks:
+
+| where you would look | what you see |
+|---|---|
+| the BaremetalHost / KubernetesCluster CR | provisioned fine, then nothing |
+| Ironic's node | `provision_state: active`, `extra` never populated |
+| the chart | no error; it rendered correctly |
+| the blade's cloud-init output | the 401 — and nobody reads this |
+
+**The symptom is an absence**, which is why it belongs in a table rather than a sentence.
+If a node reaches `active` and its `extra` stays empty, suspect the credential before
+anything else, and read the blade.
+
+#### Rollback
+
+Set `ironicAuth.username`/`password` back to the admin values and redeploy the affected
+blades. There is no state to unwind: the credential exists only in each blade's config
+drive, and the config drive is rewritten on deploy. Leave the `ironic-publisher` user in
+place — an unused Keystone user costs nothing and deleting it mid-rollback is how a partial
+rollback becomes a full outage.
+
+#### What this does NOT address
+
+The credential is still **plaintext in the config drive**, just a less powerful one. Moving
+to something that is not a long-lived password at all — an application credential, or a
+token minted per deploy — is a different and larger change, and §9.10's "tighter option"
+(per-node `owner`, no system scope) is the step between. Narrowing the blast radius is worth
+doing first precisely because it is the cheap part.
+
 ### 9.13f — oasgen 0.61.0 adopted, and what #599 actually demonstrated
 
 **Digests verified BEFORE installing**, computed with
