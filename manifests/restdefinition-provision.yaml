@@ -298,6 +298,33 @@ spec:
       # with the declaration and the generation signature. A never-landed create
       # cannot satisfy that; a clean Synced can.
       #
+      # THE GATE IS SAFE -- the worry I raised about it does NOT materialise, and I
+      # verified that at source rather than taking the answer. I had asked whether
+      # the create marker could be stamped for a create that REACHED the vendor and
+      # was REJECTED by it, those being different claims, and `createReachedTheVendor`
+      # (oasgen 0.68.0) reading like the weaker one. It cannot. All three call sites
+      # pass a `tools.UpdateStatus` error -- the status write failing AFTER the create
+      # landed -- never the vendor's:
+      #
+      #   restResources.go:1518  if _, err := tools.UpdateStatus(...); err != nil
+      #   restResources.go:1546  same, and the VENDOR-rejection path immediately
+      #                          above it returns `CreateResult{}, derr` WITHOUT
+      #                          touching the marker -- the discriminating evidence
+      #   restResources.go:1778  same
+      #
+      # So reached-and-rejected never reaches that function, and ordering B proves it
+      # from the other side: its 404 PUT returned an error from the create path, so
+      # no Pending and no marker. The misleading part was the function's NAME, which
+      # claims less than the function does; oasgen is renaming it. Worth recording
+      # that a careful reader lost time to a non-bug that a name created.
+      #
+      # AND THE ASSUME-UP-TO-DATE SITE GETS A REASON (oasgen #709, Diego chose
+      # non-breaking): it will ship as `Ready=True` with reason `AssumedUpToDate`.
+      # Nothing's health flips, but the reason becomes distinguishable, so a rollup
+      # can stop reading an assertion as an observation. core-provider adds the
+      # mapping. That does not touch this kind -- see immediately below -- but it is
+      # the fix for the population that the old trigger was least safe for.
+      #
       # THIS KIND IS NOT IN THE AFFECTED POPULATION, checked both ways rather than
       # assumed. It declares `findby` (with `create`), so it takes the findby
       # branch and its synthesised-404 path, never the assume-up-to-date site --
