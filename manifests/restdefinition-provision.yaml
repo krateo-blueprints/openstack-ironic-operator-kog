@@ -259,7 +259,8 @@ spec:
       #
       #   * this RestDefinition declares that the kind rests not-Ready;
       #   * rdc writes `Ready=False/TerminalByDesign` once the transition has been
-      #     dispatched and Synced is clean;
+      #     dispatched -- gated on the CREATE MARKER for the current generation,
+      #     not on "Synced is clean"; see the trigger note below;
       #   * the cdc reads that reason as healthy, with the stall deadline never
       #     applying. core-provider reports that half is already in place and
       #     tested -- childhealth.go:975 plus terminalbydesign_test.go (relayed,
@@ -279,6 +280,38 @@ spec:
       # counters on that signal. And "Synced is clean" is a CURRENT reading, not a
       # never-failed one: a create that failed and then succeeded looks identical to
       # one that succeeded first time.
+      #
+      # THE TRIGGER CHANGED AGAIN BEFORE SHIPPING, and this one is a safety fix
+      # rather than a relay artifact. "Synced is clean" is NOT a safe gate for
+      # writing TerminalByDesign, because a clean Synced can mean a create that
+      # never landed. oasgen found the path after I asked them to rule it out:
+      # for a kind declaring NEITHER `get` NOR `findby`, Observe hits an
+      # assume-up-to-date site (restResources.go ~491) that returns
+      # exists-and-up-to-date and sets `Available` -- Ready=TRUE -- and the runtime
+      # then stamps ReconcileSuccess because the handler reported no Synced of its
+      # own. So such a resource reads Ready=True/Synced=ReconcileSuccess with its
+      # create unverified. That ships today, independently of this feature.
+      #
+      # So the trigger will require the CREATE MARKER for the current generation --
+      # `krateo.io/external-create-succeeded`, which the runtime stamps only when
+      # the handler reported the create as having reached the vendor -- together
+      # with the declaration and the generation signature. A never-landed create
+      # cannot satisfy that; a clean Synced can.
+      #
+      # THIS KIND IS NOT IN THE AFFECTED POPULATION, checked both ways rather than
+      # assumed. It declares `findby` (with `create`), so it takes the findby
+      # branch and its synthesised-404 path, never the assume-up-to-date site --
+      # and the measurement agrees: ordering A read Ready=Pending throughout and
+      # never an asserted Available. The population at risk is kinds declaring
+      # neither verb, which is also the population most likely to want to declare
+      # "rests at not-ready", so the overlap is the reason it mattered.
+      #
+      # WHAT THE ARM SAMPLES BECAUSE OF THIS: Ready's STATUS as well as its reason
+      # (arm7 v5). If the trigger is ever wrong in the false-healthy direction the
+      # symptom is Ready=False/TerminalByDesign on a kind whose create never
+      # landed, and a run recording only "not ready" cannot tell that from the
+      # correct resting state. The reason was already sampled; the pair is what
+      # makes it verifiable.
       #
       # HOW IT GOT HERE, kept because the failure was in the transit and not in
       # anyone's reasoning. The clause this replaces -- "forever-resting kinds keep
