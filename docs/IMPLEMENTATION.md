@@ -2811,15 +2811,41 @@ until the admin password changes. Which leads to the deadline.
 
 #### The deadline nobody set, and it is not ours
 
-`openstack-as-a-service` confirmed (2026-11-14) that their Keystone admin password is
-**generated fresh on every install**. So the mixed state has an expiry that **this side does
-not control**: the next OpenStack reinstall invalidates the admin password, and every blade
-still carrying it loses its publisher. The scoped user does not escape this — it would have
-to be recreated after a reinstall too — but it is recreated by **us**, on our schedule,
-rather than disappearing without notice.
+**Corrected 2026-11-15.** The earlier statement here — that the Keystone admin password is
+*"generated fresh on every install"*, and therefore that **"the next reinstall"** is the
+deadline — was too broad. `openstack-as-a-service` re-read it from their `main` (62e5964)
+rather than from recollection, and what holds is narrower:
 
-That reframes the migration. It is not hygiene with no deadline; it is hygiene with a
-deadline set by somebody else's install.
+- the umbrella generates `openstack-credential-identity-admin` **once per install**, with an
+  ESO Password generator and `refreshPolicy: CreatedOnce`, and the root carries
+  `helm.sh/resource-policy: keep`;
+- **upgrades never change it.**
+
+The password the blades hold changes on exactly three events:
+
+| | trigger |
+|---|---|
+| (a) | the **first upgrade of an install older than 0.3.52** to 0.3.53 or later — that rotates the published default to a generated value |
+| (b) | a **new install** into a new namespace or cluster |
+| (c) | **anyone deleting that root** — the generator then makes a new value |
+
+**And one path is explicitly unmeasured:** uninstall followed by reinstall into the *same*
+namespace. The `keep` policy means the root survives the uninstall and a reinstall would
+reuse it, so the password would **not** change — but nobody has run it. Every run on that
+side was a fresh cluster, deleted afterwards. So it is neither a trigger nor safely assumed
+not to be one.
+
+So "every blade loses its publisher at the next reinstall" is true only for (b) and (c), and
+the deadline should be written as those three events rather than as "a reinstall".
+
+**The open input that decides which deadline is real: the version the lab runs.** If it is
+older than 0.3.52, then (a) is the live deadline — and it is an **upgrade**, not a reinstall,
+which is a much more ordinary thing to do by accident. `openstack-as-a-service` does not know
+the lab's version and asked that it not be taken from them. That question is Diego's.
+
+That still reframes the migration — hygiene with a deadline somebody else sets — but the
+deadline is one of three specific events, one of them an upgrade, and which one applies is
+not yet known.
 
 #### How the failure looks, so it is recognised rather than diagnosed
 

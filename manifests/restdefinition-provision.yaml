@@ -237,15 +237,56 @@ spec:
       #       method: PUT
       #       restsAtNotReady: 90s          # <- a PURE BACKEND figure
       #
-      # and rdc publishes the SUM, which is the field core-provider reads:
+      # and rdc publishes the sum in status FOR OPERATORS:
       #
       #   status:
       #     restsAtNotReadyEffective: 270s  # 90s declared + this deployment's 180s resync
       #
       # It is opt-in: a verb that does not declare it behaves exactly as today.
-      # core-provider#498's recorded decisions stand -- a declared child is
-      # counted childHealthy AND is never stalled, so it is exempt from the 1h
-      # ChildStalled deadline whatever its age.
+      #
+      # WHO ACTS ON IT -- corrected 2026-11-15, same day, after a third relay.
+      # rdc ENFORCES the bound itself: Ready=False/Pending within it, and a
+      # distinct reason past it (working name `SettleBoundExceeded`) whose message
+      # names the bound. The cdc maps that REASON to stalled and reads neither a
+      # RestDefinition nor a status field -- consistent with oasgen#660, where the
+      # rollup reads the child's Ready reason and nothing else. An earlier relay
+      # said core-provider reads `status.restsAtNotReadyEffective`; it does not,
+      # and oasgen withdrew that. The status field exists for operators only.
+      #
+      # THE EXEMPTION THIS KIND WAS PROMISED DOES NOT EXIST. Verified here, not
+      # relayed -- this clause changed three times in one day and each version
+      # arrived labelled as settled, so it was read off source with controls.
+      #
+      # At oasgen origin/main (052613a, 2026-11-15), in the live monorepo and not
+      # the frozen rest-dynamic-controller repo:
+      #
+      #   TerminalByDesign                                  0 files
+      #   CONTROL, same query shape: NoIdentifierRecorded    5 files at origin/main
+      #                                                      0 at the 0.61.0 pin
+      #   CONTROL 2, every Reason constant rdc defines      13, enumerated:
+      #     AuthorizationDenied CreateFailed CreateUnreachable DriftNotConverging
+      #     NoCreateVerbDeclared NoIdentifierRecorded NoResponseBody Pending
+      #     ResolverDigestFieldAbsent ResolverDigestRecorded ResponseObtained
+      #     UpdateFailed Updating
+      #   (`Terminal` does appear in internal/tools/async -- `PollUntilTerminal`,
+      #    an async OPERATION state, not a condition reason.)
+      #
+      # So `TerminalByDesign` is a reason core-provider MAPS and nothing PRODUCES.
+      # The clause "forever-resting kinds keep TerminalByDesign" is vacuous, and
+      # it sat in a document marked Reconciled across three repos.
+      #
+      # WHICH MEANS THE INVERSION IS REAL. With no producer there is no live way
+      # to say "this verb never settles, and that is correct". The only expressible
+      # thing is a finite `restsAtNotReady`, which rdc ENFORCES -- and for this
+      # kind no finite number is correct. `86400s` would be a workaround and is
+      # refused. A duration and a boolean are not two points on one scale: they
+      # express different claims, and the boolean was dropped after an argument
+      # about MAGNITUDE, which was the wrong axis.
+      #
+      # oasgen has put BOTH halves on hold until the measurement below reads --
+      # including the publish-for-operators half, on the grounds that a bound
+      # published but unenforced is a number an operator would act on. 0.72.0
+      # carries no part of the field.
       #
       # A duration beat a boolean because a boolean forces core-provider to pick
       # between suppressing ChildStalled forever for a kind, never reporting a
@@ -263,6 +304,36 @@ spec:
       # cannot converge -- `target` takes `active`, and driving there wipes the
       # disk -- which is why the declaration is right HERE and wrong one kind
       # over.
+      #
+      # EXCEPT THAT THE PREMISE IS NOT MEASURED, and it is load-bearing for three
+      # repos. Read the two sentences above again: BaremetalNode's ~120s is
+      # "measured at 0.61.0 in two arms". "This kind cannot converge" is an
+      # ARGUMENT -- from the verb set and from the disk-wipe hazard -- written in
+      # the same voice. No live NodeProvision CR has ever existed in this repo
+      # (zero on 2026-11-07) and no arm has touched one. The resting condition
+      # that the whole exemption is about has never been read off anything.
+      #
+      # AND THIS FILE'S OWN VERBS POINT THE OTHER WAY. It declares `findby` plus
+      # `create`, with no `get` and no `update`. The recorded finding for that
+      # shape is that the create becomes UNREACHABLE once findby can match -- the
+      # node exists, ResourceExists is true, the PUT is never dispatched -- and
+      # that an action-only kind with an unreachable create reports
+      # Ready/Available/Synced/Observed ALL TRUE while having done nothing. If
+      # that is what a live one does, this kind needs no exemption at all, is
+      # counted childHealthy for the wrong reason, and is the wrong motivating
+      # case for the feature. The exposure in that direction is not a false stall
+      # but a false HEALTHY, across the six renderable render sites, which is the
+      # harder one to notice.
+      #
+      # IT IS MEASURABLE HERE, SAFELY, AND THAT IS THE NEXT THING OWED.
+      # local/ironic.conf runs `enabled_deploy_interfaces = fake` and
+      # `default_deploy_interface = fake`, so driving a node to `target: active`
+      # on a throwaway cluster uses the fake deploy interface: no image, no PXE,
+      # no disk. The hazard that makes this kind terminal on hardware does not
+      # exist on a kind cluster, so the one reading nobody can take on real blades
+      # is free here. Both orderings must be read separately -- the CR created
+      # BEFORE the node exists in Ironic, and after -- because whether findby can
+      # match is exactly what decides the outcome.
       #
       # NOT POSSIBLE YET, and the version matters: `restsAtNotReady` does not
       # exist in any oasgen build. Zero matches at 0.67.0, 0.68.0, 0.69.0 and
@@ -294,13 +365,13 @@ spec:
       # operator's choice that this file cannot read. Raised to 5m, any 240s
       # declared here trips on a perfectly healthy drift correction. Put to oasgen
       # on 2026-11-15, and ANSWERED the same day: rdc adds its own resync interval
-      # and publishes the sum as `status.restsAtNotReadyEffective`. So the number
-      # written HERE is a pure backend figure, portable between deployments, and
-      # core-provider reads the STATUS field -- the spec value is deliberately
-      # wrong as a stall bound and must never be read as one. The
-      # validate-at-load alternative lost because it left the author's number
-      # unportable: the same RestDefinition correct on a 3m fleet and wrong on a
-      # 5m one, with no way to see which it was shipping to.
+      # and publishes the sum in status. So the number written HERE is a pure
+      # backend figure, portable between deployments, and the spec value is
+      # deliberately wrong as a stall bound -- it is the backend term only, and
+      # rdc owns the arithmetic because rdc is the only side that knows both
+      # terms. The validate-at-load alternative lost because it left the author's
+      # number unportable: the same RestDefinition correct on a 3m fleet and
+      # wrong on a 5m one, with no way to see which it was shipping to.
       #
       # WHICH MEANS THE NUMBER THIS FILE OWES IS A BACKEND SETTLE TIME, and this
       # repo does not have one. The arms bound it at <=90s and never resolved
@@ -310,14 +381,31 @@ spec:
       # flagged as one; the hardware margin stays an open input that only someone
       # with real blades can close.
       #
-      # WHAT I OWE WHEN IT SHIPS, in this order: declare it here, then measure it
-      # on a THROWAWAY cluster, reading the declaration back out of the GENERATED
-      # CRD rather than trusting this file. "The manifest says it" is not "the CRD
-      # has it" -- the same gate ARM 5 used when it read power_interface back from
-      # Ironic instead of believing `make sushy-up`. core-provider ships the
-      # ChildStalled half only after that measurement, because until this kind
-      # declares, every healthy BaremetalHost and the cluster composition above it
-      # would go stalled after an hour.
+      # WHAT I OWE, AND IT IS NOW TWO THINGS WITH DIFFERENT GATES.
+      #
+      # (1) THE MEASUREMENT, which comes FIRST and is not blocked on anything.
+      # Read what a live NodeProvision CR actually rests at, on a throwaway
+      # cluster, both orderings separated, VOID-gated. core-provider has recorded
+      # this as a gate on #498 in its own right: ChildStalled does not ship until
+      # this reads. It is the premise under every other decision here and the only
+      # one nobody has taken.
+      #
+      # (2) THE DECLARATION -- and as of this commit there is NOTHING TO DECLARE.
+      # The finite duration is wrong for this kind and the exemption that would
+      # have been right has no producer (see above). So the shape is open, not
+      # pending a tag: what this kind needs may not exist in any form yet. When
+      # oasgen settles it and names the tag, declare it here and then read the
+      # declaration back out of the GENERATED CRD rather than trusting this file.
+      # "The manifest says it" is not "the CRD has it" -- the same gate ARM 5 used
+      # when it read power_interface back from Ironic instead of believing
+      # `make sushy-up`.
+      #
+      # And note which way (1) decides it: if a live CR rests at not-ready, this
+      # kind needs an exemption that does not currently exist, and every healthy
+      # BaremetalHost above it would go stalled after an hour without one. If it
+      # reads Ready=True-while-inert, no exemption is needed, this kind is the
+      # wrong motivating case for the whole feature, and the exposure is a false
+      # HEALTHY across the six renderable render sites -- the harder one to see.
       #
       # THE EXPOSURE, counted with a stated predicate because two of us got it
       # wrong first: `grep -rn '^kind: NodeProvision$' charts/*/templates/*.yaml`
