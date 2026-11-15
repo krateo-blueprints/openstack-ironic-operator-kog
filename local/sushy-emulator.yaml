@@ -1,0 +1,104 @@
+# sushy-emulator -- a Redfish BMC for the local kind stack.
+#
+# WHY THIS EXISTS. Until now the local stack could not exercise redfish AT ALL:
+# local/ironic.conf enabled only `fake-hardware` / `fake`, and the lab's real BMC
+# lived outside the cluster at 172.19.74.11:8000. So every arm this repo has ever
+# run measured the FAKE power interface -- in a repo whose entire purpose is
+# driving Redfish BMCs. That is the gap this closes.
+#
+# WHAT IT IS AND IS NOT. `sushy-emulator --fake` is a cache-backed Redfish
+# responder with no hardware and no hypervisor behind it. Its own release note
+# says the fake driver "does not have an actual backend and works by storing all
+# values in the cache", and is "functional enough for Ironic's ramdisk deploy
+# (and undeploy) to finish successfully".
+#
+# So what this buys is the REDFISH PROTOCOL PATH: Ironic's redfish power
+# interface making real Redfish HTTP calls -- GET /redfish/v1/Systems/{id},
+# POST .../Actions/ComputerSystem.Reset -- against a server that answers like a
+# BMC. The `fake` power interface never touches any of that.
+#
+# WHAT IT DOES NOT BUY, and must not be reported as: LATENCY. There is no
+# hardware, and on an arm64 host this amd64-only image runs under emulation, so
+# any timing measured here is the emulator's plus qemu's. A transferable power
+# transition latency needs the real blades, which are in the parked lab.
+#
+# MEASURED BEHAVIOUR, 2026-11-15, before this file was written:
+#   - serves exactly ONE system, with a UUID GENERATED AT STARTUP -- so
+#     driver_info.redfish_system_id cannot be hardcoded anywhere, it must be
+#     discovered from /redfish/v1/Systems at runtime;
+#   - POST ComputerSystem.Reset returns 204 and the emulator logs the change
+#     immediately, but the REPORTED PowerState lags ~10-20s;
+#   - my first check sampled it sub-second, read "PowerState unchanged", and
+#     nearly concluded the fake driver ignores power commands. It does not. Same
+#     error as the ~2 minute NodePower window in restdefinition-power.yaml:
+#     a window shorter than the mechanism's settle time reports "nothing
+#     happened", and that is not a result. Sample for minutes, not seconds.
+#   - PATCH of PowerState is rejected (400). Reset is the only route.
+#
+# Apply with `make sushy-up`, which also enables the redfish interfaces in
+# Ironic. Not part of `local-up`: nothing in the default stack needs it, and an
+# unused emulator is one more pod competing for a contended host.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sushy-emulator
+  namespace: openstack
+  labels:
+    app: sushy-emulator
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sushy-emulator
+  template:
+    metadata:
+      labels:
+        app: sushy-emulator
+    spec:
+      containers:
+        - name: sushy-emulator
+          # Pinned to an IMMUTABLE dated tag, not `release-39.0` and not `latest`:
+          # both of those moved within the last four days (checked against the
+          # quay.io tag API on 2026-11-15), and a BMC that changes behaviour
+          # between two runs of the same arm is an instrument that cannot be
+          # trusted for either.
+          image: quay.io/metal3-io/sushy-tools:release-39.0_2026-11-12_75cfb2209974266f5169f87acd3729cd3a56fd99
+          imagePullPolicy: IfNotPresent
+          command: ["sushy-emulator"]
+          args:
+            - "--fake"
+            - "--port"
+            - "8000"
+            - "--interface"
+            - "0.0.0.0"
+            - "--feature-set"
+            - "full"
+          ports:
+            - name: redfish
+              containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /redfish/v1/Systems
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sushy-emulator
+  namespace: openstack
+spec:
+  selector:
+    app: sushy-emulator
+  ports:
+    - name: redfish
+      port: 8000
+      targetPort: 8000
