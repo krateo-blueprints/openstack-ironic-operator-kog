@@ -49,11 +49,28 @@
        observe its completion. Making it self-driving removed the only thing
        that made it terminate. */ -}}
 {{- $undeployForUpgrade := and $upgradeTarget (eq $upgradeTarget $bootstrap.nodeName) -}}
-{{/* v0.11.0 gate: for HA clusters, hold rendering until the etcd PKI
-     Secret exists in the live cluster (lookup hit). First chart apply
-     creates the Secret but BHs don't render. ~60s later cdc reconciles,
-     lookup hits, BHs render with real etcd material. Single-CP path
-     short-circuits to "yes" — no behavior change for legacy users. */}}
+{{/* v0.11.0 gate: hold rendering until the kubeadm PKI Secret exists in the
+     live cluster (lookup hit). First chart apply creates the Secret but BHs
+     don't render. ~60s later cdc reconciles, lookup hits, BHs render with real
+     PKI material.
+
+     THE "SINGLE-CP PATH SHORT-CIRCUITS TO YES" CLAIM WAS FALSE and stood here
+     until 2026-11-14. `kubeadmPkiReady` is a bare `lookup` of the Secret with no
+     branch on CP count (_helpers.tpl), so the 2-pass applies to single-CP too --
+     and the claimed "no behavior change for legacy users" was therefore also
+     wrong: a legacy single-CP user's BHs did start waiting one reconcile at
+     v0.11.0. The two OTHER descriptions of this gate, at _helpers.tpl's
+     "returns empty until the Secret exists" and kubeadm-pki-secret.yaml's
+     "(=Secret exists in live cluster)", were correct the whole time; only this
+     one said otherwise, and being the one next to the code is what made it
+     persuasive.
+
+     THE CONSEQUENCE THAT COSTS TIME: `lookup` returns nothing under
+     `helm template`, so NO BaremetalHost renders offline, ever -- the chart
+     emits its PKI Secret and nothing else. There is no flag that fakes it. A
+     template-only check of anything downstream of this gate measures nothing,
+     which is why scripts/check-bmc-secret-passthrough.py is a source screen
+     rather than a render. */}}
 {{- $kubeadmReady := include "kubernetes-cluster.kubeadmPkiReady" . -}}
 {{- if and $bootstrap.nodeName $kubeadmReady -}}
 ---
