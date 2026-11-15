@@ -350,6 +350,38 @@ spec:
       # forever", so a gate quietly changed to a values flag would remove it with no
       # symptom but a transition re-issued every 3 minutes at a live node.
       #
+      # A REJECTION IS NOT A SAFE OUTCOME EITHER, which oasgen raised and is worth
+      # stating next to the bound. If Ironic rejects the repeated PUT -- the node
+      # having left the state the transition was valid from -- then every bounded
+      # window produces N vendor errors, and on a dispatch kind that is a stream of
+      # ReconcileError on a resource that is behaving exactly as designed. So the
+      # bound converts "a repeating write" into "a repeating error", which is better
+      # but is still not health, and it is what a rollup would be reading.
+      #
+      # THE MEASUREMENT HAS A VERSION COORDINATE, so it needs TWO RUNS. The
+      # observe-to-create area moved between 0.61.0 (this repo's pin, chosen for
+      # comparability with arms 4 and 5) and 0.72.0. oasgen named what moved and the
+      # load-bearing half was verified here rather than taken on relay:
+      #
+      #   change                                   ver     reaches a findby kind?
+      #   createHasBeenAttempted marker guard      0.70.0  NO  -- apiCall == nil
+      #   the no-identifier refusal (#687)         0.69.0  NO  -- same branch
+      #   createFailedMostRecently (#697)          0.71.0  NO  -- same branch
+      #   createReachedTheVendor (#676/#681)       0.68.0  YES -- create's vendor sites
+      #
+      # Verified at origin/main: restResources.go has FIVE `apiCall == nil` blocks
+      # (343, 391, 1556, 1841, 2129); createHasBeenAttempted's single non-test call
+      # site is at 392, inside the 391 block, which a kind declaring a findby can
+      # never enter. createReachedTheVendor is called at 1518, 1546 and 1778 -- on
+      # the create path, outside those guards -- so it DOES reach this kind.
+      #
+      # WHICH IS WHY THE COUNT IS THE PRIMARY OUTPUT, not the classification.
+      # createReachedTheVendor changes what a create REPORTS after the vendor call,
+      # not whether one is dispatched. So the dispatch COUNT should be identical at
+      # 0.61.0 and at whatever tag serves the declaration, while the CONDITIONS may
+      # differ. If two runs disagree on the count, something nobody has listed moved
+      # and that is itself the finding.
+      #
       # IT IS MEASURABLE HERE, SAFELY, AND THAT IS THE NEXT THING OWED.
       # local/ironic.conf runs `enabled_deploy_interfaces = fake` and
       # `default_deploy_interface = fake`, so driving a node to `target: active`
