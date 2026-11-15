@@ -221,23 +221,48 @@ ironic-up: ironic-image  # deploy standalone Ironic (fake drivers, noauth) into 
 	$(KUBECTL) -n $(IRONIC_NS) rollout restart deploy/ironic
 	$(KUBECTL) -n $(IRONIC_NS) rollout status deploy/ironic --timeout=240s
 
-sushy-up:   # a Redfish BMC in-cluster, and switch Ironic's default power interface to redfish
+sushy-pod:   # just the Redfish BMC pod -- NO cluster-wide change
+# THE PREFERRED ROUTE SINCE 2026-11-15, and the one the arms should use.
+# local/ironic.conf already ENABLES redfish (`enabled_power_interfaces =
+# fake,redfish`) while leaving both defaults `fake`, and local-up installs that
+# file verbatim. So a node can ask for `power_interface: redfish` by itself --
+# the field exists in oas/ironic-node.yaml -- and every other node stays fake.
+# Nothing cluster-wide moves and Ironic does not restart, which also saves the
+# 240s rollout `sushy-up` spends.
+#
+# WHY THIS IS A CORRECTNESS MATTER AND NOT A TIDINESS ONE: `sushy-up` switches
+# `default_management_interface` as well. Under it, a node that explicitly asks
+# for FAKE power still inherits REDFISH management -- and a node with no redfish
+# `driver_info` is then carrying an interface it cannot satisfy. An arm that wants
+# a fake node and a redfish node SIDE BY SIDE in one cluster must use this target.
+# `management_interface` is deliberately absent from the node OAS, so there is no
+# per-node way to opt back out; leaving the default alone is the only clean route.
+#
+# A side benefit worth stating: with the default left at `fake`, a node reading
+# back `power_interface=redfish` can ONLY have got there through the per-node
+# field, so any arm using this target also verifies that field end to end.
+	$(call PROTECT_LAB,$(KIND_CLUSTER))
+	@grep -q '^enabled_power_interfaces = .*redfish' local/ironic.conf || \
+		{ echo "GUARD: redfish is not in enabled_power_interfaces -- a per-node request would be rejected, not honoured"; exit 1; }
+	@grep -q '^default_power_interface = fake$$' local/ironic.conf || \
+		{ echo "GUARD: default_power_interface is not fake -- this target's premise (defaults untouched) does not hold"; exit 1; }
+	$(KUBECTL) apply -f local/sushy-emulator.yaml
+	$(KUBECTL) -n $(IRONIC_NS) rollout status deploy/sushy-emulator --timeout=180s
+	@echo "redfish BMC up; cluster defaults untouched. Ask per node: spec.power_interface: redfish"
+
+sushy-up: sushy-pod   # ... and ALSO switch Ironic's cluster defaults to redfish
 # NOT part of local-up, on purpose: nothing in the default stack needs a BMC, and
 # an idle emulator is one more pod on a contended host.
 #
 # THE DEFAULT SWITCH IS NOW A CONVENIENCE, NOT THE ONLY ROUTE. It was the only
 # route until 2026-11-15: `BaremetalNode` could not express `power_interface`, so
 # the sole way to put a node on the redfish power driver through the KOG path was
-# to make it Ironic's cluster DEFAULT. The field now exists in
-# oas/ironic-node.yaml, so a single node can ask for redfish by itself and leave
-# the default alone -- prefer that.
+# to make it Ironic's cluster DEFAULT.
 #
-# This target still switches the default, because it is what makes an UNMODIFIED
-# fixture land on redfish, which is what the arms want. It remains a whole-cluster
-# change, so the lab guard stays: throwaway clusters only.
-	$(call PROTECT_LAB,$(KIND_CLUSTER))
-	$(KUBECTL) apply -f local/sushy-emulator.yaml
-	$(KUBECTL) -n $(IRONIC_NS) rollout status deploy/sushy-emulator --timeout=180s
+# Use this only when you want an UNMODIFIED fixture to land on redfish -- which is
+# what arms 1-5 wanted. For anything that needs two interfaces at once, use
+# `sushy-pod` and set the field per node. It remains a whole-cluster change, so
+# the lab guard stays: throwaway clusters only.
 	sed -e 's/^default_power_interface = fake$$/default_power_interface = redfish/' \
 	    -e 's/^default_management_interface = fake$$/default_management_interface = redfish/' \
 	    local/ironic.conf > $(SCRATCH_CONF)
