@@ -225,12 +225,16 @@ sushy-up:   # a Redfish BMC in-cluster, and switch Ironic's default power interf
 # NOT part of local-up, on purpose: nothing in the default stack needs a BMC, and
 # an idle emulator is one more pod on a contended host.
 #
-# THE DEFAULT SWITCH IS THE POINT, and it is why this is a target rather than just
-# a manifest. `BaremetalNode` cannot express `power_interface` -- it is not in
-# oas/ironic-node.yaml, so the CR has no field for it -- so the only way to put a
-# node on the redfish power driver through the KOG path is to make it Ironic's
-# DEFAULT. That is a whole-cluster switch, hence the lab guard: throwaway clusters
-# only.
+# THE DEFAULT SWITCH IS NOW A CONVENIENCE, NOT THE ONLY ROUTE. It was the only
+# route until 2026-11-15: `BaremetalNode` could not express `power_interface`, so
+# the sole way to put a node on the redfish power driver through the KOG path was
+# to make it Ironic's cluster DEFAULT. The field now exists in
+# oas/ironic-node.yaml, so a single node can ask for redfish by itself and leave
+# the default alone -- prefer that.
+#
+# This target still switches the default, because it is what makes an UNMODIFIED
+# fixture land on redfish, which is what the arms want. It remains a whole-cluster
+# change, so the lab guard stays: throwaway clusters only.
 	$(call PROTECT_LAB,$(KIND_CLUSTER))
 	$(KUBECTL) apply -f local/sushy-emulator.yaml
 	$(KUBECTL) -n $(IRONIC_NS) rollout status deploy/sushy-emulator --timeout=180s
