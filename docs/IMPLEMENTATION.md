@@ -1174,6 +1174,60 @@ than something to fold in here.
 **Status: unblocked but not applied.** Nothing here runs without creating a live
 credential, which is yours.
 
+#### Re-measured 2026-11-15: five render sites, not three — and it is now also a
+#### functional failure, not only an exposure
+
+Two things changed since the above was written, and one of them raises the
+priority.
+
+**The count was wrong. It is five, enumerated:**
+
+| `charts/kubernetes-cluster/templates/_helpers.tpl` | define |
+|---|---|
+| `:824` | `resolveNodeExtraWriteFiles` |
+| `:1040` | `publishDeployedHashWriteFiles` |
+| `:1264` | `cpUserData` |
+| `:1361` | `cpUserData` |
+| `:1843` | `cpUserData` |
+
+Three of the five are inline `AUTH_BODY` strings with the password interpolated
+straight into JSON, and `cpUserData` holds three of them by itself. §9.10 said
+"three plaintext copies" on §9.8's authority while naming **five** publisher
+scripts, and the two numbers were never reconciled.
+
+Worth recording how the recount nearly went wrong the same way: my first pass
+used `grep -B2 -A4`, whose overlapping context windows merged adjacent matches
+into one block, and I read three. A plain `grep -n` with no context flags returns
+five. **A context-flag grep is not a counting instrument** — it is a reading
+instrument, and it silently coalesces. Count with `-n` or `-c`, read with `-B/-A`.
+
+**What is NOT affected, measured rather than assumed:**
+`templates/drain-jobs.yaml` carries no Keystone credential at all — it mounts a
+kubeconfig Secret (`secretName`). So the exposure is confined to the blade-side
+cloud-init path; the in-cluster Job path was already doing the right thing.
+
+**The new consequence, from `openstack-as-a-service` on 2026-11-14.** That
+deployment's Keystone admin password is **generated fresh on every install**
+(`openstack-credential-identity-admin`, created once per install and preserved
+across upgrades; no release rotates it). So §9.10's closing note — *"existing
+blades keep the admin password in their config drive until they are
+redeployed"* — is not only a statement about exposure. **Those blades' publishers
+go dead at the next OpenStack reinstall**, because the credential baked into
+their config drive no longer exists in Keystone.
+
+That failure is silent in the way this repo keeps finding: the publisher gets a
+401 from Keystone, on the blade, in cloud-init output nobody reads, and what the
+operator sees is a node that provisioned fine and then never published its join
+data. Nothing upstream of it reports a credential problem.
+
+So the §9.10 migration is worth doing for a second, independent reason: a scoped
+`ironic-publisher` user that **this** side creates and controls does not get
+regenerated out from under the fleet by someone else's install. That argument did
+not exist when §9.10 was written, and it is the stronger of the two.
+
+Status still unblocked and not applied — it needs a live credential, which is
+yours. No code change: the chart already parameterises `ironicAuth`.
+
 ### §9.11 — six Makefile recipes reached a cluster without the isolated kubeconfig
 
 Found while building regeneration tooling, not by looking for it. Six recipe
