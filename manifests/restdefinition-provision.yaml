@@ -490,10 +490,36 @@ spec:
       # already driven enroll -> manageable by the time the validity gate ran, so
       # the gate could not certify the setup (`manage` is not valid FROM
       # `manageable`). Its rows are consistent with A -- Pending/ReconcileSuccess
-      # throughout, 828s -- but uncertified, and it recorded 2 inferences rather
-      # than 1, which the next run should explain rather than assume. The gate must
-      # evaluate validity AT CR-CREATION TIME and treat "already past the target"
-      # as its own case.
+      # throughout, 828s -- but uncertified. The gate must evaluate validity AT
+      # CR-CREATION TIME and treat "already past the target" as its own case.
+      #
+      # ITS 2 INFERRED COUNTS ARE NOW EXPLAINED, from source rather than by another
+      # run -- the claim was about code behaviour, so a cluster was the wrong
+      # instrument for it. A FAILED create leaves `Pending` UNSET: on a REST error
+      # the create path returns at `return err` (restResources.go:1268 region),
+      # BEFORE the `if response.IsPending()` branch that would set it. So:
+      #
+      #   1. CR exists, node absent. findby lists, matches nothing -> synthesised
+      #      404, no Pending -> the INFERRED branch -> count 1 -> exists=false ->
+      #      the runtime dispatches Create.
+      #   2. The create PUTs to /v1/nodes/<absent>/states/provision -> 404 ->
+      #      `return err`. Pending is never set; the runtime records
+      #      Synced=ReconcileError.
+      #   3. Next reconcile: findby still misses, still no Pending -> the INFERRED
+      #      branch AGAIN -> count 2 -> dispatch again.
+      #   4. The node appears, the create succeeds, 202 -> IsPending() -> Pending
+      #      SET.
+      #   5. From then on the LATCH guard answers every miss, so the inferred
+      #      counter freezes at 2 and the latched one takes over.
+      #
+      # Which also matches ordering A's 1 exactly: the node already existed, so the
+      # first create succeeded and Pending was set after a single inferred count.
+      # Two numbers, one mechanism, no re-run.
+      #
+      # AND IT IS THE CAUTION PUT TO OASGEN, demonstrated: ordering B's CR went
+      # ReconcileError and then clean. "Synced is clean" is a CURRENT reading, so a
+      # CR that failed twice and then succeeded is indistinguishable from one that
+      # succeeded first time -- which is the trigger's input.
       #
       # STILL OWED, AND IT IS THE GATE: re-measure ORDERING A at the tag that
       # serves the declaration. core-provider gates ChildStalled on THAT reading,
