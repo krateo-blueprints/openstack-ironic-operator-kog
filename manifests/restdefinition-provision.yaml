@@ -382,7 +382,58 @@ spec:
       # differ. If two runs disagree on the count, something nobody has listed moved
       # and that is itself the finding.
       #
-      # IT IS MEASURABLE HERE, SAFELY, AND THAT IS THE NEXT THING OWED.
+      # MEASURED 2026-11-15, AND THE PREMISE HOLDS -- WITH A MECHANISM NOBODY
+      # PREDICTED, INCLUDING ME. ARM 7 on a throwaway cluster at 0.61.0,
+      # `target: manage` (valid from enroll, touches no disk), ordering A -- node
+      # first, which is what the charts produce:
+      #
+      #   provision_state   enroll -> manageable     the transition LANDED
+      #   dispatch_repeats  1 -> 1                   exactly ONE dispatch
+      #   Ready             Pending                  73 of 74 samples
+      #   Synced            ReconcileSuccess         no error anywhere
+      #   Observed          ABSENT                   never set
+      #   last_error        none
+      #   window            t+10s .. t+831s = 4.6 resync periods
+      #
+      # So this kind DOES rest at not-ready indefinitely, while being entirely
+      # healthy: the transition succeeded, Synced reports success, nothing errored,
+      # and Ready stayed Pending across more than four resyncs with ZERO further
+      # dispatches. That is precisely the state the exemption is about, now read
+      # rather than argued.
+      #
+      # AND IT DOES NOT RE-DISPATCH, which refutes what this file said earlier and
+      # what I escalated to two repos. The mechanism is the Pending LATCH: the
+      # create's 202 sets Pending, and the findby branch's
+      # `notfound && IsConditionSet(mg, Pending())` guard then returns
+      # {ResourceExists: true, ResourceUpToDate: true} on every later miss
+      # (restResources.go, the findby notfound handling). So the condition that the
+      # first dispatch sets is what suppresses all the others. One dispatch, then
+      # silence. The chart gate still bounds the CR's lifetime, but it is not what
+      # bounds the dispatching -- rdc does, by itself.
+      #
+      # THREE PREDICTIONS, ALL WRONG, in this order: Ready=True-while-inert (that
+      # is the findby-MATCHES branch, unreachable here); a sign inversion from
+      # enforcement (moot); re-dispatch every resync (refuted above). The measured
+      # answer -- one-shot then a latched Pending -- was none of them. Recorded
+      # because the pattern matters more than the predictions: each was derived
+      # from reading more source, each was more confident than the last, and the
+      # reading settled it in one run.
+      #
+      # ORDERING B IS VOID, not a second result: the CR created BEFORE the node had
+      # already driven enroll -> manageable by the time the validity gate ran, so
+      # the gate could not certify the setup (`manage` is not valid FROM
+      # `manageable`). Its rows are consistent with A -- Pending/ReconcileSuccess
+      # throughout, 828s -- but uncertified, and it recorded 2 inferences rather
+      # than 1, which the next run should explain rather than assume. The gate must
+      # evaluate validity AT CR-CREATION TIME and treat "already past the target"
+      # as its own case.
+      #
+      # STILL OWED: the same reading at whatever tag serves the declaration, with
+      # `metadata.generation` sampled per row -- inferredCounter resets when the
+      # generation changes, so a window spanning a spec edit restarts the count.
+      # This window provably contains no spec edit (the CR is applied once per
+      # ordering and never patched), but that is an argument from reading the
+      # script, not a measurement.
       # local/ironic.conf runs `enabled_deploy_interfaces = fake` and
       # `default_deploy_interface = fake`, so driving a node to `target: active`
       # on a throwaway cluster uses the fake deploy interface: no image, no PXE,
