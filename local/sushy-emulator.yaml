@@ -23,9 +23,13 @@
 # transition latency needs the real blades, which are in the parked lab.
 #
 # MEASURED BEHAVIOUR, 2026-11-15, before this file was written:
-#   - serves exactly ONE system, with a UUID GENERATED AT STARTUP -- so
-#     driver_info.redfish_system_id cannot be hardcoded anywhere, it must be
-#     discovered from /redfish/v1/Systems at runtime;
+#   - serves exactly ONE system. Its UUID is DETERMINISTIC, not random: three
+#     fresh containers all served 27946b59-9e44-4fa7-8e91-f3527a1ef094. The first
+#     draft of this file said "generated at startup" after seeing it once, which
+#     was a guess dressed as a measurement -- corrected before merge by running it
+#     three times. Discover it from /redfish/v1/Systems anyway, but for the right
+#     reason: it is an undocumented constant of this image's fake driver, not a
+#     contract, so pinning it couples the arm to one image digest;
 #   - POST ComputerSystem.Reset returns 204 and the emulator logs the change
 #     immediately, but the REPORTED PowerState lags ~10-20s;
 #   - my first check sampled it sub-second, read "PowerState unchanged", and
@@ -56,6 +60,26 @@ spec:
       labels:
         app: sushy-emulator
     spec:
+      # HARDENED BECAUSE THE GATE IS "NO NEW ALERTS", NOT "NO ALERTS". Trivy
+      # already reports 32 open findings on local/ironic-standalone.yaml and 18 on
+      # local/chartrepo.yaml -- the standard no-securityContext cluster (KSV-0014,
+      # KSV-0118 and friends) -- and CI is green on main because those are
+      # grandfathered. A NEW manifest with no securityContext fails the PR check,
+      # and rightly: this is a network service, and nothing here needs root.
+      #
+      # EVERY CONSTRAINT BELOW WAS RUN BEFORE IT WAS WRITTEN, 2026-11-15:
+      # `docker run --user 65532:65532 --read-only --cap-drop ALL
+      #  --security-opt no-new-privileges --tmpfs /tmp` serves the Systems
+      # collection and accepts a ComputerSystem.Reset (HTTP 204). The image's
+      # own Config.User is empty, i.e. root by default, so this is a real change
+      # rather than a restatement of what it already did.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: sushy-emulator
           # Pinned to an IMMUTABLE dated tag, not `release-39.0` and not `latest`:
@@ -77,6 +101,18 @@ spec:
           ports:
             - name: redfish
               containerPort: 8000
+          securityContext:
+            allowPrivilegeEscalation: false
+            privileged: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # readOnlyRootFilesystem needs this: Python and Flask write temporary
+            # files, and the fake driver keeps its state in memory, so a small
+            # emptyDir is the whole writable surface the pod requires.
+            - name: tmp
+              mountPath: /tmp
           readinessProbe:
             httpGet:
               path: /redfish/v1/Systems
@@ -88,7 +124,13 @@ spec:
               cpu: 25m
               memory: 64Mi
             limits:
+              # Both limits set: a missing CPU limit is its own Trivy finding
+              # (KSV-0011) and this pod has no reason to burst.
+              cpu: 500m
               memory: 256Mi
+      volumes:
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

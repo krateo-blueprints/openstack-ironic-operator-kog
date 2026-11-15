@@ -246,7 +246,8 @@ sushy-up:   # a Redfish BMC in-cluster, and switch Ironic's default power interf
 	$(KUBECTL) -n $(IRONIC_NS) rollout restart deploy/ironic
 	$(KUBECTL) -n $(IRONIC_NS) rollout status deploy/ironic --timeout=240s
 	@echo "redfish BMC at http://sushy-emulator.$(IRONIC_NS).svc:8000 -- the system UUID is"
-	@echo "generated at pod start, so discover it from /redfish/v1/Systems; never pin it."
+	@echo "an undocumented constant of this image's fake driver -- discover it from"
+	@echo "/redfish/v1/Systems rather than pinning it to one image digest."
 
 ironic-down:  # remove standalone Ironic from the kind cluster
 	-$(KUBECTL) delete -f local/ironic-standalone.yaml
