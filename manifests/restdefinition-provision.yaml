@@ -778,8 +778,35 @@ spec:
       # for the rest of its life, while behaving exactly as designed. Raised with
       # oasgen: a kind declaring `restsAtNotReady` is declaring precisely this
       # shape, so the declaration is the natural signal for suppressing the
-      # Warning on kinds that have announced it -- their call, not recorded here as
-      # a decision.
+      # Warning on kinds that have announced it.
+      #
+      # DECIDED, oasgen #724, 2026-11-16: `restsAtNotReady: true` will suppress
+      # `reportLatchedInferredAbsence` for its kind, keyed on the DECLARATION and
+      # never on the latch itself -- inferring it from the latch would delete the
+      # detector for the population it exists for. The threshold does not move: it
+      # is a deadline, not a budget, and a kind that legitimately latches forever
+      # is an argument for a declaration rather than a longer deadline. Worth
+      # recording that the obvious fix, had this first been reported as noise,
+      # would have been to raise the threshold and blunt the detector for everyone.
+      #
+      # AND IT IS WORSE THAN THIS ARM MEASURED, on two counts oasgen found while
+      # verifying their own source. Neither is visible from the outside:
+      #
+      #   * IT RECURS PER GENERATION, NOT ONCE PER CR. The counter's signature is
+      #     `gen=<generation>;<kind>`, so a spec edit resets it and the Warning
+      #     fires again ~15 minutes later. For a long-lived NodeProvision that is
+      #     edited occasionally this is a RECURRING warning on a resource that has
+      #     never misbehaved -- not the once-per-CR this arm's single-generation
+      #     window could see.
+      #   * THE EVENT'S REMEDY ADVICE IS WRONG FOR THIS KIND, AND CONFIDENT.
+      #     Verbatim: "the findby cannot see it -- most often because the response
+      #     carries no field matching the declared identifiers (check
+      #     `responseTransform` and `spec.resource.identifiers`)." Both of those
+      #     declarations are already CORRECT here and there is nothing to change.
+      #     It sends an operator to audit a RestDefinition that is right, and the
+      #     only way to discover that is to read Ironic's API and conclude the
+      #     message does not apply. That is worse than silence, and it is why the
+      #     suppression is the fix rather than better wording.
       #
       # WHAT THE ARM DID NOT CAPTURE, stated because of the 0.41.0 scar: per-pod
       # imageIDs. The 0.73.0 stack came up on an arm64 kind node, generated

@@ -797,14 +797,32 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 	python3 -I scripts/check-blueprint-metadata.py --self-test && \
 		python3 -I scripts/check-blueprint-metadata.py $(if $(BLUEPRINT_ONLINE),--online,)
 
-check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set check-chart-version-moved check-chart-renders check-release-table check-bmc-passthrough check-publisher-scope-selftest check-transition-gates   # every standing screen
+check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set check-chart-version-moved check-chart-renders check-release-table check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest   # every standing screen
 	@echo "all standing screens passed"
 
 check-transition-gates:   # every NodeProvision render stays bounded by a live state gate
 # WHAT THIS PROTECTS, because neither side says it alone. NodeProvision's create is
 # dispatched by Observe reporting ABSENT, and for this kind findby can NEVER match
-# (node_id absent from /v1/nodes items; no responseTransform, deliberately). So rdc
-# re-dispatches the provision PUT on every resync for as long as the CR exists. The only
+# (node_id absent from /v1/nodes items; no responseTransform, deliberately).
+#
+# CORRECTED 2026-11-16, AND THE OLD CLAIM WAS MINE: this comment said rdc
+# "re-dispatches the provision PUT on every resync for as long as the CR exists".
+# MEASURED TWICE -- at 0.61.0 and 0.73.0 -- that is FALSE for a create that lands.
+# The 202 sets Pending, and the Pending guard then returns exists-and-up-to-date, so
+# the dispatch count stays at 1 (ordering A) across 6.4 resync periods. The latch is
+# the suppression, so re-dispatch-forever was never the steady state.
+#
+# THE GATE IS STILL JUSTIFIED, on two narrower mechanisms that the overstatement was
+# hiding rather than supporting:
+#   * the absence counters are keyed on `gen=<generation>;<kind>`, so a SPEC EDIT
+#     resets them and re-enables dispatch -- the bound matters per generation, not
+#     once per CR (oasgen, verified at their latched_absence.go);
+#   * a create that ERRORS leaves Pending unset, so there is no latch and that case
+#     DOES re-dispatch every resync. Ordering B's 2 dispatches are this path.
+# So the gate bounds how long a CR exists to be re-dispatched into, which is a real
+# bound on both mechanisms -- just not the one previously written down. An
+# overstated justification is worse than a narrow one: it invites someone to check
+# it, find it false, and remove the screen it was defending. The only
 # thing bounding that is the chart: each transition is gated on a `lookup` of the live
 # BaremetalNode's status.provision_state, so the gate closes when the node leaves the
 # gating state and cdc removes the CR. An empty lookup yields "" and every eq-comparison
@@ -816,6 +834,23 @@ check-transition-gates:   # every NodeProvision render stays bounded by a live s
 # only symptom being a provision transition re-issued every 3 minutes at a live node.
 	python3 -I scripts/check-transition-gates.py --self-test && \
 		python3 -I scripts/check-transition-gates.py
+
+check-arm7-selftest:   # the premise arm's verdict mapping stays correct
+# WHY A MEASUREMENT ARM IS SCREENED IN CI. The arm itself needs a kind cluster and
+# cannot run here. Its VERDICT LOGIC can, and that is the part that has been wrong
+# every time: v1 accepted an invalid Ironic transition and counted a line that was
+# structurally always 0; v6 wired the dispatch count to `latched-absence-repeats` and
+# so read 5 SUPPRESSIONS as 5 DISPATCHES, printing RE-DISPATCH_LOOP on a run that
+# confirmed the premise. That nearly went to two repos as "0.73.0 regresses
+# NodeProvision into a re-dispatch loop".
+#
+# The suite also could not FAIL until today -- it printed "exit 4 (want 4)" without
+# comparing them, and --self-test ended in a hardcoded `exit 0`. Both fixed, and the
+# suite is mutation-tested: reintroducing the v6 defect, or deleting either CSV-width
+# gate or the version gate, each turns it red. Case 9 pins the mapping that actually
+# broke (a flat `inferred` with a climbing `latched` MUST read premise-holds), and
+# case 10 exists because a mutation proved nothing covered a wrong-width header.
+	bash tests/provision-arms/arm7.sh --self-test
 
 check-publisher-scope-selftest:   # the scope verifier can still tell a 403 from a failure
 # The verifier itself needs a live OpenStack and so cannot run in CI. Its CLASSIFIER
