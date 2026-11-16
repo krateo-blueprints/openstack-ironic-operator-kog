@@ -4,8 +4,24 @@
 WHY THIS SCREEN EXISTS. NodeProvision's create is dispatched by Observe reporting the
 resource ABSENT, and for this kind findby can never match (`node_id` is absent from
 /v1/nodes items and no responseTransform is declared, deliberately -- see
-manifests/restdefinition-provision.yaml). So rdc re-dispatches
-PUT /v1/nodes/{node_id}/states/provision on EVERY resync for as long as the CR exists.
+manifests/restdefinition-provision.yaml).
+
+CORRECTED 2026-11-16, AND THE CLAIM THIS REPLACES WAS MINE, HERE AND IN TWO OTHER
+PLACES. This said rdc "re-dispatches PUT /v1/nodes/{node_id}/states/provision on EVERY
+resync for as long as the CR exists". MEASURED TWICE -- arm7 at 0.61.0 and 0.73.0 -- that
+is FALSE for a create that lands: the 202 sets Pending, the Pending guard then returns
+exists-and-up-to-date, and the dispatch count stays at 1 across 6.4 resync periods.
+
+The gate is still justified, on two narrower mechanisms the overstatement was hiding:
+  * the absence counters are keyed on `gen=<generation>;<kind>`, so a SPEC EDIT resets
+    them and re-enables dispatch -- the bound matters per generation, not once per CR;
+  * a create that ERRORS leaves Pending unset, so there is no latch, and THAT case does
+    re-dispatch every resync.
+
+An overstated justification is worse than a narrow one: it invites a reader to check it,
+find it false, and remove the screen it was defending. Which is also why this correction
+had to be made in three places -- the Makefile comment, this docstring, and the FINDING
+TEXT below, the last being the one an operator actually reads.
 
 The only thing that bounds that is the chart: each transition template is gated on
 `baremetal-host.provisionState`, which is a `lookup` of the live BaremetalNode's
@@ -15,10 +31,11 @@ stops being rendered, and cdc removes it. An empty lookup returns "" and every
 direction.
 
 That bound is invisible from either side on its own: nothing in the RestDefinition says
-"a chart limits my blast radius", and nothing in the chart says "without this gate the
-action re-fires forever". If a gate is ever changed to a values flag, or a new transition
-template is added without one, the bound disappears silently and the only symptom is a
-provision transition re-issued every 3 minutes against a live node.
+"a chart limits my blast radius", and nothing in the chart says "without this gate this
+CR is never removed". If a gate is ever changed to a values flag, or a new transition
+template is added without one, the bound disappears silently -- and the symptom is not a
+steady stream of writes but something quieter: a CR that outlives its transition, so the
+next spec edit or failed create dispatches into a node that has long since moved on.
 
 WHAT IT DOES NOT CHECK, stated so the pass is not read as more than it is: that the
 window is short, or that Ironic rejects the repeat. Both are runtime facts and belong to
@@ -49,7 +66,8 @@ def findings_for(text, name):
     if not any(s in text for s in STATE_READS):
         out.append(
             "%s renders NodeProvision but never reads the live provision state "
-            "(none of %s). Without that gate the action re-fires every resync."
+            "(none of %s). Without that gate the CR is never removed, so every "
+            "generation bump and every failed create re-dispatches the transition."
             % (name, ", ".join(repr(s) for s in STATE_READS))
         )
         return out
