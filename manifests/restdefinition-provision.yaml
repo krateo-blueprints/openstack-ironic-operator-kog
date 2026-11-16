@@ -262,9 +262,67 @@ spec:
       #     dispatched -- gated on the CREATE MARKER for the current generation,
       #     not on "Synced is clean"; see the trigger note below;
       #   * the cdc reads that reason as healthy, with the stall deadline never
-      #     applying. core-provider reports that half is already in place and
-      #     tested -- childhealth.go:975 plus terminalbydesign_test.go (relayed,
-      #     not verified here).
+      #     applying -- BUT ONLY FROM core-provider 2.13.99. Verified here at the
+      #     canonical remote on 2026-11-16, no longer relayed, and the floor is a
+      #     REQUIREMENT of this contract rather than a note about it.
+      #
+      # THE CONTRACT HAS A CORE-PROVIDER FLOOR, AND NOBODY HAD ASKED. Two repos
+      # agreed on a condition and the reading of it is gated on a THIRD:
+      #
+      #   TerminalByDesign   enters childhealth.go at   2.13.99
+      #   AssumedUpToDate    enters childhealth.go at   2.13.104   (oasgen #709)
+      #   THIS LAB'S PIN                                2.13.65    below BOTH
+      #
+      # Control, because the first reading had the target AND the control at zero,
+      # which is VOID and not a finding: childhealth.go EXISTS at 2.13.65 and
+      # `childHealthy` has 18 hits there against 22 at 2.13.104, so the two zeros
+      # are real content. core-provider then confirmed independently, sweeping
+      # every tag from 2.13.90 with the same control, and states 2.13.99 as the
+      # floor with no earlier landing.
+      #
+      # BELOW THE FLOOR IT FALLS TO `default: childConverging`, read from
+      # krateoReady rather than inferred:
+      #
+      #   status == "True"                                   -> childHealthy
+      #   Unavailable / CreateFailed / UpdateFailed /
+      #     AuthorizationDenied / DriftNotConverging         -> childFailed
+      #   ZeroEvidence / NotObserved / ObserveFailed         -> childUnevaluated
+      #   default:                                           -> childConverging
+      #
+      # So the reason is not matched, nothing goes red, and the parent converges
+      # FOREVER -- which is the exact failure this contract was written to prevent.
+      #
+      # AND THE REGRESSION IS IN THE CONFIDENCE, NOT IN THE CONDITIONS, which is
+      # why the floor must be written down rather than merely known. Today this
+      # kind rests at `Pending`, which the cdc keeps converging deliberately, so
+      # below the floor the parent converges. After the rdc write ships it rests at
+      # `Ready=False/TerminalByDesign`, which below the floor is ALSO converging.
+      # The observable behaviour is identical; what changes is that three repos'
+      # documents will say it reads healthy. Shipping the rdc half alone is
+      # therefore strictly worse below 2.13.99 than not shipping it.
+      #
+      # AND PRODUCTION LANDS BETWEEN THE TWO FLOORS, which is the concrete reason
+      # they had to be stated separately rather than as one "recent enough".
+      # core-provider read 057 on 2026-11-16 -- `composition-dynamic-controller`
+      # at 2.13.103 on all 76 cdc Deployments, against 157 Deployments in
+      # krateo-system as the denominator -- so 057 is ABOVE 2.13.99 and BELOW
+      # 2.13.104. TerminalByDesign will be read as healthy there; #709's
+      # AssumedUpToDate still reads healthy through the generic True arm, exactly
+      # as the old `Available` did, until the installer rolls 2.13.104+. Relayed
+      # from their read of their own cluster, not measured here.
+      #
+      # WHAT THIS REPO MAY NOT CLAIM, consequently: no measurement taken in this
+      # lab can observe the healthy read, at either floor. The pin is 2.13.65. A
+      # future run that wants to demonstrate the contract end-to-end must move the
+      # core-provider pin first, and that is a separate decision from the oasgen
+      # pin -- the two floors are independent and neither implies the other.
+      #
+      # HOW IT STAYED INVISIBLE, kept because the evidence was sound in isolation
+      # every time. Each repo verified ITS OWN half at ITS OWN version: the rdc
+      # write was read at an oasgen tag, the cdc read arrived here as
+      # `childhealth.go:975`, and A LINE NUMBER CARRIES NO VERSION. Three repos
+      # agreed on a contract none of them had tested together. Ask "at which tag?"
+      # of any relayed source reading, including one that cites a line.
       #
       # So it is not a duration and not a bound. oasgen owns the trigger and the
       # declaration's shape, and will tag it.
