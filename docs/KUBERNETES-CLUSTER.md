@@ -100,7 +100,7 @@ The chart's `lifecycle-cp.yaml` template renders the BH with `spec.image`, `conf
 
 ## Cluster bringup — sequence diagram
 
-End-to-end on a fresh apply of `KubernetesCluster ettore`. Real timing measured on the Ettore lab, Debian 13 trixie, k8s 1.36.2: **23-24 min hands-off, 0 pod restarts** (since v0.10.12 aligned cgroup drivers).
+End-to-end on a fresh apply of `KubernetesCluster ettore`. Real timing measured on the integration lab, Debian 13 trixie, k8s 1.36.2: **23-24 min hands-off, 0 pod restarts** (since v0.10.12 aligned cgroup drivers).
 
 ```mermaid
 sequenceDiagram

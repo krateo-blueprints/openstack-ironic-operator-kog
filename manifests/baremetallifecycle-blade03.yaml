@@ -15,7 +15,7 @@ spec:
   nodeName: blade03
   nodeNamespace: openstack
   online: false
-  # Pinned UUID from Ettore's nodes.yaml. Keep it identical across discovery -> delete ->
+  # Pinned UUID from the lab's nodes.yaml. Keep it identical across discovery -> delete ->
   # lifecycle so parent_node references stay valid.
   nodeUuid: f50684f4-5bde-4f87-8dd6-fa2439b538c7
   parentNode: 5113ab44-faf2-4f76-bb41-ea8b14b7aa92

@@ -66,7 +66,7 @@ Chosen to minimise re-wiring between tests and reuse blades already in usable st
 | blade07 + blade08 | concurrent deploys (gap 5) |
 | blade09 | delete-from-active (gap 3) — destructive, leave for last |
 | blade10 | inspect-failure (gap 7) — gets bogus Redfish creds |
-| blade11 | undeployMode=none post-Ettore policy fix (gap 11) |
+| blade11 | undeployMode=none, after the lab `automated_clean` policy fix (gap 11) |
 | blade12 | 24h soak (gap 9) — once deployed, do not touch |
 | blade01, 02, 13–16 | untouched reserve |
 
@@ -82,7 +82,7 @@ Chosen to minimise re-wiring between tests and reuse blades already in usable st
    (gaps 3, 7).
 3. **Gap 8 (idempotent re-apply) before gap 9 (24h soak).** Soak is meaningless if a
    stock re-apply already churns.
-4. **Gap 11 (undeployMode=none) gated on Ettore's `automated_clean` policy fix.**
+4. **Gap 11 (undeployMode=none) gated on the lab operator's `automated_clean` policy fix.**
    Park until confirmed; do not attempt on the project-scoped admin token.
 
 **Soft ordering — recommended for efficiency:**
@@ -124,7 +124,7 @@ render/control-plane only and can be slotted into any track's idle minutes.
 
 - Session 1: gaps 6, 8, 10, start gap 9 soak.
 - Session 2: gaps 1, 2, 4, 5.
-- Session 3: gaps 3, 7, end gap 9, and gap 11 if Ettore landed the fix.
+- Session 3: gaps 3, 7, end gap 9, and gap 11 if the lab operator landed the fix.
 
 ---
 

@@ -946,9 +946,9 @@ From kubeadm HA docs:
 The chart sticks with `--upload-certs` for simplicity; manual cert
 distribution would require a chart fork or out-of-band copy step.
 
-## Deploying on the Ettore lab (end-to-end Ironic recipe)
+## Deploying on the integration lab (end-to-end Ironic recipe)
 
-A turn-key manifest for the Ettore lab lives at
+A turn-key manifest for the integration lab lives at
 [`manifests/kubernetescluster-example.yaml`](../manifests/kubernetescluster-example.yaml)
 — CP on blade06 + worker on blade10, with the lab's Redfish credentials
 and UUIDs from the existing baremetalhost-blade06-power-flip.yaml and
@@ -979,7 +979,7 @@ baremetalhost-blade10-inspect-fail.yaml fixtures.
    scoped ServiceAccount (RBAC: patch `nodes.baremetal.ogen.krateo.io`,
    create+get Secrets in `openstack`).
 
-   The Ettore manifest's `spec.managementCluster.apiUrl` is
+   The lab manifest's `spec.managementCluster.apiUrl` is
    `http://198.51.100.5:8443` — plain HTTP, because the kubectl-proxy
    sidecar terminates auth at the cluster edge with its SA token. The
    blade's publish-join.sh sends an Authorization header from the
@@ -1042,7 +1042,7 @@ A short fake-hardware smoke against the same chart confirmed end-to-end:
 The smoke stopped at Ironic POST because the production Ironic in this
 lab has only `redfish`/`ipmi` enabled — the `fake-hardware` driver is
 not in the enabled-drivers list. That's a lab config detail, not a
-chart bug; the Ettore-lab manifest uses `redfish` end-to-end.
+chart bug; the integration-lab manifest uses `redfish` end-to-end.
 
 ### What still needs validation on real hardware
 
