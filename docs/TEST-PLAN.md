@@ -28,6 +28,31 @@ Every test observes three surfaces — the chart render, the control plane (cdc 
 (`provision_state` / `power_state` / `instance_info` via the wg-lab-route tunnel). A
 test only passes when all three agree.
 
+## Lab environment -- what "lab" means in this document
+
+Stated here because the qualifier used to live 230 lines below the claims that
+needed it (see Test 7 / gap 7 on the sushy-emulator), and a reader of a PASS row
+had no reason to scroll for it.
+
+| layer | what it really is |
+|---|---|
+| Ironic | **real**, Keystone-protected, system-scoped token from a `clouds.yaml` |
+| driver | **real** `redfish` end-to-end -- `fake-hardware` is not even in the lab's enabled-drivers list |
+| deploy path | **real** PXE + IPA agent, real disk writes (a `full` clean pass takes minutes because it writes through the disks) |
+| machines | **KVM/libvirt virtual machines**, not physical servers |
+| BMC | a **sushy-emulator**, not a physical BMC |
+
+So this is a much stronger environment than the fake driver -- the Ironic, the
+driver, the PXE boot and the disk work are all genuine -- but it is **not physical
+hardware**, and anything that depends on a real BMC cannot be observed here. The
+proof is in gap 7: a node given `redfish_password: wrong-password-intentional`
+walked `enroll -> manage -> manageable -> inspecting -> inspect wait -> manageable`
+unimpeded, because the emulator does not enforce Redfish auth.
+
+**A run against physical BMCs (HPE iLO, Dell iDRAC, real OpenBMC) is still
+outstanding.** Corrected 2026-11-16: this document's Category 2 heading said "real
+hardware walk" and the user guide reported two timing figures as "real hardware".
+
 ## Blade allocation
 
 Chosen to minimise re-wiring between tests and reuse blades already in usable states.
@@ -194,7 +219,7 @@ cdc is mid-reconcile; don't delete + recreate the CD while BHs exist).
 
 ---
 
-## Category 2 — Lab / integration (real hardware walk)
+## Category 2 — Lab / integration (lab walk: real Ironic, emulated BMCs)
 
 ### Test 1.1 + 2.1 — Bytes-different image swap + cloud-init verification (gaps 1 & 2)
 
