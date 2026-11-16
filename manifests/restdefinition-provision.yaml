@@ -290,7 +290,9 @@ spec:
       # exists-and-up-to-date and sets `Available` -- Ready=TRUE -- and the runtime
       # then stamps ReconcileSuccess because the handler reported no Synced of its
       # own. So such a resource reads Ready=True/Synced=ReconcileSuccess with its
-      # create unverified. That ships today, independently of this feature.
+      # create unverified. That shipped unfixed, independently of this feature,
+      # until 0.73.0 -- and what 0.73.0 changed is narrower than "fixed". See the
+      # #709 block below, which is now a measurement against a released tag.
       #
       # So the trigger will require the CREATE MARKER for the current generation --
       # `krateo.io/external-create-succeeded`, which the runtime stamps only when
@@ -318,12 +320,31 @@ spec:
       # claims less than the function does; oasgen is renaming it. Worth recording
       # that a careful reader lost time to a non-bug that a name created.
       #
-      # AND THE ASSUME-UP-TO-DATE SITE GETS A REASON (oasgen #709, Diego chose
-      # non-breaking): it will ship as `Ready=True` with reason `AssumedUpToDate`.
-      # Nothing's health flips, but the reason becomes distinguishable, so a rollup
-      # can stop reading an assertion as an observation. core-provider adds the
-      # mapping. That does not touch this kind -- see immediately below -- but it is
-      # the fix for the population that the old trigger was least safe for.
+      # THE ASSUME-UP-TO-DATE SITE HAS ITS REASON, RELEASED IN 0.73.0 on
+      # 2026-11-16 (oasgen #709, Diego chose non-breaking). Read at the tag, not
+      # relayed: the site now sets `customcondition.AssumedUpToDate(...)` where it
+      # set `condition.Available()`, and the RETURN VALUE is deliberately unchanged,
+      # because reporting exists:false there would dispatch a create on every
+      # reconcile for a kind that can never be observed -- the duplicate-create
+      # shape. The defect was the asserted CONDITION, not the assumed existence.
+      #
+      # BUT THE FIX IS LABELLING, NOT DETECTION, AND THE DISTINCTION IS THE WHOLE
+      # VALUE OF IT. oasgen's own comment beside the change says: "The STATUS stays
+      # True on purpose." So at 0.73.0 an asserted health still reads
+      # `Ready=True` -- it now carries a reason that says it was asserted. A rollup
+      # that maps Ready's STATUS and never reads its REASON is therefore completely
+      # unchanged by 0.73.0: it goes on reading an assertion as an observation, with
+      # no symptom, exactly as before. The fix only becomes a fix in the consumer
+      # that reads the reason, which is core-provider's mapping -- so the mapping is
+      # not a follow-up to #709, it is the half that does the work. Raised with
+      # oasgen 2026-11-16, because their release note led with #710/#713 and did not
+      # mention that #709 was in the tag at all.
+      #
+      # AND THIS REPO IS NOT YET RUNNING IT: the pin here is 0.61.0, so the site
+      # that runs in this lab is still `condition.Available()`. Which changes
+      # nothing for this kind -- see immediately below -- but it does mean no
+      # measurement taken here has yet observed `AssumedUpToDate`, and a reading of
+      # that reason must not be claimed from this repo until the pin moves.
       #
       # THIS KIND IS NOT IN THE AFFECTED POPULATION, checked both ways rather than
       # assumed. It declares `findby` (with `create`), so it takes the findby
@@ -458,12 +479,44 @@ spec:
       #   the no-identifier refusal (#687)         0.69.0  NO  -- same branch
       #   createFailedMostRecently (#697)          0.71.0  NO  -- same branch
       #   createReachedTheVendor (#676/#681)       0.68.0  YES -- create's vendor sites
+      #   AssumedUpToDate reason (#709)            0.73.0  NO  -- the no-verb site
+      #   paginated findby walk (#710)             0.73.0  NO  -- absent = one page
+      #
+      # The two 0.73.0 rows were read at the tag on 2026-11-16, and the second one
+      # is the one that could have gone either way, because this kind's findby DOES
+      # read a collection (`GET /v1/nodes?include_children=true`). #710 moved the
+      # page walk out of FindBy and into the client, and added a `pagination` block
+      # to the RestDefinition CRD -- `rule`, `maxPages`, `tokenPath`, `hasMorePath`,
+      # `startPage`. It does not reach this kind, and the reason is one line of
+      # oasgen's `types.go` rather than an inference: "Absent means a SINGLE page,
+      # which is what this verb did before 0.73.0." This RestDefinition declares no
+      # `pagination`, so the walk reads one page at 0.61.0 and one page at 0.73.0.
+      #
+      # AND IT CARRIES NO CRD `default`, WHICH IS THE PART WORTH CHECKING RATHER
+      # THAN ASSUMING: `Pagination` is `+optional` and a pointer, and the 331 added
+      # CRD lines contain no `default:` (the file's 2 pre-existing ones are the
+      # control that the grep works). A generated CRD's `default` is materialised
+      # onto EXISTING CRs by the apiserver and cannot be withdrawn -- measured here
+      # on 6 of 6 live NodePower CRs -- so a defaulted pagination block would have
+      # silently rewritten live RestDefinitions on the next regeneration. It does
+      # not. Nothing to do, which is only worth writing down because the hazard was
+      # real and the check was cheap.
       #
       # Verified at origin/main: restResources.go has FIVE `apiCall == nil` blocks
       # (343, 391, 1556, 1841, 2129); createHasBeenAttempted's single non-test call
       # site is at 392, inside the 391 block, which a kind declaring a findby can
       # never enter. createReachedTheVendor is called at 1518, 1546 and 1778 -- on
       # the create path, outside those guards -- so it DOES reach this kind.
+      #
+      # THAT READING IS NOW CONFIRMED BY THE VENDOR'S OWN SOURCE, independently.
+      # 0.73.0 rewrote the log line in the 391 block and the new comment beside it
+      # states the branch condition outright: it is reached when no FINDBY verb is
+      # declared, and a `get` may well be declared but not yet addressable, because
+      # IsResourceKnown builds the get from the CR as it stands and ValidateRequest
+      # fails while its mapped source is empty. Same conclusion as the read above,
+      # reached from the other side -- and oasgen records getting it wrong twice,
+      # in opposite directions, from the OLD message, which said "No get or findby
+      # verb" and sent readers to the get verb.
       #
       # WHICH IS WHY THE COUNT IS THE PRIMARY OUTPUT, not the classification.
       # createReachedTheVendor changes what a create REPORTS after the vendor call,
