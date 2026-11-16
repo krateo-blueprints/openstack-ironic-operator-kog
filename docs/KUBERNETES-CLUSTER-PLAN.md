@@ -42,7 +42,7 @@ extensions; no new KOG primitives are needed.
 Recommended landing order (`2 → 3 → 4 → 5b → 1 → 5a → 5c`) was followed
 end-to-end. Chart at `0.6.0`, CompositionDefinition repointed.
 
-Real Ettore-lab deployable manifest is at
+Real integration-lab deployable manifest is at
 [`manifests/kubernetescluster-example.yaml`](../manifests/kubernetescluster-example.yaml)
 — CP on blade06 + worker on blade10, real Redfish credentials and
 UUIDs. Two pre-deploy operator steps documented in

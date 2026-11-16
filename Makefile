@@ -892,7 +892,7 @@ composition-demo: # create a BaremetalLifecycle instance; composition-dynamic-co
 CLOUDS_FILE ?= clouds.yaml
 # Default cloud entry name used by the openstack client in lab tooling when
 # authenticating to the lab Keystone. Must match an entry in clouds.yaml.
-# `ironic-system` is the system-scoped admin entry used in the Ettore lab
+# `ironic-system` is the system-scoped admin entry used in the integration lab
 # (see reference_ironic-system-scope-clouds memory: project-scoped admin
 # returns 403 on baremetal:port:create at the deploy walk).
 OS_CLOUD ?= ironic-system

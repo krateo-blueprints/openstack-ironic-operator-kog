@@ -225,7 +225,7 @@ checksum: {{ .Values.image.checksum | quote }}
 {{- end -}}
 
 {{/* networkData generator. Without this, cloud-init only DHCPs the
-     first detected interface — which on the Ettore lab is `enp1s0`
+     first detected interface — which on the integration lab is `enp1s0`
      bridged to oob0 (BMC network, no internet). The data NIC
      (`enp2s0`, lan0-bridged with default route to internet) stays
      DOWN and apt/kubeadm install fails.

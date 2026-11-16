@@ -20,7 +20,7 @@ manifests/kubernetescluster-*.yaml
 
 # HA cluster manifest: carries plaintext Keystone + BMC credentials once filled
 # in (the chart bakes ironicAuth.password into CP cloud-init by design).
-# Same reason kubernetescluster-ettore-lab.yaml is ignored.
+# Same reason every other local manifests/kubernetescluster-*.yaml is ignored.
 manifests/kubernetescluster-lab-ha.yaml
 
 # Python bytecode from scripts/ (the screens are run directly, never imported)
