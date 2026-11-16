@@ -197,7 +197,9 @@ kubectl get bh blade01 -w
 ```
 
 Walks enroll → manageable → inspecting → manageable → provide → available →
-deploy → active in ~15 min on real Redfish + virtual-media hardware.
+deploy → active in ~15 min on the lab's virtual machines -- real `redfish`
+driver and virtual media, against an emulated BMC. See the lab-environment
+table in [TEST-PLAN.md](TEST-PLAN.md); this is not a physical-server figure.
 
 ## The spec, one section at a time
 
@@ -326,7 +328,8 @@ Ironic through `target: deleted` → cleaning (or skip) → available.
 | `full` (default) | runs the standard clean_steps (disk erase, RAID reset, etc.) via IPA agent — slow but safe (no tenant data leaks) |
 | `none` | sets `spec.automated_clean: false` on the Node CR; Ironic skips the IPA-boot cleaning. **Disks keep tenant data.** Use only in private labs / fast test cycles |
 
-Verified timings (real hardware, configdrive on a debian-13 image):
+Verified timings (lab VMs with emulated BMCs -- real IPA boot and real disk
+writes -- configdrive on a debian-13 image):
 - `mode: full` — 4m11s (cleaning pass writes through the disks)
 - `mode: none` — 6s (no IPA boot)
 
@@ -943,11 +946,11 @@ From kubeadm HA docs:
 The chart sticks with `--upload-certs` for simplicity; manual cert
 distribution would require a chart fork or out-of-band copy step.
 
-## Deploying on the Ettore lab (real bare-metal recipe)
+## Deploying on the Ettore lab (end-to-end Ironic recipe)
 
 A turn-key manifest for the Ettore lab lives at
 [`manifests/kubernetescluster-example.yaml`](../manifests/kubernetescluster-example.yaml)
-— CP on blade06 + worker on blade10, with the real Redfish credentials
+— CP on blade06 + worker on blade10, with the lab's Redfish credentials
 and UUIDs from the existing baremetalhost-blade06-power-flip.yaml and
 baremetalhost-blade10-inspect-fail.yaml fixtures.
 
