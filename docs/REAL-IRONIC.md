@@ -183,7 +183,7 @@ sidecar does this; reuse that pattern pointing at the external host). The operat
   `X-OpenStack-Ironic-API-Version` as a *required* parameter with a `1.109` default, so the
   apiserver stamps it onto every generated CR and RDC puts it on the wire. Anything below
   **1.83** breaks `parent_node` and `include_children` with a `406`.
-- The `Node` RestDefinition has **no `update` verb** on purpose (Ironic PATCH is JSON-Patch-only
+- The `BaremetalNode` RestDefinition has **no `update` verb** on purpose (Ironic PATCH is JSON-Patch-only
   and clears `instance_info` during cleaning, which would freeze the Node CR). Node spec is set at
   create; lifecycle is via `NodeProvision`.
 - Progression is paced by KOG's Node-controller status resync (tens of seconds per state) plus the

@@ -13,12 +13,18 @@ There is **no Go operator** here. Ironic's bare-metal lifecycle is driven by two
 layers:
 
 - **KOG (Krateo Operator Generator)** — `oasgen-provider` reads the OpenAPI specs in `oas/`
-  and the `RestDefinition`s in `manifests/`, generating CRDs (`Node`, `NodeProvision`,
+  and the `RestDefinition`s in `manifests/`, generating CRDs (`BaremetalNode`, `NodeProvision`,
   `Port`, `PortGroup`, `Allocation`, `DeployTemplate`, `NodePower`) and a
   `rest-dynamic-controller` per definition that talks straight to the Ironic REST API. The
-  `Node` RestDefinition has no `update` verb on purpose (Ironic PATCH is JSON-Patch-only and
+  `BaremetalNode` RestDefinition has no `update` verb on purpose (Ironic PATCH is JSON-Patch-only and
   400s); creating a `NodeProvision` fires `PUT /v1/nodes/{id}/states/provision` once (the
   Ironic `202` sets a Pending condition that guards re-firing).
+  (Corrected 2026-11-16: both of those said `Node`. The served kind is
+  `BaremetalNode`. `docs/REAL-IRONIC.md` corrected this same error on 2026-11-05 and
+  `docs/index.md` says outright that a `Node` kind does not exist -- yet the stale name
+  still survived in **ten** live places across seven files, the API reference and the
+  docs overview among them. All ten are fixed together, because fixing the copy in
+  front of you and reporting it done is how it survived this long.)
 - **Compositions** — `core-provider` consumes the `CompositionDefinition`s in `manifests/`
   and, for each, generates a CRD plus a `composition-dynamic-controller` (cdc) that
   helm-installs one of the four charts under `charts/`. Each chart models Ironic's

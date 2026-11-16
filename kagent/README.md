@@ -127,12 +127,14 @@ prompts under `spec.declarative.a2aConfig.skills`:
 
 ## What the agent can do
 
-- Read `BaremetalHost`, `Node`, `Port`, `NodeProvision`, `NodePower` CRs
+- Read `BaremetalHost`, `BaremetalNode`, `Port`, `NodeProvision`, `NodePower` CRs
   and explain the live FSM position.
 - Patch `spec.undeploy`, `spec.online`, `spec.image` on a `BaremetalHost`
   to drive the FSM (with confirmation).
-- Tail pod logs from `keystone-ironic-proxy` and the cdc when diagnosing
-  reconciliation hangs.
+- Tail pod logs from the `rest-dynamic-controller`s and the cdc when diagnosing
+  reconciliation hangs. (Corrected 2026-11-16: this said `keystone-ironic-proxy`,
+  deleted 2026-11-04 -- authentication is a Configuration CR plus the
+  `keystone-token-refresher` CronJob, and nothing sits in the request path.)
 - Cite the canonical docs (`USER-GUIDE.md`, `VS-METAL3.md`,
   `TEST-PLAN.md`, `ORPHAN-RECOVERY.md`) verbatim where relevant.
 
@@ -142,4 +144,4 @@ prompts under `spec.declarative.a2aConfig.skills`:
 - Recommend `kubectl delete bh <name>` on an `active` blade — it walks
   you through `spec.undeploy: true` first.
 - Mock or invent Ironic state — it reads `provision_state` from the live
-  `Node` CR via `k8s_get_resource_yaml`.
+  `BaremetalNode` CR via `k8s_get_resource_yaml`.

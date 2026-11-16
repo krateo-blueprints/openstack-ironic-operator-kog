@@ -18,7 +18,7 @@ two Krateo layers stacked on top of each other.
 `manifests/`, and for each one generates a CRD plus a `rest-dynamic-controller` (RDC) that
 performs CRUD against the Ironic REST API. Two are load-bearing for the state machine:
 
-- **`Node`** → CRUD on `/v1/nodes` (`manifests/restdefinition-node.yaml`). It has no
+- **`BaremetalNode`** → CRUD on `/v1/nodes` (`manifests/restdefinition-node.yaml`). It has no
   `update` verb on purpose: Ironic's PATCH is JSON-Patch-only and 400s a plain body, so
   changes flow through the JSON-Patch translator rather than a naive PUT/PATCH.
 - **`NodeProvision`** → the provision action `PUT /v1/nodes/{id}/states/provision`
@@ -37,7 +37,7 @@ holds the Ironic endpoint and auth that every generated controller reads.
 a composition CRD plus a `composition-dynamic-controller` (cdc) that helm-installs the
 referenced chart per instance. The clever part is in the chart: the Ironic provision-state
 machine is modeled as **one custom resource per state**. The chart's templates use the Helm
-`lookup` function to read the live `Node` CR's `status.provision_state`, and render the
+`lookup` function to read the live `BaremetalNode` CR's `status.provision_state`, and render the
 single `NodeProvision` (or `NodePower`) that matches the current desire-vs-observed delta,
 pruning the previous one.
 

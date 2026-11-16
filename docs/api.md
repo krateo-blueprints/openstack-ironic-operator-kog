@@ -89,7 +89,7 @@ The compositions render these; `oasgen-provider` generates them from `oas/` + th
 
 | Kind | RestDefinition | Ironic call | notes |
 |---|---|---|---|
-| `Node` | `restdefinition-node.yaml` | CRUD on `/v1/nodes` | identifier is `spec.name` (Ironic resolves `/v1/nodes/{name}`). **No `update` verb** — Ironic PATCH is JSON-Patch-only and 400s a plain body. Status surfaces `uuid`, `provision_state`, `power_state`, `properties` (inspection inventory), `instance_info`, `automated_clean`. |
+| `BaremetalNode` | `restdefinition-node.yaml` | CRUD on `/v1/nodes` | identifier is `spec.name` (Ironic resolves `/v1/nodes/{name}`). **No `update` verb** — Ironic PATCH is JSON-Patch-only and 400s a plain body. Status surfaces `uuid`, `provision_state`, `power_state`, `properties` (inspection inventory), `instance_info`, `automated_clean`. |
 | `NodeProvision` | `restdefinition-provision.yaml` | `PUT /v1/nodes/{id}/states/provision` | action-only. **No `get` verb** — Observe uses findby. Creating one fires the PUT once; Ironic's `202` sets a Pending condition guarding re-firing. |
 | `NodePower` | `restdefinition-power.yaml` | `PUT /v1/nodes/{id}/states/power` | each `spec.online` flip renames the CR so KOG fires exactly one PUT. |
 | `Port` / `PortGroup` | `restdefinition-port.yaml` / `-portgroup.yaml` | CRUD on `/v1/ports` / `/v1/portgroups` | NICs and bonds. |

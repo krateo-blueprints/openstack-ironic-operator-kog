@@ -28,7 +28,7 @@ call uses the isolated kubeconfig (`local/kubeconfig.ironic-kog`) and explicit
 
 > The standalone Ironic pod includes an nginx sidecar that injects a default
 > `X-OpenStack-Ironic-API-Version` header — Ironic rejects write requests without a
-> microversion (HTTP 406) and the rest-dynamic-controller does not send one. If a `Node` CR
+> microversion (HTTP 406) and the rest-dynamic-controller does not send one. If a `BaremetalNode` CR
 > reports `create failed: 406`, check the sidecar is up (`kubectl -n openstack get pod
 > -l app=ironic` shows 2/2).
 
