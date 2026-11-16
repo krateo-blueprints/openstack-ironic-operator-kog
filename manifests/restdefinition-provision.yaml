@@ -713,10 +713,87 @@ spec:
       # CR that failed twice and then succeeded is indistinguishable from one that
       # succeeded first time -- which is the trigger's input.
       #
+      # SECOND COORDINATE MEASURED 2026-11-16 AT 0.73.0, and the premise holds
+      # again -- more strongly, because the window finally reached the latch
+      # threshold. Ordering A, 103 samples over 1147s = 6.4 resync periods:
+      #
+      #   t+57s .. t+136s   inferred=1  latched=ABSENT   Ready=Pending/False
+      #   t+202s            inferred=1  latched=1        state manageable
+      #   t+403s            inferred=1  latched=2
+      #   t+537s            inferred=1  latched=3
+      #   t+738s            inferred=1  latched=4
+      #   t+936s            inferred=1  latched=5        absence events 1 -> 2
+      #   t+1136s           inferred=1  latched=5        both frozen
+      #   Synced=ReconcileSuccess throughout, last_error none, one generation
+      #
+      # ONE DISPATCH, FLAT FOR THE WHOLE WINDOW. And the comparable counter is
+      # IDENTICAL across versions -- ordering A inferred=1 at both 0.61.0 and
+      # 0.73.0, ordering B inferred=2 at both -- which is exactly what the note
+      # below predicted should happen and is now measured instead of reasoned. So
+      # #710's extraction of the page walk out of FindBy is behaviour-neutral for a
+      # findby kind declaring no `pagination`, confirmed on the wire rather than
+      # only from oasgen's `types.go`.
+      #
+      # ORDERING B READS *UNCLASSIFIED*, DELIBERATELY: its node was already
+      # `manageable` by the first sample, so "the state never moved" is a sampling
+      # artifact and not evidence of inertness. The classifier refuses to bucket it
+      # rather than guessing, so the arm exits 4 and B is not a reading. A verdict
+      # that had quietly called B inert would have been the same class of error as
+      # the one described next.
+      #
+      # AND THE FIRST VERDICT OF THIS RUN WAS A FALSE ALARM OF MINE, recorded
+      # because it nearly went to two repos as "0.73.0 regresses NodeProvision into
+      # a re-dispatch loop". The arm's dispatch variable was wired to
+      # `latched-absence-repeats`, so it read 5 SUPPRESSIONS as 5 DISPATCHES --
+      # backwards. rdc's own source names which is which:
+      #
+      #   inferred-absence-repeats   "absence inferences on the MAIN path (the
+      #                               else-if, WHERE A CREATE DOES FOLLOW)"
+      #   latched-absence-repeats    "consecutive observes that took the LATCH
+      #                               with a synthesised not-found"
+      #
+      # What caught it was that the count contradicted 0.61.0, and the note below
+      # already said a disagreement in the count is itself the finding -- so the
+      # instrument was checked before the world. Two details worth keeping: the
+      # script's COMMENT was already correct ("the dispatch-suppression counter")
+      # while the code three functions down contradicted it, which reads as more
+      # verified than a stale comment rather than less; and the self-test encoded
+      # the same misreading, growing the latched column for its "dispatch count
+      # growing" case, so it passed. Fixed as case 9: a flat inferred with a
+      # climbing latched MUST read premise-holds and MUST NOT print RE-DISPATCH.
+      #
+      # THE STUCK-LATCH WARNING FIRES ON THIS KIND BY DESIGN, FOREVER -- a new
+      # finding, and the first time anyone here crossed the threshold. Measured by
+      # correlation: the absence-event count increments in the SAME sample the
+      # counter reaches `maxLatchedAbsenceRepeats` (5), and then both freeze,
+      # matching rdc's "emits ONE warning" and "stops being written once the report
+      # has fired". The 0.61.0 window was 4.6 periods and never got there.
+      #
+      # rdc calls that threshold "a deadline for concluding 'this is not going to
+      # settle', not a retry budget". For NodeProvision the conclusion is TRUE AND
+      # NOT A PROBLEM: findby can never match, because `node_id` is absent from
+      # `/v1/nodes` items, so the latch is this kind's permanent operating
+      # mechanism and not a create that failed to land. So every NodeProvision CR
+      # emits that Warning about 15 minutes after creation at the default 3m poll,
+      # for the rest of its life, while behaving exactly as designed. Raised with
+      # oasgen: a kind declaring `restsAtNotReady` is declaring precisely this
+      # shape, so the declaration is the natural signal for suppressing the
+      # Warning on kinds that have announced it -- their call, not recorded here as
+      # a decision.
+      #
+      # WHAT THE ARM DID NOT CAPTURE, stated because of the 0.41.0 scar: per-pod
+      # imageIDs. The 0.73.0 stack came up on an arm64 kind node, generated
+      # controllers reconciled a real CR and the transition landed, so the arm64
+      # binary demonstrably RAN -- but this run cannot produce the digest it was
+      # selected from. "The arm64 manifest existing is not the arm64 binary
+      # running" is oasgen's phrasing and the gap here is one level finer.
+      #
       # STILL OWED, AND IT IS THE GATE: re-measure ORDERING A at the tag that
       # serves the declaration. core-provider gates ChildStalled on THAT reading,
-      # not on 0.61.0's -- so this run is the premise and the next run is the
-      # acceptance test. Four fixes -- read `latched-absence-repeats` as the latch counter, sample a
+      # and 0.73.0 is NOT that tag -- `restsAtNotReady` is in no build, and oasgen
+      # has scoped 0.74.0 around #400 with the declaration after it, no date given.
+      # So 0.61.0 and 0.73.0 are the premise, twice, and the acceptance test is
+      # still unrun. Four fixes -- read `latched-absence-repeats` as the latch counter, sample a
       # window longer than 5 latches (1100s+) so the Warning can fire, evaluate the
       # target-validity gate AT CR-CREATION TIME, and sample
       # `metadata.generation` per row -- inferredCounter resets when the
@@ -734,10 +811,21 @@ spec:
       # match is exactly what decides the outcome.
       #
       # NOT POSSIBLE YET, and the version matters: `restsAtNotReady` does not
-      # exist in any oasgen build. Zero matches at 0.67.0, 0.68.0, 0.69.0 and
-      # origin/main, checked 2026-11-15. Three tags were cut after the name was
-      # settled and none carries it, and 0.72.0 is scoped to other work, so there
-      # is nothing to wire to and no version to pin.
+      # exist in any oasgen build. Re-swept 2026-11-16 across every tag cut since
+      # the name was settled, each row carrying `createReachedTheVendor` as a live
+      # positive control in the same command:
+      #
+      #   0.67.0  restsAtNotReady=0   control=0   VOID -- control lands in 0.68.0
+      #   0.68.0  restsAtNotReady=0   control=2
+      #   0.69.0  restsAtNotReady=0   control=2
+      #   0.70.0  restsAtNotReady=0   control=2
+      #   0.71.0  restsAtNotReady=0   control=2
+      #   0.72.0  restsAtNotReady=0   control=2
+      #   0.73.0  restsAtNotReady=0   control=2
+      #
+      # Six tags with a valid control, all zero. The 0.67.0 row is marked VOID
+      # rather than counted, because a zero beside a zero control is an absence of
+      # instrument. So there is nothing to wire to and no version to pin.
       #
       # DO NOT ADD IT EARLY -- it fails in the one way that looks like success. An
       # undeclared field is pruned by the apiserver SILENTLY: the RestDefinition
