@@ -13,8 +13,8 @@ This repository provisions bare-metal servers with **OpenStack Ironic** using Kr
 dynamic controllers instead of a hand-written Go operator. Two halves make it work:
 
 - **KOG (Krateo Operator Generator)** — `oasgen-provider` consumes the OpenAPI specs in
-  `oas/` and the `RestDefinition`s in `manifests/`, generating CRDs (`Node`,
-  `NodeProvision`, `Port`, `PortGroup`, `Allocation`, `DeployTemplate`) and a
+  `oas/` and the `RestDefinition`s in `manifests/`, generating CRDs (`BaremetalNode`,
+  `NodeProvision`, `Port`, `PortGroup`, `Allocation`, `DeployTemplate`, `NodePower`) and a
   `rest-dynamic-controller` per definition that talks straight to the Ironic REST API.
 - **Compositions** — `core-provider` consumes the `CompositionDefinition`s in `manifests/`
   and, for each, generates a CRD plus a `composition-dynamic-controller` (cdc) that
