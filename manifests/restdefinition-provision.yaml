@@ -303,13 +303,34 @@ spec:
       #
       # AND PRODUCTION LANDS BETWEEN THE TWO FLOORS, which is the concrete reason
       # they had to be stated separately rather than as one "recent enough".
-      # core-provider read 057 on 2026-11-16 -- `composition-dynamic-controller`
-      # at 2.13.103 on all 76 cdc Deployments, against 157 Deployments in
-      # krateo-system as the denominator -- so 057 is ABOVE 2.13.99 and BELOW
-      # 2.13.104. TerminalByDesign will be read as healthy there; #709's
+      # core-provider read 057 on 2026-11-16, and the shape of the reading matters
+      # because the short form of it is ambiguous: ALL 76
+      # `composition-dynamic-controller` Deployments ran 2.13.103. The 157 is every
+      # Deployment in krateo-system, scanned as the DENOMINATOR -- not 76 cdcs out
+      # of 157 cdcs, which is what "76 of 157" reads as and is not what was
+      # measured. So 057 is ABOVE 2.13.99 and BELOW 2.13.104.
+      #
+      # THAT IS A SNAPSHOT, NOT A PROPERTY OF 057: true as of their read on
+      # 2026-11-16, and the installer may roll 2.13.104+ at any time, which would
+      # move 057 above BOTH floors with nothing here changing. Re-read it before
+      # relying on it; do not quote this line as 057's current state. TerminalByDesign will be read as healthy there; #709's
       # AssumedUpToDate still reads healthy through the generic True arm, exactly
       # as the old `Available` did, until the installer rolls 2.13.104+. Relayed
       # from their read of their own cluster, not measured here.
+      #
+      # AND THE FLOOR IS NOW PART OF THE DECLARATION, not commentary on it.
+      # Settled between oasgen and core-provider 2026-11-16 (oasgen PR #720 puts
+      # both floors in `condition.go` beside the constructors): `restsAtNotReady`'s
+      # field documentation will carry "requires core-provider >= 2.13.99; below
+      # it, `Ready=False/TerminalByDesign` rolls the parent up as converging
+      # (Creating), the same as `Pending`", and the rdc write ships only where the
+      # consuming core-provider is at or above the floor.
+      #
+      # SO THE HONEST STATEMENT FOR THIS LAB, from oasgen, worth having BEFORE the
+      # field exists rather than after: at 2.13.65, declaring `restsAtNotReady`
+      # would change this CR's CONDITION and change NOTHING about NodeProvision's
+      # parent. Not harmful, not useful -- and specifically not a demonstration of
+      # the contract, which is the thing someone would be tempted to call it.
       #
       # WHAT THIS REPO MAY NOT CLAIM, consequently: no measurement taken in this
       # lab can observe the healthy read, at either floor. The pin is 2.13.65. A
