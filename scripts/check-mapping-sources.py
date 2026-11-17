@@ -263,16 +263,49 @@ def self_test():
                     fails += 1
         finally:
             shutil.rmtree(root, ignore_errors=True)
-    print(f"  self-test: {len(SELF_TEST_CASES)} cases, {fails} failure(s)")
+    # VOID ARM. An unresolved OAS must make the verdict VOID rather than PASS.
+    # Added 2026-11-17 with the behaviour it tests: until then `unresolved` was
+    # warn-only, so deleting the warning was invisible to this self-test -- a
+    # mutation proved exactly that, and correctly, since no verdict depended on
+    # it. Testing the VOID path is what makes the warning load-bearing.
+    import tempfile as _tf
+    cases_total = len(SELF_TEST_CASES) + 1
+    with _tf.TemporaryDirectory() as td:
+        os.makedirs(os.path.join(td, "manifests"), exist_ok=True)
+        with open(os.path.join(td, "manifests", "restdefinition-ghost.yaml"), "w") as fh:
+            fh.write(
+                "apiVersion: ogen.krateo.io/v1alpha1\nkind: RestDefinition\n"
+                "metadata:\n  name: ghost\n  namespace: openstack\n"
+                "spec:\n  oasPath: configmap://openstack/nope/does-not-exist.yaml\n"
+                "  resourceGroup: g.ogen.krateo.io\n  resource:\n    kind: Ghost\n"
+                "    identifiers:\n      - name\n"
+                "    verbsDescription:\n      - action: findby\n"
+                "        method: GET\n        path: /v1/ghosts\n")
+        _found, _unresolved = audit(td)
+        _rc = main(td)
+        # Assert the VERDICT, not merely that a list got populated. An arm that
+        # checks detection would survive deleting the `return 2` -- which is the
+        # same trap as asserting "some problem" instead of WHICH problem.
+        if not _unresolved:
+            fails += 1
+            print("  FAIL  an unreferenceable OAS did not register as unresolved, so the "
+                  "VOID path can never be reached")
+        elif _rc != 2:
+            fails += 1
+            print(f"  FAIL  an unresolved OAS returned {_rc}, not 2 (VOID). A run that "
+                  f"skipped a document must not read as a pass")
+        else:
+            print("  ok    an unresolved OAS -> VOID (exit 2), not a pass")
+
+    print(f"  self-test: {cases_total} cases, {fails} failure(s)")
     return 1 if fails else 0
 
 
-def main():
-    if "--self-test" in sys.argv:
-        return self_test()
-    found, unresolved = audit()
-    for f in unresolved:
-        print(f"  WARN {f}: OAS document not resolved -- not audited, not cleared")
+def main(root="."):
+    # NOTE: no --self-test dispatch here. The VOID arm calls main() directly and
+    # the flag is still in sys.argv, so dispatching here recursed until the stack
+    # ran out. The entry point below decides which to run.
+    found, unresolved = audit(root)
     # Deduped for display. It used to print one line per VERB while the summary
     # counted a deduped SET, so power -- which carries the same mapping on create
     # and update -- printed twice under a summary saying "exactly the 2 known".
@@ -283,6 +316,21 @@ def main():
         tag = "known" if (f, name, src) in KNOWN_BROKEN else "*** NEW ***"
         on = f"  (on {n} verbs)" if n > 1 else ""
         print(f"  {tag:14} {f}: {name} <- {src}  ({why}){on}")
+
+    # VOID BEFORE PASS. An OAS this screen could not resolve is a document it did
+    # not audit, and a verdict over a corpus you did not fully read is not a pass.
+    # This printed "not audited, not cleared" as a WARNING that did not touch the
+    # exit code until 2026-11-17 -- so the screen could return 0 having skipped a
+    # document, which is the exact shape docs call out elsewhere in this repo.
+    # Exit 2 (VOID), not 1, because nothing is known to be WRONG: the screen is
+    # reporting that it could not look.
+    if unresolved:
+        for f in unresolved:
+            print(f"  VOID {f}: OAS document not resolved -- not audited, not cleared")
+        print(f"\n  VOID: {len(unresolved)} OAS document(s) could not be resolved, so this")
+        print("  run did not audit the whole corpus. That is not a pass. Fix the")
+        print("  reference (or the ConfigMap path) and re-run.")
+        return 2
 
     got = {(f, n, s) for f, n, s, _ in found}
     new = got - KNOWN_BROKEN
@@ -310,4 +358,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(self_test() if "--self-test" in sys.argv else main())
