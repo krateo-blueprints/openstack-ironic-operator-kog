@@ -130,6 +130,38 @@ ACCEPTED = [
 ]
 
 
+# This screen's own self-test needs credential-SHAPED fixtures, so it flags itself.
+# Exempting the whole file would be a blind spot: a real credential pasted into it
+# would then be invisible. So the skip is bounded to a marked block, in this ONE
+# file, and the self-test asserts BOTH halves -- inside is skipped, outside is still
+# caught. If the markers go missing or unbalanced the screen returns VOID rather
+# than quietly skipping nothing (or everything).
+SELF_PATH = "scripts/check-committed-credentials.py"
+FIXTURE_OPEN = "# >>> credential-fixtures"
+FIXTURE_CLOSE = "# <<< credential-fixtures"
+
+
+def fixture_skip_lines(relpath, text):
+    """Line numbers to ignore. Non-empty only for this screen's own marked block."""
+    if relpath != SELF_PATH:
+        return frozenset()
+    skip, depth = set(), 0
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if FIXTURE_OPEN in line:
+            depth += 1
+            skip.add(lineno)
+            continue
+        if FIXTURE_CLOSE in line:
+            depth -= 1
+            skip.add(lineno)
+            continue
+        if depth > 0:
+            skip.add(lineno)
+    if depth != 0:
+        return None          # unbalanced -> caller must VOID
+    return frozenset(skip)
+
+
 def tracked_files():
     out = subprocess.run(
         ["git", "-C", str(ROOT), "ls-files", "-z"], capture_output=True, text=True
@@ -148,10 +180,12 @@ def is_text(path):
     return True
 
 
-def findings_in_text(relpath, text):
+def findings_in_text(relpath, text, skip=frozenset()):
     """Every (line, value, kind) that looks like a committed credential value."""
     out = []
     for lineno, line in enumerate(text.splitlines(), 1):
+        if lineno in skip:
+            continue
         if len(line) > 400:
             continue
         if BENIGN_LINE.search(line):
@@ -208,7 +242,15 @@ def run(list_only=False):
             text = p.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        for lineno, val, kind, line in findings_in_text(rel, text):
+        skip = fixture_skip_lines(rel, text)
+        if skip is None:
+            print("GUARD: %s has unbalanced credential-fixture markers -- not a pass" % rel)
+            return 2
+        if rel == SELF_PATH and not skip:
+            print("GUARD: %s has no credential-fixture markers; its own self-test "
+                  "fixtures would fail the screen -- not a pass" % rel)
+            return 2
+        for lineno, val, kind, line in findings_in_text(rel, text, skip):
             entry = accepted_for(rel, val)
             if entry:
                 used.add(entry["glob"] + "\0" + entry["value"])
@@ -246,6 +288,7 @@ def run(list_only=False):
 
 
 def self_test():
+    # >>> credential-fixtures
     cases = [
         # (name, relpath, text, expect_findings)
         ("a doc handing out a password", "docs/X.md",
@@ -293,6 +336,7 @@ def self_test():
         ("adjacent quoted password still fires", "docs/X.md",
          "the password `baremetal` and `ssh_pwauth: true`, hardcoded\n", True),
     ]
+    # <<< credential-fixtures
     fails = 0
     for name, rel, text, expect in cases:
         got = bool(findings_in_text(rel, text))
@@ -312,7 +356,32 @@ def self_test():
     print("  %-42s %s" % ("different value is NOT accepted", "ok" if not wrong_val else "FAIL"))
     fails += 0 if not wrong_val else 1
 
-    print("selftest: %d assertions, %d failure(s)" % (len(cases) + 3, fails))
+    # The self-exemption must be BOUNDED: inside the markers skipped, outside caught.
+    own = pathlib.Path(__file__).read_text()
+    own_skip = fixture_skip_lines(SELF_PATH, own)
+    bounded_in = own_skip is not None and bool(own_skip)
+    print("  %-42s %s" % ("own fixture block is skipped", "ok" if bounded_in else "FAIL"))
+    fails += 0 if bounded_in else 1
+
+    # >>> credential-fixtures
+    planted = "x = 1\n" + FIXTURE_OPEN + "\npw `baremetal`\n" + FIXTURE_CLOSE + \
+              "\nSSH as `ops` with password `ops`.\n"
+    # <<< credential-fixtures
+    psk = fixture_skip_lines(SELF_PATH, planted)
+    outside = findings_in_text(SELF_PATH, planted, psk)
+    bounded_out = len(outside) == 1 and outside[0][0] == 5
+    print("  %-42s %s" % ("a credential OUTSIDE the block is caught",
+                          "ok" if bounded_out else "FAIL (%r)" % (outside,)))
+    fails += 0 if bounded_out else 1
+
+    # >>> credential-fixtures
+    unbalanced = fixture_skip_lines(SELF_PATH, "x\n" + FIXTURE_OPEN + "\npw `x1`\n")
+    # <<< credential-fixtures
+    print("  %-42s %s" % ("unbalanced markers return VOID",
+                          "ok" if unbalanced is None else "FAIL"))
+    fails += 0 if unbalanced is None else 1
+
+    print("selftest: %d assertions, %d failure(s)" % (len(cases) + 6, fails))
     if fails:
         return 1
     print("  -> the screen fires on a password in prose, in YAML and in a URL, and stays")
