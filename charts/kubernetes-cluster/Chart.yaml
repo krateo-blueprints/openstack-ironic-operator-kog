@@ -7,7 +7,12 @@ type: application
 # composition.krateo.io/v0-15-1. Minor rather than patch because the input
 # contract changed in three ways -- `cni.kubeProxyReplacement` and `conformance`
 # are now reachable, and the two inert `ironicApi*` inputs are gone.
-version: 0.16.0
+# 0.16.1: values.yaml and values.schema.json now say the four
+# `controlPlane.etcd.*` inputs are vestigial. Comment-and-description only, no
+# rendered output changes -- but packaged bytes moved, and a published chart
+# whose content moves must move its version or the next tag overwrites what
+# consumers hold (scripts/check-chart-version-moved.py).
+version: 0.16.1
 appVersion: "1.0"
 
 home: https://github.com/krateo-blueprints/openstack-ironic-operator-kog
