@@ -230,7 +230,9 @@ Combined because they share deploy walks.
 user `ironic`.
 
 **First cloud-init check (gap 2, pre-swap):**
-- SSH from your workstation through dome (172.19.74.11, pw `baremetal`) →
+- SSH from your workstation through the lab jump host (address and credentials
+  are lab-local; ask the lab owner -- they were removed from this public repo
+  on 2026-11-17) →
   `ironic@192.168.0.<x>` on blade05's DHCP lease.
 - Assert: `hostname` returns `blade05`; `id ironic` shows sudo group; `ip -4 addr`
   shows leases on all NICs listed in `networkData.links`.

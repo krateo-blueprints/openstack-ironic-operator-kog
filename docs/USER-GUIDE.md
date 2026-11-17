@@ -166,7 +166,7 @@ spec:
   driver_info:
     redfish_address: http://192.168.0.10:8000
     redfish_username: ironic
-    redfish_password: baremetal
+    redfish_password: "<bmc-password>"
     redfish_system_id: /redfish/v1/Systems/blade01
   ports:
     - address: "00:60:2f:01:81:01"
@@ -185,7 +185,7 @@ spec:
       ssh_pwauth: true
       users:
         - name: ops
-          plain_text_passwd: ops
+          plain_text_passwd: "<choose one>"
           sudo:
             - "ALL=(ALL) NOPASSWD:ALL"
   online: true
@@ -214,7 +214,7 @@ spec:
   driver_info:                               # driver-specific (redfish_* / ipmi_* keys)
     redfish_address: http://...
     redfish_username: ironic
-    redfish_password: baremetal
+    redfish_password: "<bmc-password>"
     redfish_system_id: /redfish/v1/Systems/blade01
 ```
 
@@ -421,7 +421,7 @@ spec:
       ssh_pwauth: true
       users:
         - name: ops
-          plain_text_passwd: ops
+          plain_text_passwd: "<choose one>"
           sudo: ['ALL=(ALL) NOPASSWD:ALL']
   image:
     source: http://images.local/debian-13.qcow2
@@ -430,7 +430,19 @@ spec:
 
 After active, the blade gets a DHCP lease (typically two — one per NIC). Find
 the IP via your DHCP server's leases file, dome's ARP table, or scan the deploy
-network. SSH as `ops` with password `ops`.
+network. SSH as `ops` with the password you chose above.
+
+> **Both cloud-config examples above hand out a password-login account with
+> `NOPASSWD:ALL` sudo.** That is the same shape the chart itself treated as a
+> defect and fixed in 0.15.0 -- see "Fallback -- SSH-tunnel" in
+> [KUBERNETES-CLUSTER.md](KUBERNETES-CLUSTER.md), where `nodeAccess` now
+> defaults to a locked account with password authentication off. Prefer an SSH
+> key, or `nodeAccess`, over either example here.
+>
+> Scrubbed 2026-11-17: these carried a short literal password and told the
+> reader to log in with it. The value is deliberately not repeated in this
+> note -- unlike a corrected kind name, quoting a corrected credential leaves
+> it in the file and undoes the scrub.
 
 ### Release for maintenance, then put back into service
 

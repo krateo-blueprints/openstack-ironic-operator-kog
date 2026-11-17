@@ -388,7 +388,7 @@ spec:
         redfish_address:   http://172.19.74.11:8000
         redfish_system_id: /redfish/v1/Systems/blade06
         redfish_username:  ironic
-        redfish_password:  baremetal
+        redfish_password:  "<bmc-password>"
         redfish_verify_ca: false
       parentNode: 5113ab44-…
       ports:
