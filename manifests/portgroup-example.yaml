@@ -1,0 +1,50 @@
+# The minimum a PortGroup needs, screened by `make check-examples` so it cannot
+# drift from the generated CRDs.
+#
+# WHY THIS FILE EXISTS. No chart renders a PortGroup and, until now, no manifest
+# applied one -- so of the seven kinds this repo generates, this was one of three
+# with no path to existing at all (with Allocation and DeployTemplate). The CRD
+# and a rest-dynamic-controller Deployment shipped and waited for CRs nobody
+# could create from anything in this repo.
+#
+# Assumes `make restdef-up`, which creates the generated CRDs and the
+# `ironic-endpoint` PortGroupConfiguration this references.
+#
+# A portgroup bonds several Ports of one node (LACP or active-backup) so Ironic
+# configures them as one logical link. The individual Ports then reference the
+# portgroup; this CR only creates the group.
+#
+# READ THIS BEFORE APPLYING -- unlike the Allocation and DeployTemplate examples
+# beside it, this one is NOT applyable with a single command, and pretending
+# otherwise would be the defect `make check-examples` exists to catch. Ironic
+# requires `node_uuid` to be a real node UUID, which Ironic itself generates on
+# create, so no author can know it in advance. Fetch it from a node you already
+# have:
+#
+#   kubectl -n openstack get baremetalnode.baremetal.ogen.krateo.io \
+#     quickstart-node -o jsonpath='{.status.uuid}'
+#
+# and substitute it below. Applied as written it is ACCEPTED by the API server
+# -- the placeholder satisfies the CRD, which is all a static screen can check
+# -- and then REJECTED by Ironic at reconcile, surfacing as a 400 in the CR's
+# conditions. That split is exactly why `check-examples` validates admission and
+# says so, rather than claiming to prove a manifest works end to end.
+apiVersion: baremetal.ogen.krateo.io/v1-0-0
+kind: PortGroup
+metadata:
+  name: example-portgroup
+  namespace: openstack
+spec:
+  # Required. A CR without it is rejected at admission, not at reconcile.
+  configurationRef:
+    name: ironic-endpoint
+    namespace: openstack
+  # The kind's `identifiers` value; get/delete map {uuid} <- spec.name, because
+  # Ironic resolves a portgroup name as an ident.
+  name: example-portgroup
+  # Required by the OAS create body, and the field that needs substituting:
+  # a node UUID, not a node name.
+  node_uuid: 00000000-0000-0000-0000-000000000000
+  # Optional. Set here to LACP; omit the field and Ironic picks its own default.
+  # Quoted because an unquoted 802.3ad is only a string by luck of the grammar.
+  mode: "802.3ad"
