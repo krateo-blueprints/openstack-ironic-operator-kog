@@ -797,8 +797,26 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 	python3 -I scripts/check-blueprint-metadata.py --self-test && \
 		python3 -I scripts/check-blueprint-metadata.py $(if $(BLUEPRINT_ONLINE),--online,)
 
-check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set check-chart-version-moved check-chart-renders check-release-table check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest   # every standing screen
+check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set check-chart-version-moved check-chart-renders check-release-table check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest check-committed-credentials   # every standing screen
 	@echo "all standing screens passed"
+
+check-committed-credentials:   # no plaintext credential value in any tracked file
+# WHY THIS EXISTS WHEN THE ORG ALREADY SCANS. It does: `security / filesystem` runs
+# Trivy with scanners=vuln,secret,misconfig AND gitleaks. Both missed a jump host's
+# password and a password-login example that sat in docs/ until #115, because the
+# shared gitleaks allowlist classifies "documentation ... sample manifests" as "not
+# secret stores". That is right about entropy false positives and wrong about a
+# BLUEPRINT repo, whose product IS runbooks and sample manifests -- so the classes
+# the org scanner excludes were the classes nothing checked.
+#
+# Proven, not assumed: run against e7ad134 (the commit before the #115 scrub) this
+# screen FAILS and names all six real instances, including the jump-host password;
+# on main it PASSES. A screen that cannot fail is worth less than no screen.
+#
+# It does NOT read git history. #115's password was public for months and a green
+# run here says nothing about that -- it still needs rotating.
+	python3 -I scripts/check-committed-credentials.py --self-test && \
+		python3 -I scripts/check-committed-credentials.py
 
 check-transition-gates:   # every NodeProvision render stays bounded by a live state gate
 # WHAT THIS PROTECTS, because neither side says it alone. NodeProvision's create is
