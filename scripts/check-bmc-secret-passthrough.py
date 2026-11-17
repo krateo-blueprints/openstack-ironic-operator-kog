@@ -129,6 +129,19 @@ def self_test():
 
     case("a parent site loses its bmcSecret block -> FINDING", drop_one_bmc, True)
 
+    # A MISSING parent template must be a FINDING, not a silent skip. Without
+    # this arm, deleting the `findings.append(f"{p}: missing")` line survives the
+    # self-test: `continue` then skips that file's audit and the screen passes
+    # having inspected one site fewer. Mutation-tested 2026-11-17 -- the mutant
+    # survived until this arm existed, which is how the gap was found.
+    def hide_one_parent(p):
+        if p.name == "lifecycle-cp-replicas.yaml":
+            return None
+        return read_real(p)
+
+    case("a parent template is MISSING -> FINDING, not a silent skip",
+         hide_one_parent, True)
+
     def drop_guard(p):
         t = read_real(p)
         if t and p.name == "_helpers.tpl" and "baremetal-host" in str(p):
