@@ -460,6 +460,25 @@ def self_test():
                 failures.append(
                     f"{label}: expected {'a problem' if should_fail else 'no problem'}, "
                     f"got {found or 'none'}")
+        # A chart `helm package` REFUSES must be REPORTED, and this arm asserts
+        # the MESSAGE, not merely "some problem". Why it cannot be a boolean arm
+        # like the others: if the packaging error goes unreported, `names` is
+        # empty and every check below it is SKIPPED -- so an unpackageable chart
+        # reads CLEAN. That is the vacuous-pass shape, and this report is the
+        # only thing preventing it. A boolean arm does not discriminate here,
+        # because the probe trips a second check as well and passes either way
+        # -- measured by mutation 2026-11-17, where the boolean arm survived
+        # deleting the very line it was meant to protect.
+        unpack = build("unpackageable", chart_extra={"version": "not-a-semver"})
+        found = check_chart(root, unpack, online=False)
+        cases.append(("a chart helm cannot PACKAGE is reported (message asserted)",
+                      unpack, True))
+        if not any("helm package failed" in str(x) for x in found):
+            failures.append(
+                "an unpackageable chart did not produce a 'helm package failed' problem; "
+                "without it `names` is empty, every later check is skipped, and the "
+                "chart reads clean. got: %s" % (found or "none"))
+
         print(f"  self-test: {len(cases)} cases, {len(failures)} failure(s)")
         for f in failures:
             print("   ", f)
