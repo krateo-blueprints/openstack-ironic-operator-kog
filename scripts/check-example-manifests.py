@@ -91,6 +91,114 @@ def resource_kinds():
     return out
 
 
+def _resolve(doc, schema):
+    """Follow a local $ref once; OAS here never nests them deeper."""
+    ref = (schema or {}).get("$ref")
+    if not ref or not ref.startswith("#/"):
+        return schema or {}
+    node = doc
+    for part in ref[2:].split("/"):
+        node = (node or {}).get(part) or {}
+    return node
+
+
+def unmapped_path_params(verb):
+    """{param}s in this verb's path that no requestFieldMapping covers.
+
+    THE THIRD SOURCE OF A REQUIRED SPEC FIELD, and the one with a measured
+    casualty. oasgen keeps an unmapped path parameter as a SPEC property and
+    marks it REQUIRED (TestPathItemParameters_BecomeSpecFields). Measured live
+    on Port at oasgen 0.59.0, recorded in restdefinition-port.yaml: with
+    `get`'s {uuid} unmapped the CRD carried spec.required=...,uuid and EVERY
+    NEW Port was rejected with "spec.uuid: Required value", while the 16
+    existing ones kept working -- so the symptom was "adding a blade fails",
+    not "everything breaks", which is why it survived.
+
+    No other screen in this repo covers it: check-oasgen-path-forms.py screens
+    the FORM of a JSONPath, not whether a path parameter is mapped at all.
+
+    Today every verb here maps its params, so this contributes nothing -- which
+    is the correct result, and the self-test proves the rule still fires by
+    feeding it a verb that does not.
+    """
+    path = verb.get("path") or ""
+    params = set(re.findall(r"\{([^}/]+)\}", path))
+
+    # COLLECT `inPath` AT ANY DEPTH, under any key. A first version of this read
+    # only `requestFieldMapping` and promptly reported BaremetalNode's {uuid} as
+    # unmapped -- failing this repo's own quickstart. It is mapped, via
+    # `fieldMapping`, and restdefinition-node.yaml records why: oasgen "treats
+    # each requestFieldMapping entry as an equivalent request-direction
+    # FieldMappingItem at load time" (types.go:591-593), so a verb may spell it
+    # either way and a resolver forces the newer spelling.
+    #
+    # check-oasgen-path-forms.py has the same defect written on its forehead: its
+    # key surface was "oasgen's first list" and omitting one field made the walker
+    # miss an entire subtree. Keying on the MARKER (`inPath`) instead of on the
+    # container name is what survives a third spelling being added.
+    mapped = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            if "inPath" in node:
+                mapped.add(node.get("inPath"))
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                walk(v)
+
+    walk(verb)
+    return params - mapped
+
+
+def required_spec_fields():
+    """kind -> the spec fields a CR MUST carry, or the API server rejects it.
+
+    Two sources, and the screen was blind to both until 2026-11-17:
+      * the OAS create-request body's own `required:` list (resolved through
+        $ref), which oasgen carries onto the generated CRD;
+      * `configurationRef`, which oasgen adds to EVERY generated kind -- and
+        which docs/quickstart.md already warned is "required; a CR without it
+        is rejected at admission".
+      * any path parameter that NO verb maps -- see unmapped_path_params(),
+        which is the clause that rejected every new Port in November.
+
+    WHY THIS IS A SEPARATE RULE FROM THE APIVERSION ONE. The apiVersion check
+    asks "does this kind exist, at this version". That is IDENTITY. A manifest
+    can pass it completely and still be refused the moment it is applied,
+    because identity is not admissibility -- which is precisely the class this
+    file's own docstring says is "rejected by the API server and nowhere
+    earlier".
+    """
+    out = {}
+    for f in glob.glob(os.path.join(REPO, "manifests/restdefinition-*.yaml")):
+        with open(f) as fh:
+            d = yaml.safe_load(fh) or {}
+        kind = ((d.get("spec") or {}).get("resource") or {}).get("kind")
+        if not kind:
+            continue
+        stem = os.path.basename(f)[len("restdefinition-"):-len(".yaml")]
+        oas = os.path.join(REPO, f"oas/ironic-{stem}.yaml")
+        req = {"configurationRef"}
+        if os.path.exists(oas):
+            with open(oas) as fh:
+                doc = yaml.safe_load(fh) or {}
+            for _path, ops in (doc.get("paths") or {}).items():
+                op = (ops or {}).get("post")
+                if not isinstance(op, dict):
+                    continue
+                for _ct, media in ((op.get("requestBody") or {}).get("content") or {}).items():
+                    sch = _resolve(doc, (media or {}).get("schema") or {})
+                    for r in sch.get("required") or []:
+                        req.add(r)
+        for verb in ((d.get("spec") or {}).get("resource") or {}).get("verbsDescription") or []:
+            if isinstance(verb, dict):
+                req |= unmapped_path_params(verb)
+        out[kind] = req
+    return out
+
+
 def config_kinds():
     """every <Kind>Configuration the RestDefinitions make real"""
     kinds = set()
@@ -103,9 +211,11 @@ def config_kinds():
     return {k + "Configuration" for k in kinds}
 
 
-def check(files, charts, valid_config_kinds, root, resource_kinds_map=None):
+def check(files, charts, valid_config_kinds, root, resource_kinds_map=None,
+          required_map=None):
     """the whole rule, over an arbitrary file list. Returns (problems, resources_seen)."""
     resource_kinds_map = resource_kinds_map or {}
+    required_map = required_map or {}
     problems, seen = [], 0
     for f in files:
         base = os.path.basename(f)
@@ -143,6 +253,24 @@ def check(files, charts, valid_config_kinds, root, resource_kinds_map=None):
                     f"{rel}: kind {kind!r} is not generated by any RestDefinition. "
                     f"Generated kinds: {', '.join(sorted(resource_kinds_map))}"
                 )
+
+            # IDENTITY IS NOT ADMISSIBILITY. Everything above proves the kind
+            # exists at that version; none of it proves the API server would
+            # accept the object.
+            if kind in required_map:
+                spec_block = d.get("spec")
+                if not isinstance(spec_block, dict):
+                    problems.append(
+                        f"{rel}: {kind} has no spec block, but requires "
+                        f"{', '.join(sorted(required_map[kind]))}"
+                    )
+                else:
+                    missing = sorted(required_map[kind] - set(spec_block))
+                    if missing:
+                        problems.append(
+                            f"{rel}: {kind} is missing required spec field(s): "
+                            f"{', '.join(missing)} -- rejected at admission, not at reconcile"
+                        )
 
             # A RestDefinition declaring MORE THAN ONE identifier without an
             # explicit AND policy gets OR by default, and OR returns on the
@@ -437,6 +565,75 @@ def self_test():
             failures.append(
                 "the selector returned NOTHING for a fixture tree containing krateo CRs, so "
                 "every negative arm above is vacuous")
+
+        # ADMISSIBILITY ARMS (2026-11-17). IDENTITY IS NOT ADMISSIBILITY: every arm
+        # above proves a kind exists at a version, and not one of them proves the
+        # API server would accept the object. docs/quickstart.md already warned
+        # that `configurationRef` is "required; a CR without it is rejected at
+        # admission", and nothing screened for it -- the exact class this file's
+        # docstring calls "rejected by the API server and nowhere earlier".
+        req_map = {"BaremetalNode": {"configurationRef", "driver"}}
+        missing_cfg = write("missing-cfg.yaml",
+            "apiVersion: baremetal.ogen.krateo.io/v1-0-0\nkind: BaremetalNode\n"
+            "metadata:\n  name: x\nspec:\n  driver: fake-hardware\n")
+        admissible = write("admissible.yaml",
+            "apiVersion: baremetal.ogen.krateo.io/v1-0-0\nkind: BaremetalNode\n"
+            "metadata:\n  name: x\nspec:\n  driver: fake-hardware\n"
+            "  configurationRef:\n    name: ironic-endpoint\n    namespace: openstack\n")
+        no_spec = write("no-spec.yaml",
+            "apiVersion: baremetal.ogen.krateo.io/v1-0-0\nkind: BaremetalNode\n"
+            "metadata:\n  name: x\n")
+
+        probs_missing, _ = check([missing_cfg], charts, valid, td, rmap, req_map)
+        cases += 1
+        if not any("configurationRef" in p for p in probs_missing):
+            failures.append(
+                "a BaremetalNode with no configurationRef was NOT flagged, so the "
+                "admissibility rule is vacuous -- that CR is rejected at admission")
+        probs_ok, _ = check([admissible], charts, valid, td, rmap, req_map)
+        cases += 1
+        if probs_ok:
+            failures.append(
+                "an admissible BaremetalNode was flagged: %s. Over-eagerness here would "
+                "reject valid manifests" % probs_ok)
+        probs_nospec, _ = check([no_spec], charts, valid, td, rmap, req_map)
+        cases += 1
+        if not probs_nospec:
+            failures.append(
+                "a CR with NO spec block at all was not flagged, though it cannot carry "
+                "any required field")
+        # and the rule must stay silent when nothing declares requirements
+        probs_norules, _ = check([missing_cfg], charts, valid, td, rmap, {})
+        cases += 1
+        if any("configurationRef" in p for p in probs_norules):
+            failures.append(
+                "the admissibility rule fired with an EMPTY required_map, so it is not "
+                "driven by the derived requirements at all")
+
+        # THE UNMAPPED-PATH-PARAM CLAUSE, which rejected every new Port in November.
+        # The first version of unmapped_path_params read only `requestFieldMapping`
+        # and reported BaremetalNode's {uuid} as unmapped -- it is mapped, via
+        # `fieldMapping`, which oasgen treats as equivalent at load time. Keying on
+        # the `inPath` MARKER rather than a container name is what survives a third
+        # spelling, so these arms vary the container.
+        for label, verb, want in (
+            ("unmapped", {"path": "/v1/x/{uuid}"}, {"uuid"}),
+            ("requestFieldMapping",
+             {"path": "/v1/x/{uuid}", "requestFieldMapping": [{"inPath": "uuid"}]}, set()),
+            ("fieldMapping",
+             {"path": "/v1/x/{uuid}", "fieldMapping": [{"inPath": "uuid"}]}, set()),
+            ("nested under an unknown key",
+             {"path": "/v1/x/{uuid}", "futureField": {"d": [{"inPath": "uuid"}]}}, set()),
+            ("two params, one mapped",
+             {"path": "/v1/n/{node_id}/p/{uuid}", "fieldMapping": [{"inPath": "uuid"}]},
+             {"node_id"}),
+            ("no path at all", {}, set()),
+        ):
+            cases += 1
+            got = unmapped_path_params(verb)
+            if got != want:
+                failures.append(
+                    "unmapped_path_params(%s): expected %s, got %s" % (label, want, got))
 
         # OVER-EAGERNESS ARMS. Four of the original five cases tested rules I
         # was thinking about while writing them; only "a correct manifest
@@ -839,7 +1036,8 @@ def main():
         snippets, unparseable = doc_snippets(td)
         files = targets() + snippets
         charts = chart_versions()
-        problems, seen = check(files, charts, config_kinds(), REPO, rmap)
+        problems, seen = check(files, charts, config_kinds(), REPO, rmap,
+                               required_spec_fields())
     problems += check_lifecycle_fallback(charts)
     problems += check_configdrive_hash_interlock()
     problems += check_kubeconfig_isolation()

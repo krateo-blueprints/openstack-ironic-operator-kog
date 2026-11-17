@@ -1,0 +1,46 @@
+# The minimum an Allocation needs, screened by `make check-examples` so it
+# cannot drift from the generated CRDs.
+#
+# WHY THIS FILE EXISTS. Allocation shipped for months with nothing installing
+# it -- `manifests/allocationconfiguration-ironic.yaml` opens with exactly that
+# sentence, written after a hand-applied Allocation sat with no status for 180s
+# because its Configuration singleton did not exist. That gap was fixed on
+# 2026-11-12. The remaining one was this: no chart renders an Allocation and no
+# manifest applied one, so the kind still had no path to existing.
+#
+# Assumes `make restdef-up`, which creates the generated CRDs and the
+# `ironic-endpoint` AllocationConfiguration this references.
+#
+# WHAT IT NEEDS FROM IRONIC TO SUCCEED, which is the interesting part. An
+# Allocation asks Ironic for ANY node matching a resource_class, and
+# `POST /v1/allocations` matches only nodes that declare the SAME resource_class
+# AND are in `available`. Until chart 0.6.4 added `resource_class` to the node
+# render, no chart in this repo could make a node allocatable at all -- see the
+# comment in charts/baremetal-host/templates/node.yaml -- so the kind shipped
+# and could never succeed.
+#
+# `baremetal` below deliberately matches `resource_class` in
+# manifests/baremetalnode-quickstart.yaml, so this Allocation can bind that node
+# once it reaches `available`. Before that it stays in `state: allocating`,
+# which is Ironic working correctly, not a fault.
+#
+# The chosen node arrives in `status.node_uuid` (an additionalStatusField).
+# docs/DESIGN-ALLOCATION.md is the design note; it remains a proposal for
+# `workers` only, and nothing here commits the control-plane path.
+apiVersion: baremetal.ogen.krateo.io/v1-0-0
+kind: Allocation
+metadata:
+  name: example-allocation
+  namespace: openstack
+spec:
+  # Required. A CR without it is rejected at admission, not at reconcile.
+  configurationRef:
+    name: ironic-endpoint
+    namespace: openstack
+  # The kind's `identifiers` value, and what get/delete address the allocation
+  # by -- both verbs map {uuid} <- spec.name, because Ironic resolves an
+  # allocation name as an ident.
+  name: example-allocation
+  # Required by the OAS create body. Must match a node's resource_class, or
+  # Ironic has nothing to give you.
+  resource_class: baremetal

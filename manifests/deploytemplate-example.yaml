@@ -1,0 +1,43 @@
+# The minimum a DeployTemplate needs, screened by `make check-examples` so it
+# cannot drift from the generated CRDs.
+#
+# WHY THIS FILE EXISTS. `oas/ironic-deploy-template.yaml`'s own header calls this
+# "the one new Ironic resource fully exercisable without bare metal" -- it is
+# standalone, needing no Node, no BMC and no provisioning. It then shipped with
+# nothing exercising it: no chart renders a DeployTemplate and, until now, no
+# manifest applied one. Of the seven kinds this repo generates, three were in
+# that state (Allocation, DeployTemplate, PortGroup); this is the one with no
+# excuse, because it runs on the free laptop environment.
+#
+# Assumes `make restdef-up`, which creates the generated CRDs and the
+# `ironic-endpoint` DeployTemplateConfiguration this references.
+#
+# A deploy template maps a TRAIT to a list of deploy steps. Ironic applies the
+# steps to any node whose `instance_info.traits` requests that trait, so the
+# name is not free-form: it must be a valid trait, which in practice means a
+# `CUSTOM_` prefix (standard traits exist but are reserved).
+apiVersion: baremetal.ogen.krateo.io/v1-0-0
+kind: DeployTemplate
+metadata:
+  name: custom-hyperthreading
+  namespace: openstack
+spec:
+  # Required. A CR without it is rejected at admission, not at reconcile --
+  # installing a KOG kind is THREE objects (OAS ConfigMap, RestDefinition,
+  # Configuration), and this is the reference to the third.
+  configurationRef:
+    name: ironic-endpoint
+    namespace: openstack
+  # Required, and must be a trait name. `CUSTOM_*` is the safe namespace.
+  # This is also the kind's `identifiers` value, so findby matches on it.
+  name: CUSTOM_HYPERTHREADING
+  # Required, and must be non-empty. Each step requires interface, step and
+  # priority; `args` is optional.
+  steps:
+    - interface: bios
+      step: apply_configuration
+      args:
+        settings:
+          - name: LogicalProc
+            value: Enabled
+      priority: 10
