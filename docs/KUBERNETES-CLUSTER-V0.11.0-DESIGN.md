@@ -9,7 +9,14 @@ timestamp: 2026-08-11T00:00:00Z
 
 # kubernetes-cluster v0.11.0 — External etcd, static bootstrap
 
-Status: **DRAFT**, awaiting acceptance. Reframes etcd lifecycle as host
+Status: **SUPERSEDED BY v0.12.0**, which reverted to kubeadm-stacked etcd and
+deleted the snapshot CronJob this note designs. Retained as the record of the
+v0.11.x architecture and why it was tried; nothing here describes a current
+chart. The `controlPlane.etcd.*` values it introduces are inert from v0.12.0 on.
+(The status line said "DRAFT, awaiting acceptance" until 2026-11-17 — it was
+neither draft nor current by then.)
+
+Originally: Reframes etcd lifecycle as host
 substrate (systemd unit on each CP) independent of kubeadm. Eliminates
 the `kubeadm join --control-plane` etcd-member-dance that v0.10.15
 cannot self-heal.

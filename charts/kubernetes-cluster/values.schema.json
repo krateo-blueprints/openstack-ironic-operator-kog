@@ -89,7 +89,7 @@
             "external-lb",
             "nodeport-dns"
           ],
-          "description": "How the blades reach the management cluster's API server -- an external load balancer, kube-vip, MetalLB, or a NodePort with DNS. Recorded for operators and for later milestones; it does not itself configure anything.",
+          "description": "DOCUMENTATION ONLY - no template branches on this value. How the blades reach the management cluster's API server -- an external load balancer, kube-vip, MetalLB, or a NodePort with DNS. Recorded for operators and for later milestones; it does not itself configure anything.",
           "title": "Management API reachability"
         }
       },
@@ -241,7 +241,7 @@
                 "null"
               ],
               "title": "etcd package",
-              "description": "apt package and version installed on the control plane nodes, for example etcd-server=3.5.16-4. Any etcd 3.x speaks the same gRPC API to the API server."
+              "description": "VESTIGIAL SINCE v0.12.0 AND READ BY NOTHING - v0.12.0 reverted to kubeadm-stacked etcd and deleted the snapshot CronJob, so there are no scheduled etcd backups and setting this has no effect. Kept so existing CRs still validate. Was: apt package and version installed on the control plane nodes, for example etcd-server=3.5.16-4. Any etcd 3.x speaks the same gRPC API to the API server."
             },
             "snapshotImage": {
               "type": [
@@ -249,7 +249,7 @@
                 "null"
               ],
               "title": "etcdctl image",
-              "description": "Container image providing etcdctl for the snapshot job. Match it to the etcd minor version installed on the nodes."
+              "description": "VESTIGIAL SINCE v0.12.0 AND READ BY NOTHING - v0.12.0 reverted to kubeadm-stacked etcd and deleted the snapshot CronJob, so there are no scheduled etcd backups and setting this has no effect. Kept so existing CRs still validate. Was: Container image providing etcdctl for the snapshot job. Match it to the etcd minor version installed on the nodes."
             },
             "snapshotSchedule": {
               "type": [
@@ -257,7 +257,7 @@
                 "null"
               ],
               "title": "Snapshot schedule",
-              "description": "Cron schedule for etcd snapshots. Defaults to every six hours."
+              "description": "VESTIGIAL SINCE v0.12.0 AND READ BY NOTHING - v0.12.0 reverted to kubeadm-stacked etcd and deleted the snapshot CronJob, so there are no scheduled etcd backups and setting this has no effect. Kept so existing CRs still validate. Was: Cron schedule for etcd snapshots. Defaults to every six hours."
             },
             "snapshotRetentionDays": {
               "type": [
@@ -265,7 +265,7 @@
                 "null"
               ],
               "title": "Snapshot retention (days)",
-              "description": "How many days of snapshots to keep on the node before older ones are deleted."
+              "description": "VESTIGIAL SINCE v0.12.0 AND READ BY NOTHING - v0.12.0 reverted to kubeadm-stacked etcd and deleted the snapshot CronJob, so there are no scheduled etcd backups and setting this has no effect. Kept so existing CRs still validate. Was: How many days of snapshots to keep on the node before older ones are deleted."
             }
           },
           "title": "etcd"

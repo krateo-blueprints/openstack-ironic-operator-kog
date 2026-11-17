@@ -107,14 +107,11 @@ placeholders — a real cluster overrides them on the `KubernetesCluster` CR.
 | `ironicAuth.*` | `""` (userDomain `Default`) | Keystone creds baked into CP cloud-init so `publish-join.sh` can PATCH Ironic's `node.extra` from the blade. |
 | `managementCluster.apiUrl` / `.caBundle` / `.serviceAccount*` | `""` | management API the CP cloud-init patches to publish the join token. `caBundle` is optional (the chart `lookup`s `kube-root-ca.crt`). |
 | `network.podCIDR` / `.serviceCIDR` | `10.244.0.0/16` / `10.96.0.0/12` | cluster networking. |
-| `network.managementApiReachability` | `external-lb` | ingress hint (kube-vip / MetalLB / external-lb / NodePort+DNS). See the [USER-GUIDE](./USER-GUIDE.md) option matrix. |
+| `network.managementApiReachability` | `external-lb` | **Documentation only — no template branches on it.** An ingress hint (kube-vip / MetalLB / external-lb / NodePort+DNS) describing how the management API is exposed to blades; the chart does not read it. See the [USER-GUIDE](./USER-GUIDE.md) option matrix for the network design it describes. |
 | `controlPlane.endpoint` | `""` | stable apiserver address; **required** for HA (>1 node), points at a load-balanced VIP. |
 | `controlPlane.nodes[]` | *(commented)* | preferred CP shape; 1/3/5 entries, index 0 is the bootstrap CP. `.oobIp` is **vestigial since v0.13.2 and read by nothing** — etcd's address is resolved at runtime from the bootstrap's `spec.extra.etcd_ip`. |
 | `controlPlane.node` | *(empty)* | legacy single-CP shape, ignored when `nodes[]` is populated. |
-| `controlPlane.etcd.aptPackage` | `etcd-server=3.5.16-4` | external-etcd apt package for HA CPs (v0.11.0+). |
-| `controlPlane.etcd.snapshotImage` | `gcr.io/etcd-development/etcd:v3.5.16` | etcdctl image for the snapshot CronJob. |
-| `controlPlane.etcd.snapshotSchedule` | `0 */6 * * *` | snapshot cron (default 6h). |
-| `controlPlane.etcd.snapshotRetentionDays` | `7` | days of on-host snapshots kept. |
+| `controlPlane.etcd.*` (all four) | *(as shipped)* | **VESTIGIAL SINCE v0.12.0 AND READ BY NOTHING.** `aptPackage`, `snapshotImage`, `snapshotSchedule` and `snapshotRetentionDays` configured the external-etcd install and its snapshot CronJob. v0.12.0 reverted to kubeadm-stacked etcd and deleted the CronJob, so **there are no scheduled etcd backups** and setting these has no effect. Measured 2026-11-17: zero template interpolations of any of the four, against 8 for `allowPasswordAuth` as a control. Kept in the schema (and not required) so existing CRs that set them still validate — same treatment as `.oobIp`. See [RUNBOOK-ETCD-RESTORE.md](./RUNBOOK-ETCD-RESTORE.md). |
 
 HA/etcd rationale and the full day-2 lever set (`upgrade.targetNode`,
 `recovery.failedNodes[]`) are in

@@ -137,6 +137,13 @@ failed tags it took):
 
 Register `baremetal-host` **first** — `kubernetes-cluster` renders its resources.
 
+`baremetal-lifecycle` also carries five inputs that no template reads --
+`ironicApiUrl`, `ironicApiVersion`, `ironicAuthType`, `openstackClientImage`
+and `waitTimeout`, leftovers from the openstack-CLI-in-a-Job approach it
+predates (measured 2026-11-17). Recorded here rather than annotated in the
+chart, because that chart is `publish: true` and editing it would force a
+version bump on something nobody installs.
+
 `baremetal-discovery` and `baremetal-lifecycle` are the superseded split that
 `baremetal-host` absorbed and are not published as blueprints.
 **`baremetal-lifecycle` is deprecated as of 2026-11-08** (`deprecated: true` in

@@ -1,17 +1,43 @@
 ---
 type: Runbook
-title: Restore etcd from a v0.11.x chart snapshot
-description: Runbook for restoring HA control-plane etcd from a chart-taken snapshot on kubernetes-cluster v0.11.0+ (external etcd) — when to use it, the restore sequence, and the redeploy fallback.
+title: Restore etcd from a v0.11.x snapshot — NOT APPLICABLE TO v0.12.0+
+description: Runbook for restoring HA control-plane etcd on kubernetes-cluster v0.11.x ONLY, where etcd was an external systemd unit and the chart took scheduled snapshots. v0.12.0 reverted to kubeadm-stacked etcd and deleted the snapshot CronJob: on v0.12.0+ there are no scheduled backups and this procedure does not apply.
 resource: oci://ghcr.io/krateo-blueprints/charts/baremetal-host
 tags: [ironic, kubernetes-cluster, etcd, restore, runbook]
 timestamp: 2026-08-11T00:00:00Z
 ---
 
-# Runbook — Restore etcd from a v0.11.x chart snapshot
+# Runbook — Restore etcd from a v0.11.x snapshot
 
-Applies to HA clusters deployed with `kubernetes-cluster` chart v0.11.0+
-(external etcd, not stacked). For v0.10.x (stacked etcd) the recovery
-path is "redeploy the cluster" — there is no snapshot mechanism.
+> ## ⚠️ READ THIS FIRST — this does NOT apply to the chart you are running
+>
+> **Applies to `kubernetes-cluster` v0.11.x ONLY.** That series ran etcd as an
+> external systemd unit and shipped a snapshot CronJob.
+>
+> **v0.12.0 reverted to kubeadm-stacked etcd and deleted the CronJob**
+> (`charts/kubernetes-cluster/templates/etcd-snapshot-cronjob.yaml` is an empty
+> stub recording it). The chart is now **0.16.1**. So on every version shipped
+> since v0.12.0:
+>
+> - **there are NO scheduled etcd backups.** `/var/lib/etcd-backups` does not
+>   exist and will be empty if you look;
+> - `controlPlane.etcd.{snapshotImage,snapshotSchedule,snapshotRetentionDays,aptPackage}`
+>   are **inert** — setting them has no effect;
+> - every command below is wrong for your cluster: there is no `etcd` systemd
+>   unit (etcd is a static pod from `/etc/kubernetes/manifests/etcd.yaml`), and
+>   the PKI is under `/etc/kubernetes/pki/etcd/`, not `/etc/etcd/pki/`.
+>
+> **If you have lost control planes on v0.12.0+:** there is no snapshot to
+> restore unless you took one yourself. Recovery is kubeadm's own tooling
+> against the stacked member, or a full redeploy. A verified stacked-etcd
+> restore procedure is **not documented here** — writing one unverified would
+> be worse than this warning, because you would follow it mid-incident.
+>
+> Corrected 2026-11-17. The deleted mechanism was still described as current in
+> six places, this runbook being the one with a reader under pressure; the
+> revert was recorded only in that stub template's comment.
+
+Everything below is retained for anyone still running v0.11.x, unchanged.
 
 ## When to use this
 
@@ -22,12 +48,16 @@ path is "redeploy the cluster" — there is no snapshot mechanism.
 - Logical data corruption you need to roll back through.
 
 If all 3 CPs died AND no off-host snapshot exists: full redeploy is
-the only path. There's no recovery from this in v0.11.0; remote-copy
-of snapshots is queued for v0.11.1.
+the only path. There's no recovery from this in v0.11.0. Remote-copy of
+snapshots was queued for v0.11.1 and never shipped — v0.12.0 removed the
+snapshot mechanism altogether, so it never will in this form.
 
 ## Snapshot inventory
 
-The chart's CronJob writes to `/var/lib/etcd-backups/etcd-<TS>.snap`
+**v0.11.x only. On v0.12.0+ this directory does not exist — see the warning
+at the top before running anything here.**
+
+On v0.11.x the chart's CronJob writes to `/var/lib/etcd-backups/etcd-<TS>.snap`
 on every CP, every 6h (default — overridable via
 `controlPlane.etcd.snapshotSchedule`). Retention is 7 days
 (`snapshotRetentionDays`). Snapshots are not replicated between CPs —
