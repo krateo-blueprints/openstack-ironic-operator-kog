@@ -645,6 +645,22 @@ check-oas-defaults:   # no OAS body schema may acquire the v1.26.x defaulting sh
 	# found the only field instances anyone has (2 of 35).
 	python3 -I scripts/check-defaulted-optional-objects.py
 
+check-chart-version-form:   # every PUBLISHED chart version is a plain X.Y.Z (rule 13)
+# WHY IT RUNS HERE AND NOT ONLY AT RELEASE TIME. publish-chart.yaml refuses a non-X.Y.Z
+# version at INDEX time -- after the GHCR push -- so the artifact is published and the
+# index entry is not, and the run fails having already written to the registry. This
+# screen makes that unreachable: `make check` is step 2 of the publish job and the push is
+# step 7, so it gates a tag AND a workflow_dispatch, and it also runs on every pull
+# request, which is where a bad version belongs: at the commit that writes it.
+#
+# hack/release-preflight (the charts rule-12 hook) calls this same file, so rule 13 has
+# ONE implementation here rather than a copy in the hook and another in a screen.
+#
+# The chart list is DERIVED from release-chart.yaml's `helm package` loop, never restated,
+# and the screen VOIDs rather than passing if it cannot read that loop.
+	python3 -I scripts/check-chart-version-form.py --self-test && \
+		python3 -I scripts/check-chart-version-form.py
+
 check-release-table:   # docs/release.md's table must agree with charts/*/Chart.yaml
 	# The table went STALE FOUR TIMES -- most recently inside the very pull request whose
 	# commit message said it had been updated, where a rebase dropped the hunk and nothing
@@ -797,7 +813,7 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 	python3 -I scripts/check-blueprint-metadata.py --self-test && \
 		python3 -I scripts/check-blueprint-metadata.py $(if $(BLUEPRINT_ONLINE),--online,)
 
-check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set check-chart-version-moved check-chart-renders check-release-table check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest check-committed-credentials   # every standing screen
+check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set check-chart-version-moved check-chart-version-form check-chart-renders check-release-table check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest check-committed-credentials   # every standing screen
 	@echo "all standing screens passed"
 
 check-committed-credentials:   # no plaintext credential value in any tracked file

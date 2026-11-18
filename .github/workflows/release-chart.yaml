@@ -30,10 +30,46 @@ env:
   HELM_VERSION: v3.19.0
 
 jobs:
+  # krateo-blueprints/charts PUBLISHING.md rule 12: a release is refused BEFORE anything is
+  # packaged or pushed. publish-chart.yaml enforces rule 13 -- a chart version must be a
+  # plain X.Y.Z -- but at INDEX time, which is after the GHCR push, so a bad version is
+  # published as an artifact and then refused an index entry. The run fails having already
+  # written to the registry.
+  #
+  # ONLY ON A TAG, and the skip is safe for a stated reason rather than by luck. On a
+  # workflow_dispatch `github.ref_name` is a branch, which rule 13's pattern refuses, so
+  # calling this would fail every manual run. It is skipped there instead -- and the four
+  # chart versions are still checked on that path, because the real check is a standing
+  # screen (scripts/check-chart-version-form.py) that runs in `make check`, step 2 of
+  # publish, where the push is step 7. hack/release-preflight calls that same screen, so
+  # this job is not the vacuous pass it would be for a repository with no hook, and there
+  # is ONE implementation of rule 13 here rather than a copy per caller.
+  release-preflight:
+    if: github.ref_type == 'tag'
+    permissions:
+      contents: read
+    uses: krateo-blueprints/charts/.github/workflows/release-preflight.yaml@70095ab05f1c5dc6c8dd39d0b1fdbbc7382a841c # 1.4.3
+    with:
+      # The tag names the RELEASE, not any chart: this repository publishes four charts at
+      # their own Chart.yaml versions. The shared job checks this string's shape, and
+      # hack/release-preflight checks the versions GHCR will actually receive.
+      version: ${{ github.ref_name }}
+
   publish:
     # Gated on the credential check above, so a release is all-or-nothing: see
     # the comment on blueprints-token-preflight for why this inverted.
-    needs: blueprints-token-preflight
+    #
+    # THE ACCEPTABLE RESULTS ARE ENUMERATED, not one bad one excluded. `release-preflight`
+    # is skipped on a dispatch, so it must be allowed to be `skipped` -- but writing that
+    # as `result != 'failure'` would also accept `cancelled`, which is not a reading that
+    # the preflight approved anything. success-or-skipped says what is meant and blocks
+    # both failure and cancellation.
+    needs: [blueprints-token-preflight, release-preflight]
+    if: >-
+      ${{ !cancelled()
+          && needs.blueprints-token-preflight.result == 'success'
+          && (needs.release-preflight.result == 'success'
+              || needs.release-preflight.result == 'skipped') }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -357,7 +393,7 @@ jobs:
     #
     # .github/dependabot.yml advances this; a SHA pin with nothing advancing it
     # is worse than @main because it looks deliberate while going stale.
-    uses: krateo-blueprints/charts/.github/workflows/publish-chart.yaml@aea92de356085f50ea45477a4e6ae2b026cd6b14 # 1.4.2
+    uses: krateo-blueprints/charts/.github/workflows/publish-chart.yaml@70095ab05f1c5dc6c8dd39d0b1fdbbc7382a841c # 1.4.3
     with:
       source_repo: ${{ github.repository }}
       git_tag: ${{ github.ref_name }}
