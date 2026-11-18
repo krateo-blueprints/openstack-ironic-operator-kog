@@ -123,12 +123,19 @@ jobs:
       # worth guarding was the one it could not see.
       #
       # Pinned by commit and NEVER floated, because it receives this repository's registry write
-      # credentials (rule 14 says so explicitly). The comment is `# main <date>` rather than
-      # `# X.Y.Z` because krateo-platformops/.github publishes no tags yet -- so **nothing advances
-      # this pin**, the same condition tracked for the other three in krateo-blueprints/charts#23.
+      # credentials (rule 14 says so explicitly).
+      #
+      # `# 1.0.0` since 2026-11-18, and the version comment is the point rather than decoration:
+      # Dependabot finds a newer version from releases or tags, so while krateo-platformops/.github
+      # published none, this pin and the three workflow pins were frozen with nothing to advance
+      # them -- the state this repo's own .github/dependabot.yml calls worse than `@main`, because
+      # it looks deliberate while going quietly stale. That was raised as
+      # krateo-blueprints/charts#23 and resolved by that repository cutting its first tag, so all
+      # four moved from `# main <date>` to `# 1.0.0` in one pass and Dependabot advances them now.
+      # Do not reintroduce the dated form here: it is transitional, for a publisher with no tags.
       - name: Locate the shared chart-push script
         id: chart-push
-        uses: krateo-platformops/.github/.github/actions/chart-push@653ac1e67d761584993a774c76963514968b3650 # main 2026-11-18
+        uses: krateo-platformops/.github/.github/actions/chart-push@e1d3e99215e80ae56eca4a67e9e061b2c73168b8 # 1.0.0
 
       # THE CHART LOOP STAYS; only the retry loop goes. push.sh takes ONE archive, so dropping the
       # outer loop here would publish one chart and silently skip the other three.
