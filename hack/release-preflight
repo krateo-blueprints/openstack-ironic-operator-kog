@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# The rule-12 release hook. krateo-blueprints/charts release-preflight.yaml runs this as
+#   ./hack/release-preflight "$VERSION"
+# from the repository root, BEFORE the publish job packages or pushes anything, and
+# refuses the release if it exits non-zero.
+#
+# WHY THIS FILE EXISTS AT ALL. The shared workflow's own documentation says: "No
+# hack/release-preflight: the job passes and says so." Without this file, calling it
+# would check the single `version` input -- for this repository the git tag -- and then
+# pass, having looked at none of the FOUR chart versions GHCR actually receives. A job
+# that reports success having checked nothing is the shape this repository has had to fix
+# twice already, so the hook is what makes rule 12 mean something here.
+#
+# WHAT IT DELEGATES TO, AND WHY IT DELEGATES. The real check is
+# scripts/check-chart-version-form.py, a standing screen that also runs in `make check`
+# -- step 2 of the publish job, where the push is step 7, so it gates a
+# workflow_dispatch run as well, and it runs on every pull request. Calling it from here
+# rather than restating rule 13's regex keeps ONE implementation: a second copy of a
+# pattern the tooling owns is a copy that goes stale, and this repository has already
+# been bitten by exactly that.
+set -euo pipefail
+
+version="${1:-}"
+if [ -z "$version" ]; then
+  echo "::error::hack/release-preflight needs the release version as \$1" >&2
+  exit 1
+fi
+
+cd "$(dirname "$0")/.."
+
+# THE TAG IS NOT A CHART VERSION HERE, and saying so is the point. This repository
+# publishes four charts, each at its own Chart.yaml version, so the tag identifies the
+# release and not the artifacts. The shared workflow has already checked that $1 is a
+# plain X.Y.Z before calling this; repeating that check would add nothing. What is NOT
+# checked anywhere else before the push is the four chart versions, so that is what this
+# runs.
+echo "release-preflight: tag '${version}' names the release, not any chart version;"
+echo "                   this repository publishes four charts at their own versions."
+echo "                   Checking those against PUBLISHING.md rule 13:"
+
+exec python3 -I scripts/check-chart-version-form.py
