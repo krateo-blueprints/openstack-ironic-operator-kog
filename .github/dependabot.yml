@@ -23,9 +23,17 @@ updates:
     commit-message:
       prefix: "chore(actions)"
     groups:
-      # One PR for routine action bumps; the publisher is called out separately
-      # because moving it changes how this repo's charts reach the Marketplace,
-      # which deserves its own review rather than riding along in a batch.
+      # One PR for routine action bumps; charts is called out separately because
+      # moving it changes how this repo's charts reach the Marketplace, which
+      # deserves its own review rather than riding along in a batch.
       actions:
         patterns: ["*"]
         exclude-patterns: ["krateo-blueprints/charts*"]
+      # ...but a GROUP, not an exclusion on its own. Excluded and ungrouped, each
+      # charts pin arrived in its own PR and they drifted: publish-chart sat at
+      # 1.0.4 (advanced by #79) while pinned-uses reached 1.4.2 -- one repository
+      # served at two commits, which is how a shared internal script gets called
+      # at two versions. Grouped, the separate review is KEPT and every charts pin
+      # moves in the same PR, so this repo has one charts version at a time.
+      charts:
+        patterns: ["krateo-blueprints/charts*"]

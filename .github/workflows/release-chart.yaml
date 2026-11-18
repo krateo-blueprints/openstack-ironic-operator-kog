@@ -283,25 +283,40 @@ jobs:
     # CHARTS_PUBLISH_TOKEN in every caller at once, which is a supply-chain
     # property rather than a convenience one.
     #
-    # Verified before pinning, not taken on report:
-    #   git ls-remote .../charts 'refs/tags/1.0.4^{}' -> 1e6210ab2a8b66ff1a8d6da86287e671154f44a2
+    # HOW TO VERIFY THE PIN BELOW. No SHA is recorded here on purpose -- see the
+    # history note. Resolve the version in the pin's own comment and compare:
     #
-    # THE `^{}` IS LOAD-BEARING. The annotated tag OBJECT 1.0.4 is a98bd9db, a
-    # DIFFERENT sha from the commit it points at. Pinning the tag object would pin
-    # something that is not the reviewed tree, and upstream's own #9 is about
-    # exactly that ("pin the tag's commit, not the tag object").
+    #   git ls-remote https://github.com/krateo-blueprints/charts.git 'refs/tags/<X.Y.Z>^{}'
     #
-    # (This block described 1.0.0 / a2d63ba for a while after the pin moved to
-    #  1.0.1 in fd45819, whose subject was about the chartrepo ConfigMap. A reader
-    #  auditing the supply-chain pin would have read a verification of a SHA that
-    #  was not in use. /code-review caught it, and the note then PREDICTED, in its
-    #  last sentence, that Dependabot advancing the pin would do it again. It did:
-    #  #79 moved the pin to 1.0.4 while this record still read 1.0.1 / 36ea357.
-    #  Twice now. A record that has to be moved by hand is a record that gets left
-    #  behind, so treat the prediction as the finding rather than the warning.)
+    # THE `^{}` IS LOAD-BEARING, and it is the whole reason a recorded SHA was
+    # worth having. An annotated tag's OBJECT is a different sha from the commit it
+    # points at -- for 1.0.4 the object was a98bd9db -- so pinning the unpeeled ref
+    # pins something that is not the reviewed tree. Upstream's own #9 is about
+    # exactly that ("pin the tag's commit, not the tag object"), and charts 1.4.2's
+    # dated-pin notice now says it too. A reviewer who checks a correct pin with a
+    # plain `refs/tags/<v>` will see a mismatch and think the pin is wrong.
     #
-    # RE-MEASURED at 1e6210a rather than carried across, because 1.0.2/1.0.3/1.0.4
-    # changed this very file (+57/-40):
+    # (HISTORY, and the reason this block no longer records a SHA. It described
+    #  1.0.0 / a2d63ba after the pin moved to 1.0.1 in fd45819, so a reader
+    #  auditing the supply-chain pin read a verification of a SHA that was not in
+    #  use. /code-review caught it, and the note then PREDICTED that Dependabot
+    #  advancing the pin would do it again. It did: #79 moved the pin to 1.0.4
+    #  while the record still read 1.0.1 / 36ea357. Twice, and its own conclusion
+    #  was "a record that has to be moved by hand is a record that gets left
+    #  behind, so treat the prediction as the finding rather than the warning".
+    #
+    #  Moving the pin to 1.4.2 would have been the third time, by the reader the
+    #  warning was addressed to. So the duplication is gone instead: the SHA now
+    #  appears exactly ONCE in this file, on the `uses:` line, and a record that
+    #  does not repeat it cannot disagree with it. That is cheaper than a screen
+    #  policing a duplication that need not exist.)
+    #
+    # THE MEASUREMENTS BELOW WERE TAKEN AT 1.0.4 AND CARRY ACROSS TO 1.4.2 -- not
+    # on faith, which is what this block criticised, but because the whole diff of
+    # publish-chart.yaml from 1.0.4 to 1.4.2 is TWO HUNKS: one comment line, and
+    # the rule 13 version check. Nothing else changed, so nothing they measured
+    # moved. (They were re-measured rather than carried at 1.0.4 itself, because
+    # 1.0.2/1.0.3/1.0.4 did change this very file, +57/-40.)
     #   RELEASES_BASE   still hardcoded to
     #                   github.com/krateo-blueprints/charts/releases/download --
     #                   3 occurrences, ZERO derived from `inputs.source_repo`
@@ -317,17 +332,32 @@ jobs:
     # "trims it" from their own docs in 545626e6 for the same reason; this is that
     # correction applied on the caller's side.
     #
-    # INPUT CONTRACT UNCHANGED across the bump, checked rather than assumed: inputs
-    # [artifact, channel*, git_tag*, source_repo*] and secret [PUBLISH_TOKEN*] are
-    # identical at 36ea357 and 1e6210a, so the `with:` block below needs no edit --
+    # INPUT CONTRACT UNCHANGED across the bump, checked rather than assumed, by
+    # parsing `on.workflow_call` at both commits rather than reading the diff:
+    # inputs [artifact, channel*, git_tag*, source_repo*] and secret
+    # [PUBLISH_TOKEN*] are identical, so the `with:` block below needs no edit --
     # and a contract break here would surface only at tag time, on the one path
-    # that publishes. The three upstream fixes are a fresh-clone index push that
-    # retries on a concurrent publish (1.0.2), a case-insensitive repository name
-    # compare (1.0.3), and Node 24 actions pinned by SHA (1.0.4).
+    # that publishes. Checked this way for the 1.0.1 -> 1.0.4 move and again for
+    # 1.0.4 -> 1.4.2.
+    #
+    # ONE charts VERSION PER REPO. This pin sat at 1.0.4 while lint.yaml's
+    # pinned-uses reached 1.4.2 -- one repository served at two commits, which is
+    # how a shared internal script ends up called at two versions. The cause was
+    # dependabot.yml excluding charts from its group, so each charts pin arrived in
+    # its own PR and they drifted; there is a `charts` GROUP now, which keeps the
+    # separate review and moves them together.
+    #
+    # The only behaviour change from 1.0.4 to 1.4.2 is rule 13: a chart version
+    # must be plain X.Y.Z -- no `v`, no leading zeros, no -prerelease, no +build --
+    # because an index entry is never removed and the Marketplace offers the live
+    # index newest first, so a pre-release would be on offer forever. Checked
+    # before bumping, against the rule's own regex: all six charts here pass, and
+    # the two this job actually uploads are kubernetes-cluster and
+    # baremetal-host.
     #
     # .github/dependabot.yml advances this; a SHA pin with nothing advancing it
     # is worse than @main because it looks deliberate while going stale.
-    uses: krateo-blueprints/charts/.github/workflows/publish-chart.yaml@1e6210ab2a8b66ff1a8d6da86287e671154f44a2 # 1.0.4
+    uses: krateo-blueprints/charts/.github/workflows/publish-chart.yaml@aea92de356085f50ea45477a4e6ae2b026cd6b14 # 1.4.2
     with:
       source_repo: ${{ github.repository }}
       git_tag: ${{ github.ref_name }}
