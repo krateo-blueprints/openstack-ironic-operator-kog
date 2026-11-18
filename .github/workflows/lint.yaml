@@ -7,12 +7,20 @@ on:
     branches: [main]
 
 jobs:
-  # krateo-blueprints/charts PUBLISHING.md rule 9: every reusable workflow this repository calls is pinned by
-  # commit SHA with a version comment. The shared check refuses any that is not.
+  # krateo-blueprints/charts PUBLISHING.md rules 9 and 14. Rule 9: every reusable workflow and the
+  # shared chart-push action are pinned by commit SHA with a version comment. Rule 14: no workflow
+  # pushes a chart bare -- every uncommented `helm push` / `oras push` is refused, because charts go
+  # through chart-push, which survives GHCR's tag read-after-write race. The check also refuses a
+  # cross-org `secrets: inherit`, which passes NOTHING across organisations while the called
+  # workflow reads every secret as '' and may report success on having done nothing.
+  #
+  # At 1.2.0 this reported only rule 9. 1.4.0 adds rule 14 and the inherit check, and its summary
+  # counts floats, cross-org inherits, shared-action uses and bare pushes beside the unpinned count
+  # -- so an exemption that quietly spreads shows up in CI output rather than only in a file.
   pinned-uses:
     permissions:
       contents: read
-    uses: krateo-blueprints/charts/.github/workflows/pinned-uses.yaml@33c79510d5042e0fcb5227176bd138d993cb4ef6 # 1.2.0
+    uses: krateo-blueprints/charts/.github/workflows/pinned-uses.yaml@ae27682c30cf6a005e03e77bc18a3f9a194db6ed # 1.4.0
 
   lint-docs:
     uses: krateo-platformops/.github/.github/workflows/lint-docs.yaml@f25d6b526bde39f37bca6a4eb8c493bf4c2bbec1 # main 2026-11-17

@@ -108,17 +108,44 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" \
             | helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
 
-      - name: helm push (all charts, retry on GHCR flakiness)
+      # krateo-blueprints/charts PUBLISHING.md rule 14: charts go through the organisation's
+      # chart-push action, never a bare `helm push`. It survives GHCR's tag read-after-write race:
+      # `helm push` PUTs the manifest by digest and then tags it, and the tag step first GETs that
+      # digest -- GHCR has answered that GET 404 about a second after accepting the PUT, leaving an
+      # untagged manifest behind. The action polls until the registry serves that digest, pushes the
+      # SAME archive again, and FAILS if the second push reports a different one, so a tag can never
+      # land on bytes other than the ones first pushed.
+      #
+      # WHAT THIS REPLACED, and why it was worse. A 5x `helm push` loop with a 10s sleep that
+      # retried on ANY failure: a real error -- bad credentials, a malformed chart, a quota -- burned
+      # 50 seconds and then reported "failed after 5 attempts", which names the symptom and buries
+      # the cause. It also never checked which digest the tag landed on, so the one failure mode
+      # worth guarding was the one it could not see.
+      #
+      # Pinned by commit and NEVER floated, because it receives this repository's registry write
+      # credentials (rule 14 says so explicitly). The comment is `# main <date>` rather than
+      # `# X.Y.Z` because krateo-platformops/.github publishes no tags yet -- so **nothing advances
+      # this pin**, the same condition tracked for the other three in krateo-blueprints/charts#23.
+      - name: Locate the shared chart-push script
+        id: chart-push
+        uses: krateo-platformops/.github/.github/actions/chart-push@653ac1e67d761584993a774c76963514968b3650 # main 2026-11-18
+
+      # THE CHART LOOP STAYS; only the retry loop goes. push.sh takes ONE archive, so dropping the
+      # outer loop here would publish one chart and silently skip the other three.
+      - name: push (all charts)
+        env:
+          CHART_PUSH: ${{ steps.chart-push.outputs.path }}
+          # Read by push.sh for the registry's own token challenge when it reads the manifest back
+          # to confirm the digest is served. Same identity as the login above, so no new secret is
+          # introduced. The script passes them to curl on stdin (`-K -`, never argv, where any
+          # process in the job could read them) and only to a token realm on the registry's own
+          # host, so a redirected challenge cannot harvest them.
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
         run: |
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           for tgz in dist/*.tgz; do
-            ok=0
-            for attempt in 1 2 3 4 5; do
-              helm push "$tgz" "oci://ghcr.io/${owner}/charts" && { ok=1; break; }
-              echo "push attempt $attempt failed (GHCR flakiness); retrying in 10s"
-              sleep 10
-            done
-            [ "$ok" = 1 ] || { echo "::error::push of $tgz failed after 5 attempts"; exit 1; }
+            bash "${CHART_PUSH}" "$tgz" "oci://ghcr.io/${owner}/charts"
           done
 
       - name: Collect the blueprint tarballs (and only those)
