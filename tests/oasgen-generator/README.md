@@ -127,6 +127,101 @@ model, not a defect in the manifest.
 
 ---
 
+# `ironic_power_get_routing_test.go` — is NodePower's `findby` ever consulted?
+
+`manifests/restdefinition-power.yaml` carries a `findby` with a `responseTransform`, an
+`include_children=true` query that took a measurement to find (3 nodes vs 17 on the
+collection), and `identifiersMatchPolicy: OR`. It also carried a comment asserting that
+when that findby does **not** match, "`create` drives the state, which is the only
+outcome that actually powers the node."
+
+That is testable. Observe reaches `findby` only when `IsResourceKnown` is false, and that
+function asks exactly one question — do the `get` verb's path parameters resolve from the
+CR as it stands? There is no "has this been observed before" input.
+
+## The version coordinate, which is easy to get wrong
+
+`rest-dynamic-controller` lives **inside** the oasgen-provider tree at
+`go/rest-dynamic-controller/`. The numbers this repo pins — `KRATEO_RDC_VERSION` and
+`KRATEO_OASGEN_VERSION`, both `0.61.0` — are **oasgen** tags. The standalone
+`krateo-platformops/rest-dynamic-controller` repo stops at **0.20.0** and has no 0.61.0 or
+0.80.0 tag at all, so a run that cloned it looking for those would find nothing, and that
+absence would say nothing about this code. Confirmed against both org spellings
+(`krateo-platformops` has oasgen 0.83.1; `krateoplatformops` is the stale one and stops at
+0.10.0).
+
+## Result, 2026-11-18 — identical at oasgen 0.61.0 and 0.80.0
+
+```
+ARM 1  get present, spec.node_id="blade01"  param="blade01"  known=TRUE
+ARM 2  get ABSENT,  spec.node_id="blade01"                   known=false
+ARM 3  get present, spec.node_id ABSENT     param=""         known=false
+DISCRIM  a param nothing can supply         param=""         known=false
+```
+
+`known=TRUE` on **ARM 1** is on a CR with no status at all, so `findby` is bypassed from
+the first reconcile. The cause is `BuildCallConfig`'s writer order — step 3
+`processFields(specFields)` auto-populates path params from the spec **by name**, before
+step 5 applies any mapping — the same mechanism
+`ironic_provision_get_routing_test.go` measured from the other direction.
+
+## The two arms that make it a measurement rather than a claim
+
+`findby` is reachable only if one of two conditions holds, and **neither holds today**:
+
+| | condition | when it last held | arm |
+|---|---|---|---|
+| (i) | no `get` verb | before 2026-11-08 | ARM 2 |
+| (ii) | no `spec.node_id` | below oasgen 0.52.0 (#421) | ARM 3 |
+
+**(ii) is why the dated measurements in the manifest are correct as written and must not
+be "fixed".** On 2026-11-07 and 2026-11-08 the cluster ran an oasgen below 0.52.0, where
+`spec.node_id` was suppressed — measured ABSENT at 0.50.0 and PRESENT at 0.59.0 with
+`spec.target` present at both as the control, in `ironic_power_spec_test.go` above. So the
+get was unbuildable, Observe really did fall to `findby`, and `create` really did dispatch,
+which is what `evidence/blade06-rdc-log-2026-11-05.jsonl` records (`op=Create`, refusing
+the unresolved `{node_id}`). Nothing in this file contradicts those readings; the pinned
+version moved out from under them.
+
+Without ARM 3 the finding would have been attributed to the `get` verb alone, which is
+wrong in a way that matters: it would have made a *downgrade* look safe.
+
+## What it does NOT measure
+
+That `create` is unreachable too. `GET /v1/nodes/{node_id}` answers 200 for any node that
+exists, which would make `ResourceExists=true` and leave `get`+`update` driving the kind —
+but that is an inference from Ironic's endpoint behaviour, and this harness never performs
+the GET. The arms must not be cited for the create half.
+
+## The discriminator is not optional, for the same reason as provision's
+
+Three of four arms answer `false`, so a broken instrument would look like a finding here
+rather than like agreement. `TestIronicPowerGetVerbRoutingDiscriminator` exists to come
+back `false` because the path param **cannot** be supplied — `spec.node_id` is present but
+differently named, so step 3 has nothing to match. If it ever reads `true`,
+`ValidateRequest` is ignoring params and every arm in the file is vacuous. It uses its own
+`powerParamCheckingClient` rather than sharing provision's helper, so each file can be run
+alone.
+
+## Reproducing it
+
+```
+git clone https://github.com/krateo-platformops/oasgen-provider.git /tmp/ogp
+cd /tmp/ogp
+for v in 0.61.0 0.80.0; do
+  git worktree add --detach /tmp/ogp-$v "$v"
+  cp <this repo>/tests/oasgen-generator/ironic_power_get_routing_test.go \
+     /tmp/ogp-$v/go/rest-dynamic-controller/internal/tools/client/builder/
+  (cd /tmp/ogp-$v/go/rest-dynamic-controller && \
+     go test ./internal/tools/client/builder/ -run TestIronicPowerGetVerbRouting -count=1 -v)
+done
+```
+
+`-count=1` matters: these tests read nothing at runtime, but the suite next door does, and
+a cached pass there has already been mistaken for a fresh one.
+
+---
+
 # `ironic_action_only_warning_test.go` — the arms oasgen asked for (#625 / #629)
 
 oasgen-provider asked this repo for a consumer-side regression arm and said they would

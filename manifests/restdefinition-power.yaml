@@ -45,7 +45,59 @@ spec:
   resourceGroup: baremetal.ogen.krateo.io
   resource:
     kind: NodePower
-    # MECHANISM, MEASURED 2026-11-07. findby never matches, which is what this
+    # ====================================================================
+    # MEASURED 2026-11-18: THIS KIND'S `findby` IS NEVER CONSULTED, AND THE
+    # REASON IS THE OASGEN VERSION, NOT THE VERB SET.
+    #
+    # Observe reaches `findby` only when IsResourceKnown is false, and that
+    # function asks ONE thing: do the `get` verb's path parameters resolve
+    # from the CR as it stands? Not "has this CR been observed before" --
+    # there is no such input. BuildCallConfig step 3 auto-populates path
+    # params from the spec BY NAME before any mapping runs, so {node_id} is
+    # filled from spec.node_id on the FIRST reconcile.
+    #
+    # tests/oasgen-generator/ironic_power_get_routing_test.go, run against
+    # the nested rest-dynamic-controller at BOTH oasgen 0.61.0 and 0.80.0,
+    # identical results:
+    #
+    #   ARM 1  get present, spec.node_id="blade01"  param="blade01"  known=TRUE
+    #   ARM 2  get ABSENT,  spec.node_id="blade01"                   known=false
+    #   ARM 3  get present, spec.node_id ABSENT     param=""         known=false
+    #   DISCRIM  a param nothing can supply         param=""         known=false
+    #
+    # So findby is reachable only when ONE OF TWO conditions holds, and
+    # neither holds today:
+    #   (i)  no `get` verb                 -- true before 2026-11-08 (ARM 2)
+    #   (ii) no `spec.node_id`             -- true below oasgen 0.52.0 (ARM 3)
+    #
+    # (ii) is why the dated measurements further down this file are CORRECT
+    # AS WRITTEN and must not be "fixed": on 2026-11-07 and 2026-11-08 this
+    # cluster ran an oasgen below 0.52.0, where #421 suppressed spec.node_id
+    # (measured ABSENT at 0.50.0, PRESENT at 0.59.0, with spec.target present
+    # at both as the control -- ironic_power_spec_test.go). The get was
+    # unbuildable, Observe really did fall to findby, and `create` really did
+    # dispatch -- which is what evidence/blade06-rdc-log-2026-11-05.jsonl
+    # records. The repo now pins oasgen 0.61.0, so that era is over.
+    #
+    # WHAT THIS MEANS FOR WHAT IS WRITTEN BELOW: the findby's
+    # responseTransform, its `include_children=true` query and its
+    # `identifiersMatchPolicy: OR` are all on a path that cannot execute at
+    # the pinned version. They are kept, not deleted, because (i) and (ii)
+    # are both version-shaped and a downgrade or a regenerated CRD brings
+    # the path back. Deleting them would turn a recoverable downgrade into a
+    # structurally blind one: the `include_children=true` query in particular
+    # took a measurement to find (3 nodes vs 17 on the collection) and nothing
+    # would re-derive it.
+    #
+    # NOT MEASURED HERE, and do not cite the arms for it: GET
+    # /v1/nodes/{node_id} answers 200 for any node that exists, which would
+    # make ResourceExists=true and `create` unreachable too, leaving
+    # get+update to drive the kind. That step is an inference from Ironic's
+    # endpoint behaviour; the harness never performs the GET.
+    # ====================================================================
+    #
+    # MECHANISM, MEASURED 2026-11-07, ON THE PRE-0.52.0 SHAPE (see above).
+    # findby never matches, which is what this
     # design wants (one PUT, then the 202 Pending condition suppresses
     # re-fire). Three different reasons have been written here; this is the
     # first one that was read off the cluster rather than reasoned about.
@@ -123,7 +175,9 @@ spec:
     #
     # THE GUARD IS NOW MEASURED, 2026-11-07. Until today "the 202 Pending condition
     # suppresses re-fire" was asserted, not observed -- and oasgen #485 is the same
-    # code path (unmatched findby -> absence -> create), so a failure here would be a
+    # code path (unmatched findby -> absence -> create, the live path ON THIS DATE
+    # at the then-pinned oasgen; see the MEASURED 2026-11-18 block), so a failure
+    # here would be a
     # duplicate power PUT. Full rdc log, 335 lines, 6 live NodePower CRs:
     #
     #   323 "event":"observe"   318 "External resource is up to date"
@@ -554,9 +608,17 @@ spec:
         # lift `target` from, an absent key reads as "no difference", no PUT
         # fired, and the CR reported **Ready=True/Available** with status holding
         # only node_id and uuid -- a FALSE GREEN claiming convergence while the
-        # node was unpowered. Not matching instead means ResourceExists=false and
-        # `create` drives the state, which is the only outcome that actually
-        # powers the node.
+        # node was unpowered.
+        #
+        # The sentence that stood here until 2026-11-18 -- "not matching
+        # instead means ResourceExists=false and `create` drives the state,
+        # which is the only outcome that actually powers the node" -- was
+        # true of the shape measured on 2026-11-08 and is FALSE at the
+        # pinned oasgen. findby is not consulted at all now, so its
+        # matching or not drives nothing; `update` powers the node. The
+        # guard below is kept because it is correct for the path, not
+        # because the path runs. See the MEASURED 2026-11-18 block at the
+        # top of this file.
         responseTransform:
           inline: 'if (.name and .power_state) then .node_id = .name else . end'
         # v2026-11-04: Ironic's node COLLECTION omits child nodes unless asked.
@@ -573,9 +635,17 @@ spec:
       # THE GET VERB, added 2026-11-08 because findby cannot see what the
       # comparison needs. Measured: GET /v1/nodes returns 7 fields and no
       # target_power_state; GET /v1/nodes/<id> returns 69 and does. restResources
-      # picks `get` for a known resource and `findby` before it is known, so this
-      # is the verb that decides drift once a CR has been observed once -- and it
-      # is the shape restdefinition-node.yaml has used all along.
+      # picks `get` whenever IsResourceKnown is true -- and for this kind that is
+      # the FIRST reconcile, not "once a CR has been observed once": the test
+      # above shows known=true on a CR with no status at all, because step 3
+      # fills {node_id} from spec.node_id. So there is no "before it is known"
+      # window for NodePower and this verb decides drift from the start. It is
+      # the shape restdefinition-node.yaml has used all along.
+      #
+      # This comment said "`findby` before it is known ... once a CR has been
+      # observed once" until 2026-11-18. That framing invents an observation
+      # counter IsResourceKnown does not have, and it is what kept the dead
+      # findby below looking live.
       #
       # Both lifts belong here: node_id so the comparison addresses the right
       # fields, and target from target_power_state when a transition is in
@@ -647,9 +717,16 @@ spec:
       #
       # Same endpoint as `create`, which reads oddly and is correct: Ironic has
       # no create/update distinction for power, only "drive to this state".
-      # `create` is kept rather than deleted because findby can still fail to
-      # match -- a node absent from the collection, or renamed in Ironic -- and
-      # that path must still drive the state rather than do nothing.
+      # `create` is kept rather than deleted -- but NOT for the reason written
+      # here until 2026-11-18 ("because findby can still fail to match -- a node
+      # absent from the collection, or renamed in Ironic -- and that path must
+      # still drive the state"). At the pinned oasgen findby is not consulted, so
+      # it cannot fail to match, and a create reached only through an unmatched
+      # findby is unreachable with it. The honest reason to keep it: the two
+      # conditions that revive the findby path are version-shaped (no get verb,
+      # or no spec.node_id below 0.52.0), and on either of them `create` is the
+      # verb that drives the state. Deleting it would make a downgrade silently
+      # inert instead of merely slow.
       #
       # requestTransform pins the body instead of trusting RDC's diff to contain
       # exactly the right keys. Ironic's power endpoint takes {"target": ...}
