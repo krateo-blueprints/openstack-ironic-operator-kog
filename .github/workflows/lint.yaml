@@ -14,13 +14,19 @@ jobs:
   # cross-org `secrets: inherit`, which passes NOTHING across organisations while the called
   # workflow reads every secret as '' and may report success on having done nothing.
   #
-  # At 1.2.0 this reported only rule 9. 1.4.0 adds rule 14 and the inherit check, and its summary
-  # counts floats, cross-org inherits, shared-action uses and bare pushes beside the unpinned count
-  # -- so an exemption that quietly spreads shows up in CI output rather than only in a file.
+  # At 1.2.0 this reported only rule 9. 1.4.0 added rule 14 and the inherit check; 1.4.2 also reads
+  # every *.sh, *.mk and Makefile for a bare push -- a workflow-only check could not see a push
+  # moved into a script -- and notices a dated `# main` pin into a repository that now HAS tags,
+  # which is the pin that has stopped being transitional without anyone noticing.
+  #
+  # Its summary counts floats, cross-org inherits, shared-action uses, bare pushes, scripts scanned
+  # and stale dated pins beside the unpinned count. That is the part worth having: a count makes an
+  # exemption that quietly spreads visible in CI output, and `N script(s) scanned` is what tells you
+  # the file-reading half ran at all rather than globbing nothing and reporting zero.
   pinned-uses:
     permissions:
       contents: read
-    uses: krateo-blueprints/charts/.github/workflows/pinned-uses.yaml@ae27682c30cf6a005e03e77bc18a3f9a194db6ed # 1.4.0
+    uses: krateo-blueprints/charts/.github/workflows/pinned-uses.yaml@aea92de356085f50ea45477a4e6ae2b026cd6b14 # 1.4.2
 
   lint-docs:
     uses: krateo-platformops/.github/.github/workflows/lint-docs.yaml@e1d3e99215e80ae56eca4a67e9e061b2c73168b8 # 1.0.0
