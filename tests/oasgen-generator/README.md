@@ -396,3 +396,99 @@ changing it does not invalidate the cache. Two arms that genuinely differed both
 2264 until `-count=1` was added. Any arm here that varies a file the test reads rather than
 compiles MUST pass `-count=1`, and should print something that proves which input it saw --
 the occurrence count above is there for that reason.
+
+# `ironic_mapping_source_routing_test.go` — my own condition was too narrow
+
+`ironic_power_get_routing_test.go` measured that NodePower's `findby` is unreachable
+because step 3 of `BuildCallConfig` auto-populates `{node_id}` from `spec.node_id` **by
+name**. I generalised that to the oasgen-provider session as:
+
+> findby is unreachable whenever the get has a path param that matches a spec field BY NAME
+
+**That sentence accounts for two of this repo's seven kinds.** Four more have a get whose
+path param is `uuid` — a name no spec field carries, so step 3 contributes nothing —
+resolved instead at **step 5** by an explicit `requestFieldMapping`:
+
+```
+BaremetalNode   get /v1/nodes/{uuid}             uuid <- spec.name
+Allocation      get /v1/allocations/{uuid}       uuid <- spec.name
+DeployTemplate  get /v1/deploy_templates/{uuid}  uuid <- spec.name
+PortGroup       get /v1/portgroups/{uuid}        uuid <- spec.name
+```
+
+`spec.name` is in `identifiers`, so it is always set and those gets are buildable on
+reconcile 1. **By-name is one of TWO routes to a filled param**, and a static check written
+from my sentence would clear all four as "findby is live" when it is not.
+
+## Result, 2026-11-21 — identical at oasgen 0.61.0 and 0.80.0
+
+```
+ARM M       mapping=spec.name                   status=none   param="blade01"      known=TRUE
+ARM S-PRE   mapping=status.uuid                 status=none   param=""             known=false
+ARM S-POST  mapping=status.uuid                 status=SET    param="6b3f1c2e-..." known=TRUE
+DISCRIM     mapping=spec.nothing_supplies_this                param=""             known=false
+```
+
+Two true, two false, and the same at both tags — so it is a mechanism, not a quirk of one
+version. The corrected condition:
+
+> findby is unreachable whenever **every** path param of the get is resolvable AT
+> RECONCILE 1 — by name at step 3, **or** by a mapping whose `inCustomResource` is a
+> `spec.*` path at step 5. A mapping to `status.*` is NOT resolvable pre-create.
+
+## The two arms that make it a measurement
+
+**ARM M vs ARM S-PRE is the whole experiment.** Identical verb sets, identical single path
+param, no same-named spec field in either arm — the only difference is whether the
+mapping's source is `spec.*` or `status.*`, and the routing flips. Without that pairing,
+ARM M's `known=TRUE` would be consistent with routing by verb table alone.
+
+**ARM S-POST is what stops ARM S-PRE being over-read.** Without it, S-PRE's `false` is
+indistinguishable from "a `status.*` mapping source never works". With it, Port's findby is
+pinned as reachable *only* on reconciles before its status carries a uuid — so
+findby-reachability is not a property of the kind, and a screen that latches it is wrong
+half the time.
+
+**And the discriminator stays.** A param nothing can supply must come back empty, or
+ARM S-PRE means only "something was missing" rather than "this specific source did not
+resolve". It is the arm a reader will want to delete as redundant.
+
+## So findby fires for exactly two of the seven kinds, for two different reasons
+
+`Port` has a get and still reaches findby, because its get resolves from `status.uuid`.
+`NodeProvision` reaches findby because it **declares no get at all**. The other five
+resolve their get from the spec on reconcile 1 and never reach it. Two different
+mechanisms, one outcome — which is why counting "kinds with a findby" says nothing.
+
+## The run that reported PASS having executed nothing
+
+The first attempt ran `go test .` from the **module root**, `go/rest-dynamic-controller`.
+The arms live in `internal/tools/client/builder/`. Both tags came back **exit 0**:
+
+```
+0.61.0   ?    github.com/krateo-platformops/rest-dynamic-controller   [no test files]
+0.80.0   ok   github.com/krateo-platformops/rest-dynamic-controller   [no tests to run]   PASS
+```
+
+**One of them literally says PASS.** The VOID guards in the runner checked that the package
+directory existed and that `mockUnstructuredClient` was present — both true — and never
+that a test had run. The runner now `cd`s into the package and refuses to report unless at
+least four arm log lines appear in the output. Two outcomes were not enough: a run that
+looked at nothing has to be distinguishable from a run that looked and agreed.
+
+## Reproducing it
+
+```sh
+git clone https://github.com/krateo-platformops/oasgen-provider.git /tmp/ogp && cd /tmp/ogp
+git fetch --tags
+for v in 0.61.0 0.80.0; do
+  git worktree add --detach /tmp/ogp-$v "$v"
+  cp tests/oasgen-generator/ironic_mapping_source_routing_test.go \
+     /tmp/ogp-$v/go/rest-dynamic-controller/internal/tools/client/builder/
+  (cd /tmp/ogp-$v/go/rest-dynamic-controller/internal/tools/client/builder && \
+     go test . -run TestIronicMappingSource -v -count=1)
+done
+```
+
+Run it from **inside the package**, not the module root, and check the four arm lines are
+in the output before believing the verdict.
