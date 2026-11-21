@@ -854,6 +854,35 @@ spec:
       # rather than counted, because a zero beside a zero control is an absence of
       # instrument. So there is nothing to wire to and no version to pin.
       #
+      # EXTENDED 2026-11-21. Still absent, and now with a reading from the other side
+      # of the fence as well. Measured here against two checked-out worktrees, each
+      # row carrying TWO live positive controls in the same command:
+      #
+      #   0.61.0  restsAtNotReady=0  IsResourceKnown=7  identifiers=76
+      #   0.80.0  restsAtNotReady=1  IsResourceKnown=9  identifiers=87
+      #
+      # THE 0.80.0 ROW IS NOT THE FIELD ARRIVING, and the one file matters: it is
+      # `docs/log.md`, oasgen's own changelog, quoting THIS repo's arm7 report and
+      # naming the field as a PROPOSED fix -- "the fix is for `restsAtNotReady` to
+      # suppress it". Documentation of an intention, in a file that is not code.
+      # `restsAtNotReadyEffective` is 0 at both tags.
+      #
+      # RELAYED, not measured here (oasgen-provider session, 2026-11-21): zero
+      # non-test files on their `origin/main` and at tag `0.85.0`, and zero
+      # occurrences of `restsAtNotReadyEffective` anywhere in their repo, with
+      # `identifiers` as their control. Their filter excluded docs, which is why
+      # their 0 and this file's 1 agree rather than conflict.
+      #
+      # SO BOTH HALVES OF THIS CONTRACT ARE UNBUILT, and each was found separately:
+      # line 253 above already records that core-provider does not read
+      # `restsAtNotReadyEffective`. Now rdc does not publish it either, and the
+      # declaration itself does not exist. A two-party contract can be wrong at BOTH
+      # ends while reading as verified, because each half corroborates the other --
+      # and mutual corroboration between documents is the same claim counted twice,
+      # not evidence. The "RESOLVED 2026-11-15: rdc WILL PRODUCE THE REASON" note at
+      # line 256 is a commitment, not a shipped behaviour; 12+ tags have been cut
+      # since and nothing has landed. Read it as intent with a date, not as contract.
+      #
       # DO NOT ADD IT EARLY -- it fails in the one way that looks like success. An
       # undeclared field is pruned by the apiserver SILENTLY: the RestDefinition
       # applies cleanly, the apply reports configured, and the value is simply
