@@ -1024,7 +1024,8 @@ def check_kubeconfig_isolation(root=None):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--self-test", action="store_true",
+    # both spellings accepted; dest stays `self_test` (first long option wins).
+    ap.add_argument("--self-test", "--selftest", action="store_true",
                     help="prove the check can still fail, then exit")
     args = ap.parse_args()
 

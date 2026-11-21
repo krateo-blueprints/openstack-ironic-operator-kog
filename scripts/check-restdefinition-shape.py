@@ -1734,7 +1734,11 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--manifests", default="manifests/restdefinition-*.yaml")
     ap.add_argument("--oas-dir", default="oas")
-    ap.add_argument("--selftest", action="store_true")
+    # both spellings: this repo uses --selftest on some screens and --self-test on
+    # others. argparse already REFUSES an unrecognised flag, which is what the
+    # `in sys.argv` screens could not do -- the alias removes the trap that made the
+    # refusal necessary. dest stays `selftest` (first long option wins).
+    ap.add_argument("--selftest", "--self-test", action="store_true")
     ap.add_argument("--oasgen-version", default=None,
                     help="oasgen version to answer for; defaults to the repo's own "
                          "KRATEO_OASGEN_VERSION pin in the Makefile")

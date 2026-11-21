@@ -211,7 +211,8 @@ def selftest():
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--selftest", action="store_true")
+    # both spellings accepted; dest stays `selftest` (first long option wins).
+    ap.add_argument("--selftest", "--self-test", action="store_true")
     a = ap.parse_args()
     if a.selftest:
         sys.exit(selftest())

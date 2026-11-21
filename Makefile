@@ -813,7 +813,7 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 	python3 -I scripts/check-blueprint-metadata.py --self-test && \
 		python3 -I scripts/check-blueprint-metadata.py $(if $(BLUEPRINT_ONLINE),--online,)
 
-check: check-go-fmt check-findby-reachability check-upstream-arm-drift check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set check-chart-version-moved check-chart-version-form check-chart-renders check-release-table check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest check-committed-credentials   # every standing screen
+check: check-screen-flags check-go-fmt check-findby-reachability check-upstream-arm-drift check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set check-chart-version-moved check-chart-version-form check-chart-renders check-release-table check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest check-committed-credentials   # every standing screen
 	@echo "all standing screens passed"
 
 check-findby-reachability:   # a findby verb that can NEVER fire, carrying dead config
@@ -852,6 +852,21 @@ check-upstream-arm-drift:   # the contributed arm still matches the documents it
 # a note, not a contradiction -- a subset is not a false claim.
 	python3 -I scripts/check-upstream-arm-drift.py --self-test && \
 		python3 -I scripts/check-upstream-arm-drift.py
+
+check-screen-flags:   # every screen's mode flag takes both spellings and refuses the rest
+# This repo spelled it `--selftest` on 7 screens and `--self-test` on 11, and the ones
+# testing it with a bare `"--flag" in sys.argv` SILENTLY RAN THE OTHER MODE on a typo
+# and exited 0. That produced two false conclusions in one session on 2026-11-21: a
+# screen reported as "not running its controls" when the flag was merely misspelt, and
+# a second read as failing when argparse had refused the argument.
+#
+# A SOURCE check, deliberately: `make check` already runs all the self-tests, so
+# re-running them here would double the slowest part of the suite to re-learn what it
+# knows. What it cannot know is whether a NEW screen follows the convention. Two live
+# arms are kept because a source check proves the text and not the behaviour -- which
+# is the whole lesson. An unrecognised shape is VOID, not a pass.
+	python3 -I scripts/check-screen-flags.py --self-test && \
+		python3 -I scripts/check-screen-flags.py
 
 check-go-fmt:   # the Go files nothing in this repo compiles
 # tests/oasgen-generator/ and tests/upstream-arms/ hold 8 Go files that NOTHING here

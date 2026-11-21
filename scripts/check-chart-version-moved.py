@@ -279,8 +279,29 @@ def selftest():
     return 1 if failures else 0
 
 
+_WANT_SELFTEST = False
+
 if __name__ == "__main__":
-    if "--selftest" in sys.argv:
+    # MODE FLAGS: both spellings accepted, anything else REFUSED.
+    # This repo spells it `--selftest` on some screens and `--self-test` on others, and a
+    # bare `in sys.argv` test SILENTLY RUNS THE OTHER MODE on a typo, exiting 0. That
+    # produced two false conclusions in one session: a screen was reported as "not running
+    # its controls" when the flag was merely misspelt, and a second was read as failing
+    # when argparse had refused the argument. The argparse-based screens caught it; these
+    # could not.
+    #
+    # Inlined rather than shared because the Makefile runs these under `python3 -I`, which
+    # removes the script's directory from sys.path -- verified, not assumed -- so a sibling
+    # import fails. Six duplicated lines are the price of that isolation.
+    _ALLOWED = {"--self-test", "--selftest"}
+    _unknown = [a for a in sys.argv[1:] if a not in _ALLOWED]
+    if _unknown:
+        sys.stderr.write("usage: %s [%s]\n" % (sys.argv[0], "|".join(sorted(_ALLOWED))))
+        sys.stderr.write("refusing unrecognised argument(s): %s\n" % " ".join(_unknown))
+        sys.stderr.write("a mistyped mode flag would otherwise run the OTHER mode and exit 0.\n")
+        sys.exit(64)
+    _WANT_SELFTEST = bool({"--self-test", "--selftest"} & set(sys.argv[1:]))
+    if _WANT_SELFTEST:
         sys.exit(selftest())
     try:
         sys.exit(run())
