@@ -1143,17 +1143,50 @@ openstack role add --user ironic-publisher --system all member
 openstack --os-system-scope all --os-username ironic-publisher \
   baremetal node show blade01 -f value -c extra
 
-# ... and verify it CANNOT do the things it should not
-openstack --os-system-scope all --os-username ironic-publisher \
-  baremetal node set --driver fake-hardware blade01     # expect 403
-openstack --os-system-scope all --os-username ironic-publisher \
-  baremetal node power off blade01                      # expect 403
+# 4b. ... and verify it CANNOT do the things it should not.
+#     DO NOT RUN THESE BY HAND -- see the correction immediately below.
 ```
 
-Step 4's second half is the part worth not skipping: a scoped credential is only
-scoped if the negative case is checked. `member` at system scope is broader than
-`update_extra` alone, so **measure** what it can reach rather than assuming the
-rule list above is exhaustive.
+#### CORRECTED 2026-11-21: step 4b is a script, and running it by hand can power off a blade
+
+**The commands that used to stand here were:**
+
+```
+baremetal node set --driver fake-hardware blade01     # expect 403
+baremetal node power off blade01                      # expect 403
+```
+
+**Their safety depends entirely on the 403 arriving.** `member` at system scope is
+broader than `update_extra` alone -- which is the very reason this section says to
+measure rather than assume -- so if the grant is wider than expected, the second command
+**powers off a live blade**. Manual power operations on blades are out by standing
+instruction, so a runbook step whose harmlessness is conditional on the result it is
+testing for is the wrong shape.
+
+**Use the script, which keeps the control and drops the destruction:**
+
+```bash
+scripts/verify-publisher-scope.sh --dry-run blade01   # review the exact commands first
+scripts/verify-publisher-scope.sh blade01             # then, with the admin env working
+```
+
+It probes the privileged path with a **no-op** write (`--driver` set to the value the node
+already holds), re-sets one existing `extra` key to its own value for the publisher's
+write probe, reports **NOT PROBED** rather than inventing a key if `extra` is empty, and
+**does not probe power at all** -- there is no no-op form of a power command. It runs both
+VOID gates first, so a 403 counts as scoping only if an unscoped credential is accepted at
+the same moment, and `classify()` separates 403 from 401, 404 and an unreachable endpoint
+so a negative check cannot pass by failing for the wrong reason.
+
+**Why this correction is here and not only in §9.23.** §9.23 has recorded it since
+2026-11-15, roughly 1600 lines further down, under its own heading. A reader working
+through §9.10's numbered steps reaches the commands first and has no reason to go looking.
+A correction a reader reaches after acting on the claim is not a correction -- the same
+defect, and the same fix, as the `RESOLVED` note corrected in-place in #133.
+
+**The principle step 4b was testing still stands:** a scoped credential is only scoped if
+the negative case is checked, and `member` at system scope must be measured rather than
+assumed from the rule list above. The script is how that measurement is taken.
 
 Then set `ironicAuth.username` / `ironicAuth.password` on the KubernetesCluster CR
 to the new user. No chart change is needed — the chart already parameterises
@@ -2722,6 +2755,10 @@ run it against — so every step says what to *read*, not what to expect.
 #### Pre-flight: three readings before anything changes
 
 ```bash
+# SUPERSEDED -- DO NOT COPY-RUN THIS BLOCK. Two of its probes are destructive; see
+# "Corrected 2026-11-15" immediately below. Use scripts/verify-publisher-scope.sh.
+# Kept because the reasoning under reading 3 is the reason the script is shaped as it is.
+
 # 1. which blades are carrying a credential at all, and whose
 openstack baremetal node list -f value -c Name -c UUID
 for n in $(openstack baremetal node list -f value -c Name); do
