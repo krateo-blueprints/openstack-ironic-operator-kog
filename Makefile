@@ -813,8 +813,45 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 	python3 -I scripts/check-blueprint-metadata.py --self-test && \
 		python3 -I scripts/check-blueprint-metadata.py $(if $(BLUEPRINT_ONLINE),--online,)
 
-check: check-go-fmt check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set check-chart-version-moved check-chart-version-form check-chart-renders check-release-table check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest check-committed-credentials   # every standing screen
+check: check-go-fmt check-findby-reachability check-upstream-arm-drift check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set check-chart-version-moved check-chart-version-form check-chart-renders check-release-table check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest check-committed-credentials   # every standing screen
 	@echo "all standing screens passed"
+
+check-findby-reachability:   # a findby verb that can NEVER fire, carrying dead config
+# Observe consults findby only when IsResourceKnown is false, and IsResourceKnown has
+# NO observation counter -- it is a pure function of the current spec. So if the get's
+# path params all resolve at reconcile 1, findby is structurally unreachable and its
+# queries and responseTransform are dead config that looks load-bearing.
+#
+# WHY: NodePower gained a get on 2026-11-08, which silently retired its findby --
+# including an include_children query added after measuring 3 nodes vs 17 on the
+# collection. Nothing noticed for FOUR MONTHS and the manifest asserted the opposite.
+#
+# BY-NAME IS ONE OF TWO ROUTES, which is why this is a screen and not a grep: a param
+# resolves via step 3 (a spec field of the same name) OR step 5 (a mapping to a spec.*
+# path). A mapping to status.* does NOT resolve pre-create -- the only reason Port's
+# findby is reachable and the other five are not. Measured at oasgen 0.61.0 and 0.80.0.
+#
+# A param it cannot classify is VOID, not a pass. Deliberate keeps go in ACCEPTED with
+# a reason, and an ACCEPTED entry matching nothing is itself a failure.
+	python3 -I scripts/check-findby-reachability.py --self-test && \
+		python3 -I scripts/check-findby-reachability.py
+
+check-upstream-arm-drift:   # the contributed arm still matches the documents it copies
+# tests/upstream-arms/ironic_real_definitions_test.go was contributed to oasgen as the
+# over-eagerness arm for #455/#456, and its value rests entirely on being a faithful
+# copy of manifests that change independently. Nothing kept them in step.
+#
+# It cost two stale claims, found 2026-11-21: ports' by-uuid GET gained a mapping at
+# 000f05c (nine days earlier), and excludedSpecFields -- the file's stated premise --
+# is gone from all four manifests. gofmt cannot see either; it reads syntax, not
+# whether a Go literal still matches a YAML document elsewhere.
+#
+# DIVERGENCE IS ALLOWED AND MUST BE DECLARED, with a DATE, the same constraint this
+# repo sent upstream for charts' float exemptions: an exemption a gate cannot verify is
+# the shape that already failed here once. A verb the fixture merely does not model is
+# a note, not a contradiction -- a subset is not a false claim.
+	python3 -I scripts/check-upstream-arm-drift.py --self-test && \
+		python3 -I scripts/check-upstream-arm-drift.py
 
 check-go-fmt:   # the Go files nothing in this repo compiles
 # tests/oasgen-generator/ and tests/upstream-arms/ hold 8 Go files that NOTHING here
