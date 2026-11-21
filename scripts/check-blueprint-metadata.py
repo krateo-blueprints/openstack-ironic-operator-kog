@@ -489,7 +489,18 @@ def self_test():
 
 def main():
     args = sys.argv[1:]
-    if "--self-test" in args:
+    # MODE FLAGS: both spellings, and anything else REFUSED. A bare membership test
+    # silently runs the OTHER mode on a typo and exits 0; see scripts/check-screen-flags.py
+    # for the two false conclusions that produced on 2026-11-21. `--online` is a real
+    # option here, so it is allowed explicitly rather than by accident.
+    _ALLOWED = {"--self-test", "--selftest", "--online"}
+    _unknown = [a for a in args if a not in _ALLOWED]
+    if _unknown:
+        sys.stderr.write("usage: %s [--self-test|--selftest] [--online]\n" % sys.argv[0])
+        sys.stderr.write("refusing unrecognised argument(s): %s\n" % " ".join(_unknown))
+        return 64
+    _WANT_SELFTEST = bool({"--self-test", "--selftest"} & set(args))
+    if _WANT_SELFTEST:
         return self_test()
     online = "--online" in args
 

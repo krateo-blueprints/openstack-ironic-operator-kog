@@ -262,8 +262,19 @@ def selftest():
 
 
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] == "--selftest":
+    # MODE FLAGS: both spellings. This screen also takes a POSITIONAL kubectl
+    # invocation, so unknown arguments cannot be refused wholesale -- but an
+    # unrecognised `--`-prefixed first argument IS refused, because that is the typo
+    # case. Without this, `--self-test` was taken as the kubectl command and failed
+    # obscurely while looking like a cluster problem.
+    _first = sys.argv[1] if len(sys.argv) > 1 else ""
+    if _first in ("--selftest", "--self-test"):
         return selftest()
+    if _first.startswith("--"):
+        sys.stderr.write("usage: %s [--selftest|--self-test] [<kubectl invocation>]\n" % sys.argv[0])
+        sys.stderr.write("refusing unrecognised option: %s\n" % _first)
+        sys.stderr.write("(a positional kubectl command is accepted; an unknown --flag is not)\n")
+        return 64
 
     # The caller passes the full kubectl invocation, so --kubeconfig/--context
     # isolation is preserved and ~/.kube/config is never consulted.
@@ -308,4 +319,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # sys.exit(main()), not bare main(): the success path returns None (exit 0) and
+    # selftest() raises SystemExit("SELFTEST FAILED: ...") on a broken control, which
+    # exits 1 -- VERIFIED by planting a wrong sentinel in a copy and watching the exit
+    # code move to 1, rather than assumed from reading. But a bare call DISCARDS any
+    # return value, which silently swallowed the usage exit 64 added above it.
+    sys.exit(main())
