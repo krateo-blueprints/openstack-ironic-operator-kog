@@ -813,8 +813,24 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 	python3 -I scripts/check-blueprint-metadata.py --self-test && \
 		python3 -I scripts/check-blueprint-metadata.py $(if $(BLUEPRINT_ONLINE),--online,)
 
-check: check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set check-chart-version-moved check-chart-version-form check-chart-renders check-release-table check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest check-committed-credentials   # every standing screen
+check: check-go-fmt check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set check-chart-version-moved check-chart-version-form check-chart-renders check-release-table check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest check-committed-credentials   # every standing screen
 	@echo "all standing screens passed"
+
+check-go-fmt:   # the Go files nothing in this repo compiles
+# tests/oasgen-generator/ and tests/upstream-arms/ hold 8 Go files that NOTHING here
+# builds, vets or formats -- they import another module's internal packages and there
+# is no go.mod, so they are unbuildable by construction and run only when copied into
+# the oasgen tree. That is also why `security / go` and `security / codeql` correctly
+# SKIP on every PR (measured: #125, #126, #127 all skip the same three).
+#
+# So a syntax error or formatting drift in any of them lands on main with all 12
+# checks green and surfaces only when someone next copies the file upstream. gofmt
+# needs no module and no imports, so it is the one part of the toolchain that runs
+# here. It was not hypothetical: one file was ALREADY flagged when this was added.
+#
+# It sees syntax and layout, never types or semantics. See the script's header for
+# what it deliberately does not catch.
+	bash scripts/check-go-fmt.sh --self-test && bash scripts/check-go-fmt.sh
 
 check-committed-credentials:   # no plaintext credential value in any tracked file
 # WHY THIS EXISTS WHEN THE ORG ALREADY SCANS. It does: `security / filesystem` runs
@@ -829,8 +845,10 @@ check-committed-credentials:   # no plaintext credential value in any tracked fi
 # screen FAILS and names all six real instances, including the jump-host password;
 # on main it PASSES. A screen that cannot fail is worth less than no screen.
 #
-# It does NOT read git history. #115's password was public for months and a green
-# run here says nothing about that -- it still needs rotating.
+# It does NOT read git history, and that bound is the point: a green run here says
+# nothing about what earlier commits contained. Scope any claim to what this screen
+# actually measures -- the tracked working tree -- and never read a pass as a
+# statement about history.
 	python3 -I scripts/check-committed-credentials.py --self-test && \
 		python3 -I scripts/check-committed-credentials.py
 

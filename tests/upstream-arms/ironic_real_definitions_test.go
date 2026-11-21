@@ -18,24 +18,45 @@ import "testing"
 // arm over a case that already looks correct is the one most likely to be
 // skipped.
 //
-// ONE ASYMMETRY, verified against the manifests on request and it is load-bearing:
-// `ports` is the only one of the four whose by-uuid GET has NO mapping.
+// ONE ASYMMETRY -- TRUE WHEN WRITTEN 2026-11-05, FALSE SINCE 2026-11-12.
 //
-//   ports            GET /v1/ports/{uuid}            (no mapping)
-//   portgroups       GET /v1/portgroups/{uuid}       uuid <- spec.name
-//   allocations      GET /v1/allocations/{uuid}      uuid <- spec.name
-//   deploytemplates  GET /v1/deploy_templates/{uuid} uuid <- spec.name
+// The sentence here said `ports` is the only one of the four whose by-uuid GET has
+// NO mapping, and called that load-bearing. It was correct at b74777f and stopped
+// being correct nine days later at 000f05c. As shipped TODAY all four carry a
+// mapping on the by-uuid GET, and the real asymmetry is its SOURCE:
 //
-// So `ports`' by-uuid GET is EXACTLY the #455 shape: a required path parameter
-// satisfied only by status (`additionalStatusFields` carries `uuid`), with no
-// mapping. It escapes the #410 guard today only because mappingSuppliedParams
-// is computed across ALL verbs, and the DELETE verb's mapping marks `uuid` as
-// supplied globally.
+//	ports            GET /v1/ports/{uuid}            uuid <- status.uuid   <-- STATUS
+//	portgroups       GET /v1/portgroups/{uuid}       uuid <- spec.name
+//	allocations      GET /v1/allocations/{uuid}      uuid <- spec.name
+//	deploytemplates  GET /v1/deploy_templates/{uuid} uuid <- spec.name
 //
-// That is an accident, not a design. Remove the DELETE verb or its mapping and
-// `uuid` stops being mapping-supplied, enters requiredParameters, the guard
-// refuses the exclusion, and `Port` becomes uncreatable -- with 12 live CRs.
-// #456 is what makes that safe by design rather than by side effect.
+// That source difference is what decides findby reachability, measured at oasgen
+// 0.61.0 AND 0.80.0 in tests/oasgen-generator/ironic_mapping_source_routing_test.go.
+// A `spec.*` source resolves on reconcile 1, so the get is buildable and the findby
+// never fires; `status.uuid` does not exist until a create has published it. So
+// `ports` is the only one of these four whose findby fires at all, and only on its
+// first reconcile.
+//
+// WHY IT WENT STALE IS THE INTERESTING PART: the hazard it predicted HAPPENED. It
+// warned that if `uuid` stopped being mapping-supplied, `Port` would become
+// uncreatable. 000f05c is titled "fix(port): every NEW Port was rejected -- an
+// unmapped path param became a REQUIRED spec field", and the fix was to add exactly
+// the GET mapping above. The warning fired, the fix landed, and the warning was
+// never updated -- so it now reads as a live hazard that has already been addressed,
+// and it UNDERSTATES the protection: `uuid` is mapping-supplied by two verbs now,
+// not one, so removing the DELETE verb's mapping alone no longer exposes it.
+//
+// SECOND STALENESS, and it removes this file's premise. The header above calls these
+// "the four openstack-ironic-operator RestDefinitions that set excludedSpecFields".
+// NONE of them sets it any more, and all four manifests now carry an explicit
+// comment saying so: the exclusion was a NO-OP, because oasgen builds the spec from
+// the *Create* schema and `uuid` was never in it. The fixtures below still declare
+// ExcludedSpecFields with "uuid", a shape this repo no longer ships.
+//
+// So read the fixtures below as a HISTORICAL shape, kept deliberately: #456's risk
+// is exempting too MUCH, and a regression arm over the 2026-11-05 documents is still
+// worth having. What is no longer true is the claim that it mirrors a live consumer,
+// and that claim is the reason this correction is at the top rather than in a note.
 func ironicDefinitions() []struct {
 	name     string
 	resource *ResourceConfig
