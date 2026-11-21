@@ -148,7 +148,7 @@ spec:
         # tests/oasgen-generator/ironic_port_uuid_test.go, both arms in one run --
         #   get UNMAPPED  -> spec.uuid PRESENT, required=true
         #   get MAPPED    -> spec.uuid ABSENT,  required=false
-        requestFieldMapping:
+        fieldMapping:
           - inPath: uuid
             inCustomResource: status.uuid
         headers:
@@ -227,6 +227,6 @@ spec:
           # any port associated with it", three layers from the cause.
           - name: X-OpenStack-Ironic-API-Version
             value: "1.109"
-        requestFieldMapping:
+        fieldMapping:
           - inPath: uuid
             inCustomResource: status.uuid

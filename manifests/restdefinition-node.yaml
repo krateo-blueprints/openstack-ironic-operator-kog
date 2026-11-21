@@ -158,7 +158,7 @@ spec:
             value: "1.109"
         responseTransform:
           inline: 'if (.driver_info | type) == "object" then .driver_info |= del(.redfish_password) else . end'
-        requestFieldMapping:
+        fieldMapping:
           # Ironic accepts the node NAME as the {ident} in /v1/nodes/{ident}, so map the
           # path param to spec.name (always known) instead of the uuid (unknown until
           # after create). This makes observe = GET /v1/nodes/<name> -> 404 (create) or 200.
@@ -210,9 +210,16 @@ spec:
         # internal/tools/fieldmapping/fieldmapping.go:10-13 and 21-24), so the field would
         # never reach the outgoing body and the password would silently stop shipping.
         #
-        # `fieldMapping`, not the `requestFieldMapping` used by the other verbs here: the
-        # latter is deprecated and "carries no value transform" (oasgen types.go:591-595),
-        # so it cannot hold a resolver at all.
+        # `fieldMapping`, which this entry needed before the rest of the file had it: the
+        # deprecated `requestFieldMapping` "carries no value transform" (oasgen
+        # types.go:591-595), so it cannot hold a resolver at all.
+        #
+        # UPDATED 2026-11-21: this used to read "not the `requestFieldMapping` used by the
+        # other verbs here", which stopped being true in the same commit that added this
+        # line -- all 14 remaining verbs across the seven RestDefinitions migrated once
+        # oasgen's own equivalence arms pinned the two fields identical, measured at 0.61.0
+        # (the pinned version) and 0.80.0, not only at their main. So this is no longer the
+        # exception; the reason it was one still holds and is why it is stated.
         fieldMapping:
           - inBody: driver_info.redfish_password
             # NO inCustomResource, AND THAT IS THE FIX -- MEASURED, NOT REASONED.
@@ -281,7 +288,11 @@ spec:
         # Migrated from `requestFieldMapping` so this verb carries ONE list: the resolver
         # below cannot live on the deprecated field. Semantically identical -- oasgen
         # treats each requestFieldMapping entry "as an equivalent request-direction
-        # FieldMappingItem at load time" (types.go:591-593).
+        # FieldMappingItem at load time" (types.go:591-593), which oasgen's own
+        # equivalence arms now PIN rather than merely assert: identical requests across
+        # Parameters, Query, Headers, Cookies and Body, with the current field winning on
+        # conflict. "Migrated" no longer distinguishes this verb -- every verb in the
+        # repo is on `fieldMapping` as of 2026-11-21.
         fieldMapping:
           - inPath: uuid
             inCustomResource: spec.name
@@ -308,7 +319,7 @@ spec:
         headers:
           - name: X-OpenStack-Ironic-API-Version
             value: "1.109"
-        requestFieldMapping:
+        fieldMapping:
           # Ironic accepts the node NAME as the {ident} in /v1/nodes/{ident}, so map the
           # path param to spec.name (always known) instead of the uuid (unknown until
           # after create). This makes observe = GET /v1/nodes/<name> -> 404 (create) or 200.

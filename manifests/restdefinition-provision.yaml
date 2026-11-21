@@ -982,6 +982,6 @@ spec:
         headers:
           - name: X-OpenStack-Ironic-API-Version
             value: "1.109"
-        requestFieldMapping:
+        fieldMapping:
           - inPath: node_id
             inCustomResource: spec.node_id

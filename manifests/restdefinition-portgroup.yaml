@@ -72,7 +72,7 @@ spec:
       - action: get
         method: GET
         path: /v1/portgroups/{uuid}
-        requestFieldMapping:
+        fieldMapping:
         - inPath: uuid
           inCustomResource: spec.name
         headers:
@@ -87,7 +87,7 @@ spec:
       - action: delete
         method: DELETE
         path: /v1/portgroups/{uuid}
-        requestFieldMapping:
+        fieldMapping:
         - inPath: uuid
           inCustomResource: spec.name
         headers:
