@@ -86,11 +86,6 @@ def path_params(p):
 def classify_param(param, mapping, identifiers):
     """-> ('spec'|'status'|'unknown', explanation)"""
     src = mapping.get(param)
-    if src and src.startswith("__AMBIGUOUS__"):
-        return "unknown", (
-            "mapped by BOTH fieldMapping and requestFieldMapping to different sources "
-            "(%s); which takes precedence is unmeasured, so this is not classified"
-            % src[len("__AMBIGUOUS__"):])
     if src:
         if src.startswith("spec."):
             return "spec", "mapping -> %s (step 5, resolves at reconcile 1)" % src
@@ -146,19 +141,35 @@ def audit(root="."):
         #
         # Step 5 applies BOTH, so for "is this param resolvable at reconcile 1" the
         # union is what matters, not a preference.
-        mapping = {}
-        for key in ("fieldMapping", "requestFieldMapping"):
+        mapping, conflicts = {}, []
+        # deprecated FIRST, current SECOND, mirroring builder.go:192-193 so the same
+        # last-write-wins order applies here as on the wire.
+        for key in ("requestFieldMapping", "fieldMapping"):
             for e in (g.get(key) or []):
                 ip, src = e.get("inPath"), e.get("inCustomResource")
                 if ip is None:
                     continue
+                # PRECEDENCE, MEASURED at oasgen origin/main 2026-11-21 rather than
+                # inferred -- and my inference was backwards before I read it:
+                #
+                #   builder.go:192  applyRequestFieldMapping(...)  // deprecated, FIRST
+                #   builder.go:193  applyFieldMapping(...)         // current,    SECOND
+                #   builder.go:261  Parameters[mapping.InPath] = strVal   (no guard)
+                #   builder.go:425  Parameters[inPathSegments[0]] = str   (no guard)
+                #
+                # Both assign directly, so LAST WRITE WINS and the CURRENT field
+                # overrides the deprecated one. ("Avoid overwriting existing values" at
+                # :657 guards step 3's auto-populate only, which is why step 5 beats it.)
+                #
+                # So `fieldMapping` is iterated SECOND here and overwrites. An earlier
+                # version of this screen returned VOID on a conflict, which was honest
+                # while the precedence was unmeasured and is not any more: VOID should
+                # mean "cannot tell", and this can be told. The conflict is still
+                # surfaced, because declaring both fields with different sources for one
+                # param is almost certainly unintended.
                 if ip in mapping and mapping[ip] != src:
-                    # Both fields map the same param to DIFFERENT sources. Which wins is
-                    # a precedence detail this screen has not measured, and guessing it
-                    # in the permissive direction is how a screen reports clean.
-                    mapping[ip] = "__AMBIGUOUS__%s|%s" % (mapping[ip], src)
-                else:
-                    mapping.setdefault(ip, src)
+                    conflicts.append((ip, mapping[ip], src))
+                mapping[ip] = src
         params = path_params(g.get("path"))
         if not params:
             voids.append((f, "the get's path %r declares no {param}; cannot classify"
@@ -175,6 +186,10 @@ def audit(root="."):
         if unknown:
             voids.append((f, "cannot classify every get param: " + "; ".join(why)))
             continue
+        for ip, dep, cur in conflicts:
+            why.append("NOTE {%s}: declared on BOTH fields (requestFieldMapping=%s, "
+                       "fieldMapping=%s); the current field wins per builder.go:192-193, "
+                       "and declaring both is almost certainly unintended" % (ip, dep, cur))
         rows.append((f, kind, blocked, "; ".join(why), dead_sub, dead_min))
     return files, rows, voids
 
@@ -317,7 +332,7 @@ SELFTEST = {
             {"action": "get", "method": "GET", "path": "/v1/widgets/{uuid}",
              "fieldMapping": [{"inPath": "uuid", "inCustomResource": "spec.name"}],
              "requestFieldMapping": [{"inPath": "uuid", "inCustomResource": "status.uuid"}]},
-        ]}}}, 2),
+        ]}}}, 1),   # resolves to fieldMapping (spec.name) per the measured precedence
     # a param neither mapped nor an identifier -> UNCLASSIFIABLE -> VOID, not a pass
     "unclassifiable_param": ({
         "spec": {"resource": {"kind": "Widget", "identifiers": ["name"], "verbsDescription": [
