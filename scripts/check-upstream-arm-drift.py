@@ -103,8 +103,19 @@ def parse_manifest(path):
     r = ((d or {}).get("spec") or {}).get("resource") or {}
     verbs = {}
     for v in r.get("verbsDescription") or []:
-        mapping = {e.get("inPath"): e.get("inCustomResource")
-                   for e in (v.get("requestFieldMapping") or [])}
+        # BOTH KEYS. `requestFieldMapping` is deprecated in favour of the unified
+        # `fieldMapping`, and this repo migrated all 14 verbs on 2026-11-21. Reading only
+        # the deprecated one made this screen report SIX FABRICATED contradictions
+        # (manifest='none' for mappings that exist under the other key) -- and it still
+        # PASSED, because the dated marker absorbed them. A real contradiction would have
+        # been buried among the invented ones, which is worse than failing.
+        #
+        # Third screen in one day to need this fix. Two were written the same morning and
+        # only one was corrected first; see the count-the-copies note.
+        mapping = {}
+        for _k in ("requestFieldMapping", "fieldMapping"):
+            for e in (v.get(_k) or []):
+                mapping[e.get("inPath")] = e.get("inCustomResource")
         verbs[(v.get("action"), v.get("path"))] = mapping
     esf = r.get("excludedSpecFields")
     return {
@@ -219,6 +230,27 @@ if __name__ == "__main__":
         print("  %s POSITIVE CONTROL: marker stripped -> expected 1, got %d"
               % ("ok   " if rc == 1 else "FAIL ", rc))
         fails |= 0 if rc == 1 else 1
+        # ARM 2b: THE FIELD-NAME ARM. The same manifests with every `fieldMapping` key
+        # renamed back to the deprecated `requestFieldMapping` must yield the IDENTICAL
+        # contradiction count. If it does not, this screen is measuring the field name
+        # rather than the mapping -- which is exactly the bug this arm was added for.
+        import re as _re
+        tmp2 = tempfile.mkdtemp()
+        os.makedirs(os.path.join(tmp2, os.path.dirname(ARM)), exist_ok=True)
+        os.makedirs(os.path.join(tmp2, "manifests"), exist_ok=True)
+        open(os.path.join(tmp2, ARM), "w", encoding="utf-8").write(src)
+        for _n, _mp in FIXTURE_TO_MANIFEST.items():
+            _txt = open(os.path.join(root, _mp), encoding="utf-8").read()
+            _txt = _re.sub(r"^(\s*)fieldMapping:(\s*)$", r"\1requestFieldMapping:\2",
+                           _txt, flags=_re.M)
+            open(os.path.join(tmp2, _mp), "w", encoding="utf-8").write(_txt)
+        _t2, _d2, _v2, _n2 = audit(tmp2)
+        _tr, _dr, _vr, _nr = audit(root)
+        same = (not _v2) and (not _vr) and len(_d2 or []) == len(_dr or [])
+        print("  %s field-name arm: deprecated-key copy gives %d contradiction(s), "
+              "current gives %d" % ("ok   " if same else "FAIL ", len(_d2 or []), len(_dr or [])))
+        fails |= 0 if same else 1
+
         # ARM 3: VOID CONTROL -- the Go literals gone -> must be VOID, not a pass
         open(os.path.join(tmp, ARM), "w", encoding="utf-8").write("package x\n// nothing here\n")
         rc = report(tmp)
@@ -228,6 +260,6 @@ if __name__ == "__main__":
         if fails:
             print("SELF-TEST FAILED")
             sys.exit(2)
-        print("SELF-TEST: 3/3 assertions passed")
+        print("SELF-TEST: 4/4 assertions passed")
         sys.exit(0)
     sys.exit(report(root))

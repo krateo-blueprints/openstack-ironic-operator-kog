@@ -1680,17 +1680,41 @@ def selftest():
         cases.append(("Port as shipped (get mapped): uuid NOT actionable", not _fixed))
         if _fixed:
             failures.append("the shipped Port shape produced an actionable uuid row: %s" % _fixed)
-        # the pre-fix shape: strip the get mapping back off
+        # the pre-fix shape: strip the get mapping back off.
+        #
+        # BOTH KEYS, and the removal is ASSERTED. This popped only
+        # `requestFieldMapping` until 2026-11-21, when the repo migrated all 14 verbs to
+        # the unified `fieldMapping`. The pop then removed NOTHING, the "pre-fix" fixture
+        # was byte-identical to the fixed one, uuid was correctly not actionable, and the
+        # arm FAILED with "this check cannot catch the defect it was written for".
+        #
+        # That failure was the right outcome and is why the assertion below exists: a
+        # fixture builder whose removal silently does nothing produces a passing arm over
+        # a state it never constructed. Had this arm merely compared against the fixed
+        # shape it would have gone green and the regression coverage would have been
+        # quietly gone. The screen's own evaluate() already merged both fields; only its
+        # SETUP was key-specific.
         _broken = _c.deepcopy(_prd)
+        _removed = []
         for _v in _broken["spec"]["resource"]["verbsDescription"]:
             if _v.get("action") == "get":
-                _v.pop("requestFieldMapping", None)
-        _rows = [r for r in evaluate(_broken, _poas, "port", (0, 59, 0))
-                 if r[0] == "E" and r[1] == "uuid" and r[3]]
-        cases.append(("Port pre-fix (get unmapped): uuid IS actionable", bool(_rows)))
-        if not _rows:
-            failures.append("the PRE-FIX Port shape was NOT flagged -- this check cannot "
-                            "catch the defect it was written for")
+                for _k in ("requestFieldMapping", "fieldMapping"):
+                    if _v.pop(_k, None) is not None:
+                        _removed.append(_k)
+        if not _removed:
+            cases.append(("Port pre-fix (get unmapped): uuid IS actionable", False))
+            failures.append("VOID: stripping the get mapping removed NOTHING, so the "
+                            "pre-fix fixture was never constructed. Port's get must "
+                            "declare a mapping under one of requestFieldMapping / "
+                            "fieldMapping; if it was renamed again, add the new key here.")
+        else:
+            _rows = [r for r in evaluate(_broken, _poas, "port", (0, 59, 0))
+                     if r[0] == "E" and r[1] == "uuid" and r[3]]
+            cases.append(("Port pre-fix (get unmapped, removed %s): uuid IS actionable"
+                          % ",".join(_removed), bool(_rows)))
+            if not _rows:
+                failures.append("the PRE-FIX Port shape was NOT flagged -- this check cannot "
+                                "catch the defect it was written for")
 
     # the negative control: a clean document must produce NO actionable row
     clean = evaluate(rd(), BASE_OAS, "thing")

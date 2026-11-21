@@ -690,7 +690,7 @@ spec:
         #   both null          -> target = "unknown"  (NEW; was absent)
         responseTransform:
           inline: 'if .name then .node_id = .name else . end | .target = ((.target_power_state // .power_state) // "unknown")'
-        requestFieldMapping:
+        fieldMapping:
           - inPath: node_id
             inCustomResource: spec.node_id
       - action: create
@@ -708,7 +708,7 @@ spec:
         # it. Pinning both is the consistent reading.
         requestTransform:
           inline: '{target: .target} + (if .timeout then {timeout: .timeout} else {} end)'
-        requestFieldMapping:
+        fieldMapping:
           - inPath: node_id
             inCustomResource: spec.node_id
       # THE VERB THE CHART'S "the update RDC already performs" REFERS TO.
@@ -741,6 +741,6 @@ spec:
             value: "1.109"
         requestTransform:
           inline: '{target: .target} + (if .timeout then {timeout: .timeout} else {} end)'
-        requestFieldMapping:
+        fieldMapping:
           - inPath: node_id
             inCustomResource: spec.node_id
