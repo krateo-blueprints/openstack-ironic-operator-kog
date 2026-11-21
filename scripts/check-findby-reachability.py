@@ -126,8 +126,50 @@ def audit(root="."):
                          dead_sub, dead_min))
             continue
         g = gets[0]
-        mapping = {e.get("inPath"): e.get("inCustomResource")
-                   for e in (g.get("requestFieldMapping") or [])}
+        # BOTH FIELDS. `requestFieldMapping` is marked `// Deprecated: use FieldMapping
+        # instead` in oasgen's API types (apis/restdefinitions/v1alpha1/types.go:636)
+        # and mirrored "for backward compatibility" in rdc's getter. This repo is MIXED:
+        # 14 verbs on the deprecated field, 2 on the current one, the latter documented
+        # in restdefinition-node.yaml:213.
+        #
+        # Reading only the deprecated one -- which this screen did when first shipped --
+        # made a migrated manifest VOID rather than classified. Safe direction, but it
+        # would block `make check` the moment a get verb is migrated, and it measured
+        # the wrong field. Found by the oasgen session MUTATION-TESTING the arms this
+        # screen is built on: removing `applyFieldMapping` (the unified path) left them
+        # green, because the fixtures set the deprecated field.
+        #
+        # Step 5 applies BOTH, so for "is this param resolvable at reconcile 1" the
+        # union is what matters, not a preference.
+        mapping, conflicts = {}, []
+        # deprecated FIRST, current SECOND, mirroring builder.go:192-193 so the same
+        # last-write-wins order applies here as on the wire.
+        for key in ("requestFieldMapping", "fieldMapping"):
+            for e in (g.get(key) or []):
+                ip, src = e.get("inPath"), e.get("inCustomResource")
+                if ip is None:
+                    continue
+                # PRECEDENCE, MEASURED at oasgen origin/main 2026-11-21 rather than
+                # inferred -- and my inference was backwards before I read it:
+                #
+                #   builder.go:192  applyRequestFieldMapping(...)  // deprecated, FIRST
+                #   builder.go:193  applyFieldMapping(...)         // current,    SECOND
+                #   builder.go:261  Parameters[mapping.InPath] = strVal   (no guard)
+                #   builder.go:425  Parameters[inPathSegments[0]] = str   (no guard)
+                #
+                # Both assign directly, so LAST WRITE WINS and the CURRENT field
+                # overrides the deprecated one. ("Avoid overwriting existing values" at
+                # :657 guards step 3's auto-populate only, which is why step 5 beats it.)
+                #
+                # So `fieldMapping` is iterated SECOND here and overwrites. An earlier
+                # version of this screen returned VOID on a conflict, which was honest
+                # while the precedence was unmeasured and is not any more: VOID should
+                # mean "cannot tell", and this can be told. The conflict is still
+                # surfaced, because declaring both fields with different sources for one
+                # param is almost certainly unintended.
+                if ip in mapping and mapping[ip] != src:
+                    conflicts.append((ip, mapping[ip], src))
+                mapping[ip] = src
         params = path_params(g.get("path"))
         if not params:
             voids.append((f, "the get's path %r declares no {param}; cannot classify"
@@ -144,6 +186,10 @@ def audit(root="."):
         if unknown:
             voids.append((f, "cannot classify every get param: " + "; ".join(why)))
             continue
+        for ip, dep, cur in conflicts:
+            why.append("NOTE {%s}: declared on BOTH fields (requestFieldMapping=%s, "
+                       "fieldMapping=%s); the current field wins per builder.go:192-193, "
+                       "and declaring both is almost certainly unintended" % (ip, dep, cur))
         rows.append((f, kind, blocked, "; ".join(why), dead_sub, dead_min))
     return files, rows, voids
 
@@ -251,6 +297,42 @@ SELFTEST = {
              "queries": [{"name": "deep", "value": "true"}]},
             {"action": "create", "method": "PUT", "path": "/v1/widgets/{node_id}/x"},
         ]}}}, 0),
+    # THE MIGRATED SHAPE: same as unreachable_with_dead_config but on the CURRENT
+    # field. Must give the IDENTICAL verdict, or the screen measures the field rather
+    # than the mechanism. This arm is the regression test for the bug that shipped.
+    "unreachable_via_current_fieldMapping": ({
+        "spec": {"resource": {"kind": "Widget", "identifiers": ["name"], "verbsDescription": [
+            {"action": "findby", "method": "GET", "path": "/v1/widgets",
+             "queries": [{"name": "deep", "value": "true"}]},
+            {"action": "get", "method": "GET", "path": "/v1/widgets/{uuid}",
+             "fieldMapping": [{"inPath": "uuid", "inCustomResource": "spec.name"}]},
+        ]}}}, 1),
+    # status.* on the CURRENT field must also behave like its deprecated twin
+    "reachable_via_current_status": ({
+        "spec": {"resource": {"kind": "Widget", "identifiers": ["name"], "verbsDescription": [
+            {"action": "findby", "method": "GET", "path": "/v1/widgets",
+             "queries": [{"name": "deep", "value": "true"}]},
+            {"action": "get", "method": "GET", "path": "/v1/widgets/{uuid}",
+             "fieldMapping": [{"inPath": "uuid", "inCustomResource": "status.uuid"}]},
+        ]}}}, 0),
+    # BOTH fields, SAME source -> agree, so classify normally
+    "both_fields_agreeing": ({
+        "spec": {"resource": {"kind": "Widget", "identifiers": ["name"], "verbsDescription": [
+            {"action": "findby", "method": "GET", "path": "/v1/widgets",
+             "queries": [{"name": "deep", "value": "true"}]},
+            {"action": "get", "method": "GET", "path": "/v1/widgets/{uuid}",
+             "fieldMapping": [{"inPath": "uuid", "inCustomResource": "spec.name"}],
+             "requestFieldMapping": [{"inPath": "uuid", "inCustomResource": "spec.name"}]},
+        ]}}}, 1),
+    # BOTH fields, CONFLICTING sources -> precedence unmeasured -> VOID, never a guess
+    "both_fields_conflicting": ({
+        "spec": {"resource": {"kind": "Widget", "identifiers": ["name"], "verbsDescription": [
+            {"action": "findby", "method": "GET", "path": "/v1/widgets",
+             "queries": [{"name": "deep", "value": "true"}]},
+            {"action": "get", "method": "GET", "path": "/v1/widgets/{uuid}",
+             "fieldMapping": [{"inPath": "uuid", "inCustomResource": "spec.name"}],
+             "requestFieldMapping": [{"inPath": "uuid", "inCustomResource": "status.uuid"}]},
+        ]}}}, 1),   # resolves to fieldMapping (spec.name) per the measured precedence
     # a param neither mapped nor an identifier -> UNCLASSIFIABLE -> VOID, not a pass
     "unclassifiable_param": ({
         "spec": {"resource": {"kind": "Widget", "identifiers": ["name"], "verbsDescription": [
