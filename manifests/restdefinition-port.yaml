@@ -2,9 +2,24 @@
 # Apply order:
 #   1. kubectl create configmap ironic-port-oas -n openstack --from-file=ironic_port.yaml=../oas/ironic-port.yaml
 #   2. kubectl apply -f restdefinition-port.yaml
-# Ports have no name (uuid only), so observe uses findby on the `address` (MAC)
-# identifier; get/delete address the created uuid from status. No `update` verb
+# Ports have no name (uuid only), so the FIRST observe uses findby on the `address`
+# (MAC) identifier; get/delete address the created uuid from status. No `update` verb
 # (Ironic PATCH is JSON-Patch-only).
+#
+# "FIRST" is load-bearing, and measured 2026-11-21. This get's {uuid} maps from
+# `status.uuid`, which does not exist until a create has published it, so findby serves
+# the first reconcile and is retired on every one after. It is NOT permanently live, and
+# a screen reporting findby-reachability as a property of the kind is wrong half the time.
+#
+# Of the seven kinds this repo serves, Port is the only one that HAS a `get` and still
+# reaches its findby. NodeProvision also reaches findby, for the different reason that it
+# declares no get at all. The other five -- BaremetalNode, PortGroup, Allocation,
+# DeployTemplate, NodePower -- resolve their get from the spec on reconcile 1 and never
+# reach it.
+#
+# See tests/oasgen-generator/ironic_mapping_source_routing_test.go: ARM S-PRE known=false
+# with no status, ARM S-POST known=TRUE once status.uuid is set, identical at oasgen
+# 0.61.0 and 0.80.0.
 ---
 apiVersion: ogen.krateo.io/v1alpha1
 kind: RestDefinition

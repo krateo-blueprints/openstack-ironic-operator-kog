@@ -101,10 +101,33 @@ spec:
       # a false one. Changing the password still works: it goes out on the next update like
       # any other driver_info field, it just can't be confirmed by reading it back.
       #
-      # Needed on BOTH verbs because exactly one of them produces the observed body
-      # (restResources.go picks `get` for a known resource, `findby` before the uuid is known)
-      # and each normalizes with only its own transforms. findby applies it per list item,
-      # before matching, so the shape is the same in both cases: a single node object.
+      # Declared on BOTH verbs because exactly one of them produces the observed body,
+      # and each normalizes with only its own transforms. findby applies it per list
+      # item, before matching, so the shape is the same in both cases: a single node
+      # object.
+      #
+      # CORRECTED 2026-11-21. The sentence that stood here was wrong the same way
+      # restdefinition-power.yaml's five were: it said rdc "picks `get` for a known
+      # resource, `findby` before the uuid is known". There is no such window for this
+      # kind. IsResourceKnown has NO observation counter -- it is a pure function of the
+      # CURRENT spec -- and BuildCallConfig resolves this get's {uuid} at step 5 from
+      # `spec.name`, which `identifiers` makes mandatory. The get is therefore buildable
+      # on the FIRST reconcile and `findby` is never consulted.
+      #
+      # MEASURED: tests/oasgen-generator/ironic_mapping_source_routing_test.go, at oasgen
+      # 0.61.0 AND 0.80.0, identical at both (so a mechanism, not a version quirk):
+      #   ARM M      {uuid} <- spec.name,    no status   param="blade01"  known=TRUE
+      #   ARM S-PRE  {uuid} <- status.uuid,  no status   param=""         known=false
+      # ARM M is this kind's exact shape. ARM S-PRE is Port's, and it is the control:
+      # same verb set, same single path param, no same-named spec field in either -- the
+      # ONLY difference is whether the mapping's source is spec.* or status.*, and the
+      # routing flips. Reachability is a property of WHERE the param resolves from, not of
+      # whether a mapping exists, and not of name-matching.
+      #
+      # The findby copy of this transform is consequently DEFENSIVE, not load-bearing, and
+      # is kept on purpose: removing it would be a behaviour change on a path that goes
+      # live again the moment this kind loses its get verb or its spec.name mapping, and
+      # that change has not been measured.
       #
       # Upstream as oasgen #309 -- the generic form of this is any API that masks a write-only
       # field on read.
