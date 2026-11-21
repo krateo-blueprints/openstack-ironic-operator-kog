@@ -253,6 +253,19 @@ spec:
       # said core-provider reads `status.restsAtNotReadyEffective`; it does not,
       # and oasgen withdrew that. The status field exists for operators only.
       #
+      # NOT BUILT as of 2026-11-21, and the word "RESOLVED" on the next line is a
+      # COMMITMENT WITH A DATE, not a shipped behaviour. `restsAtNotReady` exists in no
+      # oasgen build and `restsAtNotReadyEffective` is published by nothing -- both
+      # measured, both swept with live positive controls; see the "NOT POSSIBLE YET"
+      # block further down this file. 12+ tags have been cut since the date below.
+      # Read the paragraph that follows as the agreed SHAPE, never as contract.
+      #
+      # This correction is HERE, at the line a reader arrives at, and not only in the
+      # swept block 600 lines away where it was first written. A correction a reader
+      # reaches after the claim has already been believed is not a correction. I gave
+      # the oasgen session exactly this advice about one line in their changelog, and
+      # they applied it in place while mine sat at a distance.
+      #
       # RESOLVED 2026-11-15: rdc WILL PRODUCE THE REASON. Diego confirmed the shape
       # directly (asked rather than taken from the relay, for the reason the next
       # paragraph gives):
