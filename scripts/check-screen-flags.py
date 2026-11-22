@@ -21,6 +21,16 @@ follows the convention, which is a property of the source. So this reads the fil
 Two live arms are kept, one per mechanism, because a source check proves the text and
 not the behaviour -- and the whole lesson above is that those differ.
 
+THOSE LIVE ARMS WERE VACUOUS UNTIL 2026-11-22. They accepted a screen if its output
+matched `self.?test|assertion|\d+ cases|^ *ok +` under both spellings. The REFUSAL path
+prints `usage: ... [--self-test|--selftest]`, which matches that pattern -- so a screen
+that refused one spelling satisfied the arm whose entire purpose is to catch exactly
+that. Measured with a one-spelling screen as a positive control: the arm passed it. The
+arms now require a positive, EQUAL, REPORTED assertion count under both spellings, which
+only a self-test that ran can produce, and that one-spelling screen is kept as a
+permanent synthetic arm -- the real instance was fixed in #137/#138, so without the
+synthetic one nothing here has to fail.
+
 THREE OUTCOMES. A screen whose mechanism cannot be identified at all is VOID, not a
 pass: an unrecognised shape is exactly where the next instance would hide.
 """
@@ -29,8 +39,52 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 
 BOTH = ("--self-test", "--selftest")
+
+# What a self-test REPORTS about itself. Two spellings exist in this repo:
+# `SELF-TEST: 11/11 assertions passed` and `selftest: 57 cases, 0 failure(s)`.
+_COUNT = re.compile(r"(\d+)\s*/\s*\d+\s+assertions passed|(\d+)\s+cases", re.I)
+
+
+def selftest_signature(path, flag):
+    """(exit code, assertions reported) for one screen under one spelling.
+
+    NOT a regex over free text. The refusal path prints a usage line naming BOTH
+    spellings, so a pattern like `self.?test` matches a screen that REFUSED the flag --
+    which is how this arm's predecessor passed a screen accepting only `--self-test`.
+    A positive, reported count is something only a self-test that ran can produce.
+    """
+    r = subprocess.run([sys.executable, "-I", path, flag], capture_output=True, text=True)
+    m = _COUNT.search(r.stdout + r.stderr)
+    if not m:
+        return r.returncode, None
+    return r.returncode, int(next(g for g in m.groups() if g is not None))
+
+
+def live_arm(path):
+    """Run one PYTHON screen under both spellings plus a bogus flag -> (ok, detail).
+
+    Shared by the real arms and by the self-test's synthetic screens, so the positive
+    control exercises the same code path the real arms do rather than a copy of it.
+    Python-only: the shell screens are covered by classify() on their source.
+    """
+    rc_bogus = subprocess.run([sys.executable, "-I", path, "--zz-bogus-flag"],
+                              capture_output=True).returncode
+    rcs, ns = [], []
+    for flag in BOTH:
+        rc, n = selftest_signature(path, flag)
+        rcs.append(rc)
+        ns.append(n)
+    ok = (rc_bogus != 0
+          and all(rc == 0 for rc in rcs)
+          and all(n is not None and n > 0 for n in ns)
+          and ns[0] == ns[1])
+    detail = ("bogus-exit=%-3s exits=%-8s assertions=%s"
+              % (rc_bogus, ",".join(str(x) for x in rcs),
+                 ",".join("none" if n is None else str(n) for n in ns)))
+    return ok, detail
 
 # a screen with no self-test at all is out of scope, and so is one that takes
 # positional arguments rather than a mode flag.
@@ -187,22 +241,67 @@ def self_test():
             print("  VOID  %-46s not present, so this arm measured nothing" % name)
             fails = 1
             continue
-        rc_bogus = subprocess.run([sys.executable, "-I", p, "--zz-bogus-flag"],
-                                  capture_output=True).returncode
-        outs = []
-        for flag in BOTH:
-            r = subprocess.run([sys.executable, "-I", p, flag], capture_output=True, text=True)
-            outs.append(bool(re.search(r"self.?test|assertion|\d+ cases|^ *ok +",
-                                       r.stdout + r.stderr, re.I | re.M)))
-        ok = (rc_bogus != 0) and all(outs)
-        print("  %s %-46s bogus-exit=%-3s self-test ran under both=%s"
-              % ("ok   " if ok else "FAIL ", "LIVE: " + name, rc_bogus, all(outs)))
+        ok, detail = live_arm(p)
+        print("  %s %-46s %s"
+              % ("ok   " if ok else "FAIL ", "LIVE: " + name, detail))
         fails |= 0 if ok else 1
+
+    # ---- the live arm's discriminator, and the arm's own controls ----------
+    def c(label, ok):
+        nonlocal fails
+        print("  %s %s" % ("ok   " if ok else "FAIL ", label))
+        fails |= 0 if ok else 1
+
+    # verbatim from `check-findby-reachability.py --zz-bogus`
+    refusal = ("usage: scripts/check-findby-reachability.py [--self-test|--selftest]\n"
+               "refusing unrecognised argument(s): --zz-bogus\n"
+               "a mistyped mode flag would otherwise run the OTHER mode and exit 0.\n")
+    old_pat = r"self.?test|assertion|\d+ cases|^ *ok +"
+    c("the OLD pattern matched the REFUSAL text (this is why the arm was vacuous)",
+      bool(re.search(old_pat, refusal, re.I | re.M)))
+    c("the count parser finds nothing in that same refusal text",
+      _COUNT.search(refusal) is None)
+    c("count parser reads `SELF-TEST: 11/11 assertions passed` as 11",
+      int(next(g for g in _COUNT.search("SELF-TEST: 11/11 assertions passed").groups()
+               if g is not None)) == 11)
+    c("count parser reads `selftest: 57 cases, 0 failure(s)` as 57",
+      int(next(g for g in _COUNT.search("  selftest: 57 cases, 0 failure(s)").groups()
+               if g is not None)) == 57)
+
+    # PERMANENT SYNTHETIC ARMS. The real one-spelling screens were fixed in #137/#138,
+    # so without these the live arm has no input that must fail.
+    d = tempfile.mkdtemp()
+
+    def screen(fname, allowed, count):
+        q = os.path.join(d, fname)
+        io_lines = [
+            "import sys",
+            "_ALLOWED = {%s}" % ", ".join('"%s"' % a for a in allowed),
+            "_unknown = [a for a in sys.argv[1:] if a not in _ALLOWED]",
+            "if _unknown:",
+            '    sys.stderr.write("usage: %s [--self-test|--selftest]\\n" % sys.argv[0])',
+            "    sys.exit(64)",
+            'print("selftest: %d cases, 0 failure(s)")' % count,
+        ]
+        with open(q, "w") as fh:
+            fh.write("\n".join(io_lines) + "\n")
+        return q
+
+    one = screen("one-spelling.py", ["--self-test"], 3)
+    both = screen("both-spellings.py", ["--self-test", "--selftest"], 3)
+    zero = screen("zero-cases.py", ["--self-test", "--selftest"], 0)
+
+    c("LIVE ARM positive control: refusing ONE spelling is REJECTED", not live_arm(one)[0])
+    c("LIVE ARM negative control: accepting BOTH is accepted", live_arm(both)[0])
+    c("LIVE ARM: a self-test reporting ZERO assertions is REJECTED", not live_arm(zero)[0])
+    c("DISCRIMINATOR: live_arm CAN return both verdicts",
+      live_arm(both)[0] and not live_arm(one)[0])
 
     if fails:
         print("SELF-TEST FAILED")
         return 2
-    print("SELF-TEST: %d/%d assertions passed" % (len(cases) + 2, len(cases) + 2))
+    total = len(cases) + 2 + 8   # classifier cases + 2 live arms + 8 arms added above
+    print("SELF-TEST: %d/%d assertions passed" % (total, total))
     return 0
 
 
