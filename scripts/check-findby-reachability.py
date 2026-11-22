@@ -41,7 +41,14 @@ import os
 import re
 import sys
 
-import yaml
+try:
+    import yaml
+except ImportError:
+    # A missing dependency measured NOTHING. Exit 3 rather than letting the traceback
+    # exit 1, which in this screen family means "findings exist" -- an unavailable
+    # instrument must never be indistinguishable from a result.
+    print("check-findby-reachability: PyYAML missing -- VOID, not a pass", file=sys.stderr)
+    sys.exit(3)
 
 # Config keys ONLY findby reads. `headers` is excluded deliberately: every verb carries
 # the API-version header, so its presence says nothing about findby.

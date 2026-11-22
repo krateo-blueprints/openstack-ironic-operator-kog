@@ -39,7 +39,14 @@ import re
 import sys
 import tempfile
 
-import yaml
+try:
+    import yaml
+except ImportError:
+    # A missing dependency measured NOTHING. Exit 3 rather than letting the traceback
+    # exit 1, which in this screen family means "findings exist" -- an unavailable
+    # instrument must never be indistinguishable from a result.
+    print("check-example-manifests: PyYAML missing -- VOID, not a pass", file=sys.stderr)
+    sys.exit(3)
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

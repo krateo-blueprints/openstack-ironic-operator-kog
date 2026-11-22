@@ -48,7 +48,14 @@ import os
 import re
 import sys
 
-import yaml
+try:
+    import yaml
+except ImportError:
+    # A missing dependency measured NOTHING. Exit 3 rather than letting the traceback
+    # exit 1, which in this screen family means "findings exist" -- an unavailable
+    # instrument must never be indistinguishable from a result.
+    print("check-mapping-sources: PyYAML missing -- VOID, not a pass", file=sys.stderr)
+    sys.exit(3)
 
 # EMPTY as of 2026-11-07, intentionally -- see the docstring. Both mappings it
 # used to list are fine on the stored side now: oasgen 0.54.1 contains #421 and
