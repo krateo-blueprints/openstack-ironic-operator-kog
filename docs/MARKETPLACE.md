@@ -18,10 +18,20 @@ This repo ships **two** Marketplace blueprints:
 
 `baremetal-discovery` and `baremetal-lifecycle` are **not** blueprints and are
 not published to the channel. They are the superseded discovery/lifecycle split
-that `baremetal-host` absorbed into one resource. `hook-rbac-probe` and
-`release-adopt-probe` are throwaway measurement rigs. All four are correctly
-rejected by the channel gate, because none carries an in-chart
-`compositiondefinition.yaml` — the gate is doing its job, not blocking us.
+that `baremetal-host` absorbed into one resource. They live under `charts/`, carry
+`krateo.io/publish: "false"`, and are correctly rejected by the channel gate
+anyway, because neither carries an in-chart `compositiondefinition.yaml` — the
+gate is doing its job, not blocking us.
+
+The two throwaway measurement rigs, `hook-rbac-probe` and `release-adopt-probe`,
+are **not under `charts/` at all**: they live in `tests/charts/`. The org's shared
+release workflow discovers charts by walking the repo and pruning directories
+named `test`/`tests`, so the directory excludes them with no workflow needing to
+read an annotation — one mechanism rather than two. `scripts/check-chart-renders.py`
+renders both roots, deliberately: `hook-rbac-probe`'s whole value is its packaged
+object shape, so a probe that silently stopped being rendered would be a lost
+measurement, not a saved one. The org repository standard asks for `test/charts/`;
+this repo already had `tests/`, and the prune list covers both spellings.
 
 Run `make check-blueprints` before tagging. It reproduces the gate locally and
 covers six further failures the gate passes and the Marketplace then shows.
