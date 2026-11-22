@@ -24,7 +24,14 @@ control proves the instrument fires where it is planted and nowhere else.
 import re
 import sys
 
-import yaml
+try:
+    import yaml
+except ImportError:
+    # A missing dependency measured NOTHING. Exit 3 rather than letting the traceback
+    # exit 1, which in this screen family means "findings exist" -- an unavailable
+    # instrument must never be indistinguishable from a result.
+    print("check-oasgen-path-forms: PyYAML missing -- VOID, not a pass", file=sys.stderr)
+    sys.exit(3)
 
 # Bare string lists: the path IS the list element, there is no leaf key.
 LIST_KEYS = {"identifiers", "additionalStatusFields"}
