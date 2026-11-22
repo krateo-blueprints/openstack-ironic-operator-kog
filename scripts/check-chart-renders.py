@@ -25,6 +25,20 @@ is gated on a live cluster read, so `helm template` offline shows a subset or
 nothing. A chart whose output carries nothing in our API group is reported as VOID
 FOR THAT CHART -- this screen cleared nothing there -- rather than counted as clean.
 kubernetes-cluster is in that state even when rendered from its own lab CR's spec.
+
+TWO ARMS, TWO QUESTIONS. The arm above renders with CHART_VALUES, whose job is to
+reach interesting output. That is not the consumer's question. A second arm renders
+with CHART_GUARD_VALUES -- the minimum that makes a chart emit anything -- and asks
+whether the chart renders FROM ITS OWN values.yaml DEFAULTS. The difference is not
+academic: CHART_VALUES sets `instance_info.image_source`, which turns a null default
+into a map, so `baremetal-lifecycle` rendered cleanly here for months while
+
+    helm template baremetal-lifecycle ./charts/baremetal-lifecycle --set nodeName=x
+
+exited 1 at node.yaml:6, `deepCopy .Values.instance_info | default dict` -- deepCopy
+runs BEFORE default, so `default dict` can never rescue a null. The sibling live chart
+spells it correctly: `deepCopy (.Values.extra | default dict)`. Measured 2026-11-22:
+1 of 3 deepCopy uses in this repo has the broken form, and it is the deprecated one.
 """
 import glob
 import os
@@ -46,6 +60,25 @@ CHART_VALUES = {
                             "instance_info.image_checksum=0"],
     "kubernetes-cluster": ["clusterName=lab", "managementCluster.caBundle=Zm9v",
                            "controlPlane.nodes[0].nodeName=cp1"],
+}
+
+# The MINIMUM --set values that make each chart emit any document at all. Guards
+# only -- never an image source, a checksum or a CA bundle. Measured per chart on
+# 2026-11-22 by counting `kind:` lines: the three probe/cluster charts emit from
+# their own defaults alone, so their guard is empty; the three node charts are
+# wrapped in `if .Values.nodeName` and emit nothing without it.
+#
+# A guard value MUST also appear in that chart's CHART_VALUES, so the two tables
+# cannot describe different worlds; asserted in selftest(). A chart whose guard
+# render emits zero documents is VOID for this arm, never a pass -- that is what
+# keeps this table honest if someone trims it too far.
+CHART_GUARD_VALUES = {
+    "baremetal-discovery": ["nodeName=b1"],
+    "baremetal-host": ["nodeName=b1"],
+    "baremetal-lifecycle": ["nodeName=b1"],
+    "hook-rbac-probe": [],
+    "kubernetes-cluster": [],
+    "release-adopt-probe": [],
 }
 
 
@@ -77,15 +110,57 @@ def served_kinds():
     return out
 
 
-def render(chart_dir):
+def helm_error(stderr):
+    """The line a reader can act on.
+
+    helm prints `Error: <what went wrong>` and THEN a `Use --debug flag ...` hint, so
+    the last line of stderr is the hint. This screen reported that hint as the reason
+    a chart did not render until 2026-11-22 -- a message that names no file, no line
+    and no cause. Prefer the `Error:` line; fall back to the last line only when
+    there is none.
+    """
+    lines = [l.strip() for l in (stderr or "").strip().split("\n") if l.strip()]
+    for l in lines:
+        if l.startswith("Error:"):
+            return l[:240]
+    return (lines[-1] if lines else "helm failed")[:240]
+
+
+def render(chart_dir, values=None):
+    """Render a chart. values=None means CHART_VALUES; pass a list to override."""
     name = os.path.basename(chart_dir.rstrip("/"))
     cmd = ["helm", "template", "probe", chart_dir]
-    for v in CHART_VALUES.get(name, []):
+    for v in (CHART_VALUES.get(name, []) if values is None else values):
         cmd += ["--set", v]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
-        return None, (r.stderr.strip().split("\n") or ["helm failed"])[-1][:160]
+        return None, helm_error(r.stderr)
     return r.stdout, None
+
+
+def count_resources(text):
+    """How many documents the render actually emitted, by `kind:` line."""
+    return len([l for l in (text or "").split("\n") if l.strip().startswith("kind:")])
+
+
+def defaults_verdict(name, err, ndocs, guard):
+    """Verdict for the defaults arm. -> (kind, message), kind in finding|void|None.
+
+    Pure, so selftest() can exercise all three outcomes without helm. THREE outcomes,
+    deliberately: a render that emits nothing is not a pass, it is an arm that looked
+    at nothing.
+    """
+    shown = " ".join("--set %s" % v for v in guard) or "(no values)"
+    if err:
+        return ("finding",
+                "cannot be rendered from its own values.yaml defaults: `helm template "
+                "%s` exits non-zero -- %s. A consumer running `helm install` without "
+                "setting the optional values gets exactly this." % (shown, err))
+    if ndocs == 0:
+        return ("void",
+                "guard render `%s` emitted NO documents, so this arm screened nothing "
+                "-- the guard set is insufficient, not the chart clean" % shown)
+    return (None, "")
 
 
 def audit(chart, text, kinds):
@@ -135,6 +210,14 @@ def run():
             deprecated = bool((ch or {}).get("deprecated"))
         except Exception:
             pass
+        guard = CHART_GUARD_VALUES.get(name, [])
+        gtext, gerr = render(c, values=guard)
+        verdict, gmsg = defaults_verdict(name, gerr, count_resources(gtext), guard)
+        if verdict == "finding":
+            findings.append((name, gmsg, deprecated))
+        elif verdict == "void":
+            voids.append((name, gmsg))
+
         text, err = render(c)
         if err:
             voids.append((name, "does not render: %s" % err))
@@ -171,11 +254,11 @@ def run():
             print("  %-22s %s" % (name, why))
 
     if rc == 0:
-        print("\nPASS -- every kind rendered by a live chart exists and is served.")
+        print("\nPASS -- every kind rendered by a live chart exists and is served, and\n       every live chart renders from its own values.yaml defaults.")
         if voids:
             print("       %d chart(s) were NOT screened, listed above." % len(voids))
     else:
-        print("\nFAIL -- a live chart renders something that cannot be applied.")
+        print("\nFAIL -- a live chart renders something that cannot be applied, or cannot\n       be rendered from its own defaults at all.")
     return rc
 
 
@@ -225,6 +308,56 @@ def selftest():
     # that never reports anything.
     f, _ = audit("c", bad_kind, kinds)
     case("DISCRIMINATOR: audit CAN return a finding", len(f) == 1)
+
+    # ---- the defaults arm -------------------------------------------------
+    # helm's real stderr for the defect this arm exists to catch, verbatim.
+    real = ("WARNING: This chart is deprecated\n"
+            "Error: template: baremetal-lifecycle/templates/node.yaml:6:21: executing "
+            "\"baremetal-lifecycle/templates/node.yaml\" at <deepCopy .Values.instance_info>: "
+            "error calling deepCopy: reflect: call of reflect.Value.Type on zero Value\n"
+            "\n"
+            "Use --debug flag to render out invalid YAML\n")
+    case("helm_error picks the Error: line, NOT the trailing --debug hint",
+         helm_error(real).startswith("Error: template:") and "--debug" not in helm_error(real))
+    case("helm_error falls back to the last line when there is no Error:",
+         helm_error("just a warning\nand another") == "and another")
+    case("helm_error on empty stderr does not crash", helm_error("") == "helm failed")
+
+    k, m = defaults_verdict("c", helm_error(real), 0, ["nodeName=b1"])
+    case("a chart that errors from its defaults -> FINDING",
+         k == "finding" and "own values.yaml defaults" in m and "deepCopy" in m)
+    case("that finding shows the exact command a consumer would run",
+         "--set nodeName=b1" in m)
+
+    k, m = defaults_verdict("c", None, 0, [])
+    case("renders but emits NOTHING -> VOID, not a pass",
+         k == "void" and "screened nothing" in m)
+
+    k, m = defaults_verdict("c", None, 3, ["nodeName=b1"])
+    case("renders with documents -> no verdict", k is None)
+
+    case("DISCRIMINATOR: defaults_verdict CAN return each of its three outcomes",
+         defaults_verdict("c", "e", 1, [])[0] == "finding"
+         and defaults_verdict("c", None, 0, [])[0] == "void"
+         and defaults_verdict("c", None, 1, [])[0] is None)
+
+    case("count_resources counts indented kinds too",
+         count_resources("kind: A\n  kind: B\nnotkind: C\n") == 2)
+
+    # TABLE INVARIANT: a guard value that is not in CHART_VALUES would mean the two
+    # arms render different worlds, and the defaults arm could then report a defect
+    # the other arm never sees -- or miss one it does.
+    stray = [(c, v) for c, vs in CHART_GUARD_VALUES.items() for v in vs
+             if c in CHART_VALUES and v not in CHART_VALUES[c]]
+    case("every guard value also appears in CHART_VALUES", not stray)
+
+    # Every chart on disk must have a guard entry, or the arm silently skips it with
+    # an empty guard and calls whatever renders a pass.
+    on_disk = {os.path.basename(x.rstrip("/"))
+               for x in glob.glob(os.path.join(REPO, "charts/*/"))}
+    missing = sorted(on_disk - set(CHART_GUARD_VALUES))
+    case("every chart on disk has a guard entry (missing: %s)" % (missing or "none"),
+         not missing and len(on_disk) > 0)
 
     for n, ok in cases:
         print("  %-62s %s" % (n, "ok" if ok else "FAIL"))
