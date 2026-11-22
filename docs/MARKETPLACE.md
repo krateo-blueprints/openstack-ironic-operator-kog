@@ -398,21 +398,67 @@ part of this that survives.
 
 ## The chart version is the API version
 
-`0.14.0` is served as `composition.krateo.io/v0-14-0`. Three consequences:
+A chart's `version` becomes the served apiVersion, dots to dashes:
+`X.Y.Z` → `composition.krateo.io/vX-Y-Z`. Three consequences:
 
-> **Do not "fix" the literal versions in this repo.** The org publishing
-> standard (`krateo-blueprints/charts#7`, `PUBLISHING.md`) requires charts to
-> carry a `CHART_VERSION` placeholder stamped from the git tag — and explicitly
-> exempts repositories like this one, naming our case as the example: *"…
-> `composition.krateo.io/v0-6-5`, which must equal `baremetal-host` 0.6.4 …
-> these repositories commit literal versions, and their release refuses any
-> chart whose CompositionDefinition or dependent apiVersion reference disagrees
-> (openstack-ironic-operator-kog's `check-examples`)."* Verified in the branch
-> 2026-11-07. Replacing these literals with a tag-derived version would
-> re-point the parent at a new child apiVersion on every release and stop
-> serving the previous one — the wedge `_helpers.tpl` records from when it
-> drifted to `v0-5-5`. The guard that makes the literals safe is
-> `make check-examples`; keep it.
+> **Do not "fix" the literal versions in this repo.** The org publishing standard
+> (`PUBLISHING.md` in `krateo-blueprints/charts`, introduced by that repo's PR #7)
+> does **not** exempt this repository. It defines *three* shapes for chart
+> versioning, and this repo is the second of them. Rule 4, verbatim:
+>
+> > **Charts that version independently:** this applies where a chart's version is
+> > a served API version that other charts depend on. For example,
+> > `kubernetes-cluster` names `composition.krateo.io/v0-6-3`, which must equal
+> > `baremetal-host` 0.6.3. Stamping every chart from one tag would re-point and
+> > stop serving versions for charts that didn't change. These repositories commit
+> > literal versions, and their release refuses any chart whose
+> > CompositionDefinition, or any dependent apiVersion reference, disagrees with it
+> > (openstack-ironic-operator-kog's `check-examples`).
+>
+> Read at `a2d63ba5` (2026-11-07, the standard's first commit) and re-read
+> unchanged 2026-11-22 — re-verify with
+> `gh api 'repos/krateo-blueprints/charts/contents/PUBLISHING.md?ref=a2d63ba5'`.
+>
+> **An earlier revision of this block quoted that passage as `v0-6-5` / `0.6.4`,
+> inside quotation marks.** Upstream never wrote those numbers — not on the date
+> this block claimed to verify, nor since. They are this repo's own then-current
+> versions, substituted into someone else's sentence, which silently turns a quote
+> into a paraphrase that misrepresents the source. Quote a standard verbatim or
+> drop the quotation marks.
+>
+> **The exemption-vs-branch distinction is load-bearing, not pedantry.** An
+> exemption is something a successor standard can drop; a branch of the rule is
+> something it must carry. So when a new org standard lands, the thing to check is
+> that it still has a shape for independently-versioned charts — not that it still
+> names this repo.
+>
+> Replacing these literals with a tag-derived version would re-point the parent at a
+> new child apiVersion on every release and stop serving the previous one — the
+> wedge `_helpers.tpl` records from when it drifted to `v0-5-5`. The guard that makes
+> the literals safe is `make check-examples`; keep it.
+
+**In chart files, state the rule and not an instance.** A header comment reading
+"0.6.3 is served as v0-6-3" ages the moment the chart is bumped, and it cannot be
+corrected cheaply afterwards: a published chart's bytes are frozen, so
+`scripts/check-chart-version-moved.py` refuses content that moves under an unmoved
+version and the org's `chart-version-guard` refuses the push. The legal fix is a
+version bump — which is itself an apiVersion rename — so this file's own 0.16.1
+entry records paying exactly that price for a comment-only change. **Therefore: do
+not bump to fix a comment; de-instance these at the next bump that happens for a
+real reason.** Stale as of 2026-11-22, asserted fields all correct
+(`make check-blueprints` proves it) — this is comment drift, not a version defect:
+
+| file | says | chart is |
+|---|---|---|
+| `charts/baremetal-host/Chart.yaml:6` | `0.6.3` → `v0-6-3` | 0.7.0 |
+| `charts/baremetal-host/compositiondefinition.yaml:14` | `0.6.3 -> v0-6-3` | 0.7.0 |
+| `charts/kubernetes-cluster/Chart.yaml:6` | `0.15.3` → `v0-15-1` | 0.16.1 |
+| `charts/kubernetes-cluster/compositiondefinition.yaml:14` | `0.15.3 -> v0-15-3` | 0.16.1 |
+
+The third row is not merely stale, it is **self-contradictory**: by the mapping
+stated in its own sentence, 0.15.3 is `v0-15-3`, not `v0-15-1`. A reader who trusts
+that literal applies a CR at an apiVersion nothing has ever served. Fix that one
+first at the next bump.
 
 
 1. **Two files hold the number.** `Chart.yaml`'s `version` and the in-chart
