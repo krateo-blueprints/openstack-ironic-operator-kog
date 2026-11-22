@@ -1,0 +1,20 @@
+apiVersion: v2
+name: hook-rbac-probe
+description: >-
+  Throwaway chart that exists only to measure core-provider's generated RBAC for
+  helm lifecycle hooks (core-provider #311/#316). Renders four objects from one
+  template; exactly one carries helm.sh/hook. Not part of the product.
+type: application
+version: 0.1.1
+appVersion: "1.0"
+
+# NOT PUBLISHED, and the DIRECTORY is what says so. This chart lives under
+# tests/, which the org release workflow's chart discovery prunes by name, so
+# there is no publish annotation here to be kept in step with anything -- one
+# mechanism, not two. The annotation this replaced named
+# scripts/check-publish-set.py as its enforcer; that screen scans charts/ only,
+# so from here it would have been read by nothing while still reading as
+# load-bearing. A chart moved back under charts/ must declare it again:
+# check-publish-set raises VOID for a chart there that declares nothing, and
+# flags any name in the workflow's list that is not a chart under charts/.
+# A spent instrument: it measured core-provider's hook RBAC fix end to end. Kept for reproducibility, never shipped.

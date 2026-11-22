@@ -197,9 +197,29 @@ def audit(chart, text, kinds):
     return findings, ours
 
 
+CHART_ROOTS = ("charts/*/", "tests/charts/*/")
+
+
+def chart_dirs():
+    """Every chart directory this screen renders, from both roots.
+
+    Two roots on purpose. `charts/` holds the product. `tests/charts/` holds the
+    throwaway measurement rigs, which moved out of the chart root so the org
+    release workflow's own prune list excludes them (it prunes `test`/`tests`)
+    instead of a workflow having to read `krateo.io/publish`. They are still
+    rendered here: hook-rbac-probe's whole value IS its packaged object shape, so
+    a probe that quietly stopped being rendered would be a lost measurement, not
+    a saved one.
+    """
+    out = []
+    for root in CHART_ROOTS:
+        out.extend(glob.glob(os.path.join(REPO, root)))
+    return sorted(out)
+
+
 def run():
     kinds = served_kinds()
-    charts = sorted(glob.glob(os.path.join(REPO, "charts/*/")))
+    charts = chart_dirs()
     if not charts:
         raise Void("no charts found, so this screen rendered nothing")
 
@@ -360,11 +380,19 @@ def selftest():
 
     # Every chart on disk must have a guard entry, or the arm silently skips it with
     # an empty guard and calls whatever renders a pass.
-    on_disk = {os.path.basename(x.rstrip("/"))
-               for x in glob.glob(os.path.join(REPO, "charts/*/"))}
+    on_disk = {os.path.basename(x.rstrip("/")) for x in chart_dirs()}
     missing = sorted(on_disk - set(CHART_GUARD_VALUES))
     case("every chart on disk has a guard entry (missing: %s)" % (missing or "none"),
          not missing and len(on_disk) > 0)
+
+    # AND THE REVERSE. An entry naming a chart that is not on disk is a DEAD entry:
+    # it can never fire, so it silently accepts whatever replaces it -- the same rule
+    # the credential and findby screens apply to their exemption tables. This arm is
+    # precisely what catches a chart that MOVED and left its table row behind, which
+    # is how the two probes arrived in tests/charts/.
+    dead = sorted(set(CHART_GUARD_VALUES) - on_disk)
+    case("no guard entry for a chart that is not on disk (dead: %s)" % (dead or "none"),
+         not dead)
 
     for n, ok in cases:
         print("  %-62s %s" % (n, "ok" if ok else "FAIL"))
