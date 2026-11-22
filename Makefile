@@ -88,7 +88,7 @@ help:
 	@echo "  deploy-chart   - Helm install baremetal-lifecycle chart"
 	@echo "  package-chart  - Package chart to .tgz for publishing"
 	@echo "  template-chart - Dry-run helm template (requires nodeName in values)"
-	@echo "  validate-chart - Verify Node CR and Job templates render"
+	@echo "  validate-chart - Render the live chart, assert the BaremetalNode CR is there"
 	@echo "  deploy-ironic  - Helm install Ironic with overrides (req: openstack-helm repo, backends)"
 	@echo "Local test env (isolated kind cluster, never touches ~/.kube/config):"
 	@echo "  local-up       - Full local stack: kind + Ironic + Krateo + RestDefinition"
@@ -149,14 +149,28 @@ template-chart:
 		--set driver_info.ipmi_address=172.19.74.202 \
 		--set driver_info.ipmi_password=secret
 
+# BROKEN FROM 2026-06-11 TO 2026-11-22, and nothing noticed because `check:` does not
+# run this target -- only `make help` advertised it. Two separate defects:
+#
+#   1. It rendered the DEPRECATED baremetal-lifecycle chart without setting
+#      instance_info, so helm aborted at node.yaml:6 and the FIRST recipe line exited
+#      1. The target could not reach its second line, let alone pass.
+#   2. That second line asserted `grep -q "kind: Node"` -- an UNANCHORED PREFIX that
+#      also matches `kind: NodePower` and `kind: NodeProvision`. Measured: a
+#      NodePower-only render satisfies it. So even once reachable it was true for
+#      free, exactly the failure its sibling assertion at `ironic-image` warns about.
+#
+# Now renders the LIVE chart and anchors the kind. The screen CI actually runs is
+# scripts/check-chart-renders.py (in `check:`), which covers both arms across every
+# chart; this stays a convenience target rather than a second implementation.
 validate-chart:
-	@helm template baremetal-lifecycle ./charts/baremetal-lifecycle \
+	@helm template baremetal-host ./charts/baremetal-host \
 		-n $(HELM_NAMESPACE) \
 		--set nodeName=test-node \
-		--set driver_info.ipmi_address=172.19.74.202 \
-		--set driver_info.ipmi_password=secret \
-		--set ports[0].address=9c:b6:54:b2:b0:ca > /dev/null && echo "Chart templates render OK"
-	@helm template baremetal-lifecycle ./charts/baremetal-lifecycle -n $(HELM_NAMESPACE) --set nodeName=test-node | grep -q "kind: Node" && echo "Node CR present: OK"
+		--set driver=redfish > /dev/null && echo "Chart templates render OK"
+	@helm template baremetal-host ./charts/baremetal-host -n $(HELM_NAMESPACE) \
+		--set nodeName=test-node --set driver=redfish \
+		| grep -qE '^kind: BaremetalNode$$' && echo "BaremetalNode CR present: OK"
 
 # Deploy Ironic via openstack-helm (requires: helm repo add openstack-helm, rabbitmq/mariadb/memcached/keystone/glance/neutron)
 deploy-ironic:
