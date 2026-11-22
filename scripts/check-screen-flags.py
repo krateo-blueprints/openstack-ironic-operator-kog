@@ -35,6 +35,22 @@ BOTH = ("--self-test", "--selftest")
 # a screen with no self-test at all is out of scope, and so is one that takes
 # positional arguments rather than a mode flag.
 def classify(src):
+    # --- shell shapes. A `case` (or `if`) accepting BOTH spellings AND carrying a `--*)`
+    # arm that refuses the rest. The `--*)` arm is the load-bearing half: without it,
+    # tests/provision-arms/arm7.sh fell through a mistyped flag into the REAL arm and
+    # CREATED A KIND CLUSTER, and scripts/verify-publisher-scope.sh let the typo become
+    # the NODE and probed a live Ironic for a node by that name.
+    # GATED ON A BASH SHEBANG. Without this gate the shell branch also matched PYTHON
+    # sources that mention both spellings, and it ran first -- so it reclassified the
+    # guard-positional python fixture as an unguarded shell script. The self-test caught
+    # that immediately, which is the arm earning its place twice in one sitting.
+    if re.search(r'^#!.*\b(bash|sh)\b', src, re.M) and "python" not in src.split("\n")[0]:
+        if re.search(r'--self-test\|--selftest\)|--selftest\|--self-test\)', src) \
+                or ('"--self-test"' in src and '"--selftest"' in src) \
+                or ('= "--self-test"' in src and '= "--selftest"' in src):
+            return "shell-guarded" if re.search(r'--\*\)', src) else "shell-one-spelling-or-unguarded"
+        if re.search(r'--self-?test', src):
+            return "shell-one-spelling-or-unguarded"
     if "_WANT_SELFTEST" in src and "_ALLOWED" in src:
         return "guard"
     # a screen taking a POSITIONAL argument cannot refuse unknown args wholesale, so it
@@ -55,10 +71,38 @@ def classify(src):
 
 
 def main():
-    files = sorted(glob.glob(os.path.join(os.path.dirname(os.path.abspath(__file__)), "check-*.py")))
+    # DERIVED FROM THE MAKEFILE, not from a scripts/ glob. The glob version missed
+    # tests/provision-arms/arm7.sh, which `make check` runs and whose mistyped flag
+    # created a kind cluster -- the worst instance of this defect, in the one
+    # mode-flagged file that lives outside scripts/. Deriving means the next one is
+    # caught wherever it lives.
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+    mk = os.path.join(root, "Makefile")
+    if not os.path.isfile(mk):
+        print("VOID: no Makefile, so the screen list cannot be derived.")
+        return 2
+    mktext = open(mk, encoding="utf-8").read()
+    m = re.search(r"^check:([^\n]*)", mktext, re.M)
+    if not m:
+        print("VOID: no `check:` target found; cannot derive the screen list.")
+        return 2
+    targets = [t for t in m.group(1).split() if t.startswith("check-")]
+    bodies = {b.group(1): b.group(3) for b in
+              re.finditer(r"^([a-zA-Z0-9_.-]+):([^\n]*)\n((?:(?:\t|#)[^\n]*\n|\n)*)", mktext, re.M)}
+    paths = set()
+    for t in targets:
+        for rel in re.findall(r"((?:scripts|tests|hack|local)/[A-Za-z0-9_./-]+\.(?:py|sh))",
+                              bodies.get(t, "")):
+            paths.add(rel)
+    files = sorted(os.path.join(root, r) for r in paths if os.path.isfile(os.path.join(root, r)))
     me = os.path.basename(os.path.abspath(__file__))
     if not files:
-        print("VOID: no check-*.py screens found. A clean run over zero screens is not a pass.")
+        print("VOID: derived zero screens from the Makefile. A clean run over zero is not a pass.")
+        return 2
+    if len(files) < 10:
+        print("VOID: derived only %d screen(s) from `check:`, which is implausibly few --"
+              % len(files))
+        print("      the Makefile shape probably changed. Refusing to report a pass.")
         return 2
 
     good, bad, void, skipped = [], [], [], []
@@ -69,12 +113,15 @@ def main():
         kind = classify(open(f, encoding="utf-8").read())
         if kind is None:
             skipped.append((name, "no self-test mode"))
-        elif kind in ("guard", "guard-positional", "argparse-both"):
+        elif kind in ("guard", "guard-positional", "argparse-both", "shell-guarded"):
             good.append((name, kind))
         elif kind == "argparse-one":
             bad.append((name, "argparse accepts only ONE spelling; add the other as an alias"))
         elif kind == "bare":
             bad.append((name, 'bare `"--flag" in sys.argv`: a typo silently runs the other mode and exits 0'))
+        elif kind == "shell-one-spelling-or-unguarded":
+            bad.append((name, "shell: needs BOTH spellings and a `--*)` arm refusing the rest; "
+                              "without it a typo falls through to the real work"))
         else:
             void.append((name, "a self-test exists but its flag mechanism was not recognised"))
 
@@ -116,6 +163,12 @@ def self_test():
         ("a bare sys.argv test FAILS", 'if "--self-test" in sys.argv:\n    pass', "bare"),
         ("a screen with no self-test is skipped", 'print("hello")', None),
         ("an unrecognised self-test shape is VOID", 'def self_test():\n    pass', "unknown"),
+        ("a shell case with both spellings and a refusing arm is accepted",
+         '#!/usr/bin/env bash\ncase "${1:-}" in\n  --self-test|--selftest) x ;;\n  --*) exit 64 ;;\nesac',
+         "shell-guarded"),
+        ("a shell case with ONE spelling FAILS",
+         '#!/usr/bin/env bash\ncase "${1:-}" in\n  --self-test) x ;;\nesac',
+         "shell-one-spelling-or-unguarded"),
         ("a positional-taking screen with both spellings is accepted",
          'if _first in ("--selftest", "--self-test"):\n    pass\nif _first.startswith("--"):\n    pass',
          "guard-positional"),

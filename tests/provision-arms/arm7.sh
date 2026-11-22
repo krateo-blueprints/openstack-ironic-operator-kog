@@ -311,8 +311,22 @@ self_test() {
 }
 
 case "${1:-}" in
-  --self-test) self_test; exit $? ;;   # NOT `exit 0`: that discarded every failure
+  --self-test|--selftest) self_test; exit $? ;;   # NOT `exit 0`: that discarded every failure
   --analyze)   [ -n "${2:-}" ] || { echo "usage: $0 --analyze FILE.csv" >&2; exit 64; }; analyze "$2"; exit $? ;;
+  --*)
+    # A MISTYPED MODE FLAG USED TO CREATE A KIND CLUSTER. There was no `*)` arm, so
+    # anything other than the two above fell straight through to the real measurement
+    # -- which prechecks the toolchain, sets CLUSTER=arm7-provision and calls
+    # `make local-up`. So `--selftest` (the spelling SEVEN other screens in this repo
+    # use) did not run the wrong mode, it provisioned a cluster.
+    #
+    # Only `--`-prefixed arguments are refused: a bare invocation with no arguments IS
+    # the real arm and must keep working. `--selftest` is now an accepted alias, for
+    # the same reason the python screens take both spellings.
+    echo "usage: $0 [--self-test|--selftest] [--analyze FILE.csv]" >&2
+    echo "       (no arguments runs the real arm, which CREATES a kind cluster)" >&2
+    echo "refusing unrecognised option: $1" >&2
+    exit 64 ;;
 esac
 
 for t in kind kubectl helm docker make python3; do

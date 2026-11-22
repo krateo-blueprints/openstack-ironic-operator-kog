@@ -100,8 +100,17 @@ self_test() {
 
 DRY=0
 case "${1:-}" in
-  --self-test) self_test; exit $? ;;
+  --self-test|--selftest) self_test; exit $? ;;
   --dry-run)   DRY=1; shift ;;
+  --*)
+    # REFUSE an unrecognised option rather than let it become the NODE. Without this
+    # arm, `--selftest` (the spelling several screens here use) fell through, became
+    # NODE="--selftest", and the script went on to probe a LIVE Ironic for a node by
+    # that name -- reading as a cluster problem rather than a typo. The probes are
+    # no-op writes by design, so nothing was damaged; the diagnosis was the casualty.
+    echo "usage: $0 [--dry-run] <node-name>   |   $0 --self-test" >&2
+    echo "refusing unrecognised option: $1" >&2
+    exit 64 ;;
 esac
 
 NODE="${1:-}"

@@ -32,7 +32,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-if [ "${1:-}" = "--self-test" ]; then
+# both spellings: a typo used to fall through and become ROOT, so the screen looked
+# for Go files under a directory named "--selftest", found none, and VOIDed -- which
+# fails, but names the wrong cause.
+if [ "${1:-}" = "--self-test" ] || [ "${1:-}" = "--selftest" ]; then
   tmp=$(mktemp -d)
   mkdir -p "$tmp/good" "$tmp/bad"
   printf 'package builder\n\nfunc fine() {}\n'   > "$tmp/good/ok_test.go"
@@ -53,6 +56,11 @@ if [ "${1:-}" = "--self-test" ]; then
   exit 0
 fi
 
+case "${1:-}" in
+  --*) echo "usage: $0 [--self-test|--selftest] [<root>]" >&2
+       echo "refusing unrecognised option: $1" >&2
+       exit 64 ;;
+esac
 ROOT="${1:-tests}"
 
 command -v gofmt >/dev/null || {
