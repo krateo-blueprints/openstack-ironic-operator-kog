@@ -437,12 +437,38 @@ jobs:
   # have fired, which is the worst kind of check to keep. See the retraction in
   # docs/MARKETPLACE.md.
   #
-  # krateo-blueprints/charts#7 (the org publishing standard) makes the publisher
-  # run this same verification for every caller, with an anonymous
-  # `helm pull --repo`. When that lands, this job becomes redundant rather than
-  # wrong, and the standard says callers may drop it. Keeping it until then, and
-  # arguably after: it checks the served result independently of the publisher's
-  # own report of it.
+  # CORRECTED 2026-11-24. This said krateo-blueprints/charts#7 "makes the
+  # publisher run this same verification for every caller ... When that lands,
+  # this job becomes redundant". **It landed on 2026-11-07** -- #7 is the merged
+  # PR that created PUBLISHING.md -- and the rule is now its rule 8: "The release
+  # isn't done until the Marketplace can install it. The publisher reads the
+  # served `index.yaml` until every chart it published is listed at its version,
+  # then installs each one anonymously with `helm pull --repo`, the path the
+  # Marketplace uses. If either check fails, the release fails. Callers don't
+  # need their own check."
+  #
+  # A comment waiting for something that already happened reads as current, so
+  # the condition below is the one that is actually still open.
+  #
+  # This job is therefore redundant BY THE STANDARD, and is kept for the one
+  # thing the standard cannot cover: it checks the served result independently of
+  # the publisher's own report of it. A publisher that concludes green without
+  # having verified is invisible to its own check.
+  #
+  # Its record, measured over the last 18 release-chart runs: 10 success, 2
+  # skipped (the publish failed first, so there was nothing to verify), 6 before
+  # the job existed. It has never failed, and no positive control has ever been
+  # run for it -- nobody has shown it CAN fail. Unproven coverage, not a proven
+  # guard. docs/MARKETPLACE.md keeps the sharper drop condition: the publisher's
+  # own anonymous `helm pull` seen green for some caller.
+  #
+  # krateo-platformops/.github's release-oci will carry this as the last step of
+  # the publishing side (acmp accepted it on 2026-11-24, scheduled for the
+  # release after 2.2.0, written there with its own controls). Do not port it:
+  # keep running it here until that exists, then delete this job. If this repo
+  # migrates to release-oci first, `needs:` must move from
+  # `publish-blueprints-channel`, which the migration deletes, to the release-oci
+  # call -- see repository-standard R5's delete list.
   verify-channel-entry:
     needs: publish-blueprints-channel
     runs-on: ubuntu-latest

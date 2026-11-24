@@ -236,6 +236,10 @@ token that exists, converting a legible 401 into an unresolvable-ref error.
 
 `verify-channel-entry` can go once the publisher's own anonymous `helm pull`
 check has been seen green for some caller — redundant then, rather than wrong.
+The *rule* is no longer the open part: `charts#7` merged 2026-11-07 and
+PUBLISHING.md rule 8 now requires the publisher to do exactly this and says
+"Callers don't need their own check." What has not been seen is a green run of
+it, which is why this condition is phrased as evidence and not as a rule.
 Rule 11's visibility grant is **not** this chart's job: the standard puts it on
 the registrar (installer `readerGroups`, or a manifest beside the
 CompositionDefinition), because the chart renders per instance.
