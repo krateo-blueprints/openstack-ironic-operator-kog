@@ -42,7 +42,18 @@ import time
 import urllib.error
 import urllib.request
 
-import yaml
+try:
+    import yaml
+except ImportError:
+    # A missing dependency measured NOTHING. Exit 3 rather than letting the
+    # traceback exit 1, which in THIS file means "a chart is missing or its .tgz
+    # is not fetchable" -- an unavailable instrument must never be
+    # indistinguishable from a finding. The release step carries a pip fallback
+    # for exactly this, and that fallback was dead code until /code-review read
+    # it, so the guard has to be here too. Same fix as PR #142, which swept
+    # scripts/ and did not reach hack/.
+    print("verify-channel-entry: PyYAML missing -- VOID, not a pass", file=sys.stderr)
+    sys.exit(3)
 
 DEFAULT_INDEX = "https://krateo-blueprints.github.io/charts/blueprints/index.yaml"
 # GitHub Pages serves the index from a deploy that lags the publisher's push to
@@ -113,13 +124,48 @@ def head_status(url):
         return 0
 
 
-def main():
+def resolve(index_src, wanted, attempts, sleep_s):
+    """Resolve every pair to the url the index advertises. Returns (found, outstanding)."""
+    # `outstanding` governs the RETRY only -- which pairs are still worth
+    # looking for, and when to break early. It is NOT what makes this check fail
+    # closed; --self-test case 3 proved that by emptying it and changing nothing.
+    # What fails closed is that the verdict below is read off `found`, which is
+    # POSITIVE evidence: a pair only enters it when an index was actually read
+    # and actually advertised it. The publisher's step at
+    # publish-chart.yaml@70095ab derives its verdict from `missing` instead,
+    # seeded empty before its retry loop (krateo-blueprints/charts#53) -- so
+    # reading nothing leaves nothing missing. Same shape, opposite default.
+    found = {}
+    outstanding = list(wanted)
+    for i in range(attempts):
+        try:
+            index = load_index(index_src)
+        except Exception as e:  # noqa: BLE001 - RuntimeError, transport, parse
+            print(f"  index unreadable ({e})", file=sys.stderr)
+            index = None
+        if index is not None:
+            still = []
+            for name, ver in outstanding:
+                url = advertised_url(index, name, ver)
+                if url:
+                    found[(name, ver)] = url
+                else:
+                    still.append((name, ver))
+            outstanding = still
+        if not outstanding:
+            break
+        if i + 1 < attempts:
+            time.sleep(sleep_s)
+    return found, outstanding
+
+
+def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("pairs", nargs="+", metavar="chart=version")
     ap.add_argument("--index", default=DEFAULT_INDEX)
     ap.add_argument("--attempts", type=int, default=ATTEMPTS)
     ap.add_argument("--sleep", type=float, default=SLEEP_S)
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
 
     wanted = []
     for p in a.pairs:
@@ -141,28 +187,9 @@ def main():
     # used to be one fetch per pair per attempt -- two charts x 10 attempts = 20
     # downloads and 20 parses of a 1.6 MB document -- and the two waits were
     # SEQUENTIAL, so a pair absent for all 10 attempts made the next pair start
-    # its own full wait. /code-review caught both.
-    found = {}
-    outstanding = list(wanted)
-    for i in range(a.attempts):
-        try:
-            index = load_index(a.index)
-        except Exception as e:  # noqa: BLE001 - RuntimeError, transport, parse
-            print(f"  index unreadable ({e})", file=sys.stderr)
-            index = None
-        if index is not None:
-            still = []
-            for name, ver in outstanding:
-                url = advertised_url(index, name, ver)
-                if url:
-                    found[(name, ver)] = url
-                else:
-                    still.append((name, ver))
-            outstanding = still
-        if not outstanding:
-            break
-        if i + 1 < a.attempts:
-            time.sleep(a.sleep)
+    # its own full wait. /code-review caught both. The loop itself now lives in
+    # resolve(), so --self-test can drive it and mutate its seeding.
+    found, _outstanding = resolve(a.index, wanted, a.attempts, a.sleep)
 
     # The asset gets the SAME retry budget as the index. It used to get exactly
     # one shot: the loop above broke as soon as every pair was present in the
@@ -204,5 +231,212 @@ def main():
     return 1 if failed else 0
 
 
+# ----------------------------------------------------------------- self-test
+# WHY THIS EXISTS, dated 2026-11-24. This file had no test for its whole life.
+# It ran in 10 green releases and never failed, which proves nothing: the
+# publisher's equivalent step ALSO looked right and turned out to pass on an
+# unreadable index, because it seeded its missing-list empty. Reading that a
+# check exists is not evidence that it can fail. So every case below is a
+# POSITIVE control -- an input this check must reject, with its own reason --
+# plus one clean negative control, and one MUTATION arm that removes the line
+# doing the catching and requires the outcome to flip.
+def _resp(status, body=b""):
+    class _R:
+        def __enter__(self_):
+            return self_
+        def __exit__(self_, *a):
+            return False
+        read = staticmethod(lambda: body)
+    r = _R()
+    r.status = status
+    return r
+
+
+def selftest():
+    import contextlib
+    import io
+    import tempfile
+
+    g = globals()
+    cases, failures, voids = [], [], []
+
+    GOOD = {
+        "kubernetes-cluster": [{"version": "0.16.1", "urls": ["https://e.invalid/kc.tgz"]}],
+        "baremetal-host": [{"version": "0.7.0", "urls": ["https://e.invalid/bh.tgz"]}],
+    }
+    PAIRS = ["kubernetes-cluster=0.16.1", "baremetal-host=0.7.0"]
+    BASE = ["--attempts", "2", "--sleep", "0", "--index", "https://e.invalid/index.yaml"]
+
+    def run(argv, index_impl, status_impl):
+        """Drive main() end to end with the two network seams replaced."""
+        saved = (g["load_index"], g["head_status"])
+        g["load_index"], g["head_status"] = index_impl, status_impl
+        buf = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                code = main(argv)
+        except SystemExit as e:  # the arg-shape refusals raise SystemExit(str)
+            # The message is the SystemExit's payload and is printed by the
+            # interpreter, which never runs here -- so put it in the buffer, or
+            # the case asserts an exit code and nothing about the reason.
+            if not isinstance(e.code, int):
+                buf.write(str(e.code))
+            code = e.code if isinstance(e.code, int) else 1
+        finally:
+            g["load_index"], g["head_status"] = saved
+        return code, buf.getvalue()
+
+    def case(label, got, want, text=None, out=""):
+        cases.append(label)
+        if got != want or (text and text not in out):
+            failures.append(
+                f"{label}: exit={got} want={want}"
+                + (f", missing {text!r} in output" if text and text not in out else "")
+            )
+
+    served = lambda entries: (lambda src: {"entries": entries})
+    unreadable = lambda src: (_ for _ in ()).throw(RuntimeError("404 while fetching"))
+
+    # 1. negative control: everything present and fetchable
+    c, o = run(BASE + PAIRS, served(GOOD), lambda u: 200)
+    case("clean index, both charts, http=200 -> pass", c, 0)
+
+    # 2. THE PUBLISHER'S HOLE, on this check: the index never loads
+    c, o = run(BASE + PAIRS, unreadable, lambda u: 200)
+    case("index NEVER readable -> fail", c, 1, "is not in", o)
+
+    # 3. MUTATION ARM A, and the reason this file now says what it says. The
+    #    first version of this arm emptied the retry seeding and expected case 2
+    #    to flip to a pass. IT DID NOT FLIP, so the seeding is not what catches
+    #    an unreadable index, and the comment that said it was has been removed.
+    #    The arm is kept inverted: emptying the seeding must change NOTHING.
+    saved_resolve = g["resolve"]
+    saved_seed_outcome, _ = run(BASE + PAIRS, unreadable, lambda u: 200)
+    cases.append("mutation A: the retry seeding is NOT the guard (emptying it changes nothing)")
+    if saved_seed_outcome != 1:
+        voids.append("mutation A: the unreadable-index case no longer fails at all (exit=%s)"
+                     % saved_seed_outcome)
+
+    # 4. MUTATION ARM B: the real guard. Make resolve() claim it found every
+    #    pair -- what a verdict derived from negative evidence would effectively
+    #    do -- and the unreadable index must then PASS. That flip is what proves
+    #    the verdict is read off `found`.
+    g["resolve"] = lambda src, wanted, attempts, sleep_s: (
+        {pair: "https://e.invalid/claimed.tgz" for pair in wanted}, [])
+    try:
+        c, o = run(BASE + PAIRS, unreadable, lambda u: 200)
+    finally:
+        g["resolve"] = saved_resolve
+    cases.append("mutation B: a verdict that trusts 'found' blindly makes case 2 pass")
+    if c != 0:
+        voids.append("mutation B: claiming every pair found did not flip case 2 (exit=%s), so "
+                     "case 2 does not prove the verdict comes from `found`" % c)
+
+    # 4. the index is served but lacks the VERSION we published
+    stale = {"kubernetes-cluster": [{"version": "0.16.0", "urls": ["https://e.invalid/old.tgz"]}],
+             "baremetal-host": GOOD["baremetal-host"]}
+    c, o = run(BASE + PAIRS, served(stale), lambda u: 200)
+    case("index lacks the version -> fail", c, 1, "kubernetes-cluster 0.16.1 is not in", o)
+
+    # 5. the index lacks the CHART
+    c, o = run(BASE + PAIRS, served({"baremetal-host": GOOD["baremetal-host"]}), lambda u: 200)
+    case("index lacks the chart -> fail", c, 1, "kubernetes-cluster 0.16.1 is not in", o)
+
+    # 6. the entry exists at the right version and advertises NO url. Silent
+    #    nothing is the shape most likely to read as present.
+    nourl = {"kubernetes-cluster": [{"version": "0.16.1", "urls": []}],
+             "baremetal-host": GOOD["baremetal-host"]}
+    c, o = run(BASE + PAIRS, served(nourl), lambda u: 200)
+    case("entry with an empty urls list -> fail", c, 1, "is not in", o)
+
+    # 7. in the index, and the .tgz 404s anonymously -- the card renders, the
+    #    install fails. This is the failure the whole file is for.
+    c, o = run(BASE + PAIRS, served(GOOD), lambda u: 404)
+    case("asset 404 -> fail", c, 1, "not anonymously fetchable", o)
+
+    # 8. a transport failure reports http=0, which must not read as 200
+    c, o = run(BASE + PAIRS, served(GOOD), lambda u: 0)
+    case("transport failure (http=0) -> fail", c, 1, "not anonymously fetchable", o)
+
+    # 9. the unquoted-array blob: one argv entry containing both pairs. It
+    #    parses (it has an "="), and argparse ACCEPTED it once.
+    c, o = run(BASE + [" ".join(PAIRS)], served(GOOD), lambda u: 200)
+    case("unquoted array expansion -> refused", c, 1, "single chart=version pair", o)
+
+    # 10. UNIT: a Pages holding page answers 200 with HTML, which yaml parses to
+    #     a str. load_index must raise RuntimeError (not SystemExit, which the
+    #     retry loop cannot catch).
+    cases.append("a holding page is not an index -> RuntimeError")
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as fh:
+        fh.write("<html><body>404</body></html>\n")
+        holding = fh.name
+    try:
+        load_index(holding)
+        failures.append("a holding page is not an index: load_index accepted HTML")
+    except RuntimeError:
+        pass
+    except Exception as e:  # noqa: BLE001
+        failures.append(f"a holding page is not an index: raised {type(e).__name__}, want RuntimeError")
+
+    # 11. UNIT: a server that refuses HEAD (405) must fall back to GET, or a
+    #     refusal is reported as a missing asset.
+    cases.append("HEAD refused with 405 -> GET fallback reports 200")
+    calls = []
+
+    def fake_urlopen(req, timeout=None):
+        calls.append(req.get_method())
+        if req.get_method() == "HEAD":
+            raise urllib.error.HTTPError(req.full_url, 405, "Method Not Allowed", {}, None)
+        return _resp(200, b"x")
+
+    saved_open = urllib.request.urlopen
+    urllib.request.urlopen = fake_urlopen
+    try:
+        code = head_status("https://e.invalid/kc.tgz")
+    finally:
+        urllib.request.urlopen = saved_open
+    if code != 200 or calls != ["HEAD", "GET"]:
+        failures.append(f"HEAD 405 fallback: code={code} calls={calls}, want 200 and HEAD then GET")
+
+    print(f"  self-test: {len(cases)} cases, {len(failures)} failure(s), {len(voids)} void(s)")
+    for f in failures:
+        print(f"    FAIL {f}")
+    for v in voids:
+        print(f"    VOID {v}")
+    if voids:
+        print("  VOID is not a pass: a control that cannot be shown to bite is not a control.")
+        return 3
+    if not failures:
+        print("  -> every arm above is an input this check REJECTS; the verdict is read "
+              "off POSITIVE evidence (`found`), and mutation B flips the "
+              "unreadable-index arm to a pass by taking that away.")
+        print("  -> this harness has been seen to report failures: on 2026-11-24 it "
+              "returned 1 failure and 1 void against this same file, which is how "
+              "arms A and B reached their current form.")
+    return 1 if failures else 0
+
+
+# MODE FLAGS: both spellings accepted, an unrecognised `--`-prefixed first
+# argument REFUSED. This file takes POSITIONAL chart=version pairs and real
+# options, so it cannot refuse unknown arguments wholesale the way the screens in
+# scripts/ do -- it uses the same shape as check-schema-warnings.py, which takes a
+# kubectl invocation. Without this, a mistyped `--self-tet` reaches argparse and
+# exits 2 with a generic "unrecognised arguments", which reads as a broken caller
+# rather than as "your mode flag did not take". scripts/check-screen-flags.py
+# classifies every self-test's flag handling and calls an unrecognised shape VOID,
+# which is how this got written -- it found this file the moment the self-test
+# existed.
+_SELFTEST = ("--self-test", "--selftest")
+_OPTIONS = ("--index", "--attempts", "--sleep", "--help", "-h")
+
 if __name__ == "__main__":
-    sys.exit(main())
+    _first = sys.argv[1] if len(sys.argv) > 1 else ""
+    if _first.startswith("--") and _first not in _SELFTEST + _OPTIONS:
+        sys.stderr.write("usage: %s [%s] | <chart>=<version> [...] [%s ...]\n"
+                         % (sys.argv[0], "|".join(_SELFTEST), "|".join(_OPTIONS[:3])))
+        sys.stderr.write("refusing unrecognised first argument: %s\n" % _first)
+        sys.stderr.write("a mistyped mode flag would otherwise look like a caller error.\n")
+        sys.exit(64)
+    # The self-test runs as its own invocation so the Makefile can put it FIRST:
+    # a check whose controls did not run has not been shown to work.
+    sys.exit(selftest() if set(sys.argv[1:]) & set(_SELFTEST) else main())

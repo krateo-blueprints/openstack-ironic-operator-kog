@@ -238,13 +238,24 @@ token that exists, converting a legible 401 into an unresolvable-ref error.
 check has been seen green for some caller — redundant then, rather than wrong.
 The *rule* is no longer the open part: `charts#7` merged 2026-11-07 and
 PUBLISHING.md rule 8 now requires the publisher to do exactly this and says
-"Callers don't need their own check." That evidence now exists, measured 2026-11-24: at
-`publish-chart.yaml@70095ab`, the SHA this repo pins, the publisher refuses a
-tarball that is not anonymously downloadable (`:296`) and installs each chart
-with `env -u GH_TOKEN helm pull ... --repo` (`:386`), and our own 10 green
-releases called that version. **So this condition is met and the job can go** --
-held only on whether the publisher's step has a positive control, since swapping
-an unproven check for an unproven check buys nothing.
+"Callers don't need their own check." That evidence does **not** exist yet, and the attempt to claim it is worth
+recording. At `publish-chart.yaml@70095ab`, the SHA this repo pins, the
+publisher does refuse a tarball that is not anonymously downloadable (`:296`)
+and does install each chart with `env -u GH_TOKEN helm pull ... --repo`
+(`:386`) — so the code is there, and on 2026-11-24 this file briefly said the
+condition was therefore met. **Reading that a check exists is not evidence that
+it can fail.** Asked for a positive control, the publisher's own session found
+that its index arm seeds `missing=()` before the retry loop and re-seeds it only
+after a successful fetch, so twenty unreadable attempts leave it empty and the
+arm passes having read nothing (`krateo-blueprints/charts#53` fixes it). This repo's check does fail closed on the same input, though not for the reason
+first written here: emptying its retry seeding changes nothing, and what fails
+closed is that its verdict is read off `found` — positive evidence, a pair
+entering it only when an index was actually read and actually advertised it. The
+publisher derives its verdict from `missing`, seeded empty. Same shape, opposite
+default. Both arms are controls in
+`hack/verify-channel-entry.py --self-test` (12 cases, in `make check`), which the
+script had never had. The condition therefore moves to: #53 merged *and*
+carried by the publish-chart pin of whichever release-oci this repo migrates to.
 Rule 11's visibility grant is **not** this chart's job: the standard puts it on
 the registrar (installer `readerGroups`, or a manifest beside the
 CompositionDefinition), because the chart renders per instance.
