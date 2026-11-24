@@ -238,8 +238,13 @@ token that exists, converting a legible 401 into an unresolvable-ref error.
 check has been seen green for some caller — redundant then, rather than wrong.
 The *rule* is no longer the open part: `charts#7` merged 2026-11-07 and
 PUBLISHING.md rule 8 now requires the publisher to do exactly this and says
-"Callers don't need their own check." What has not been seen is a green run of
-it, which is why this condition is phrased as evidence and not as a rule.
+"Callers don't need their own check." That evidence now exists, measured 2026-11-24: at
+`publish-chart.yaml@70095ab`, the SHA this repo pins, the publisher refuses a
+tarball that is not anonymously downloadable (`:296`) and installs each chart
+with `env -u GH_TOKEN helm pull ... --repo` (`:386`), and our own 10 green
+releases called that version. **So this condition is met and the job can go** --
+held only on whether the publisher's step has a positive control, since swapping
+an unproven check for an unproven check buys nothing.
 Rule 11's visibility grant is **not** this chart's job: the standard puts it on
 the registrar (installer `readerGroups`, or a manifest beside the
 CompositionDefinition), because the chart renders per instance.

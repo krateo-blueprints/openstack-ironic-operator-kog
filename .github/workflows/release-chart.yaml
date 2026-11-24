@@ -450,10 +450,24 @@ jobs:
   # A comment waiting for something that already happened reads as current, so
   # the condition below is the one that is actually still open.
   #
-  # This job is therefore redundant BY THE STANDARD, and is kept for the one
-  # thing the standard cannot cover: it checks the served result independently of
-  # the publisher's own report of it. A publisher that concludes green without
-  # having verified is invisible to its own check.
+  # This job is redundant BY THE STANDARD -- and, measured 2026-11-24, by the
+  # PUBLISHER'S IMPLEMENTATION too, which is the stronger statement and the one
+  # that took a second look. At the exact SHA this repo pins
+  # (publish-chart.yaml@70095ab) the publisher refuses a tarball that is "not
+  # anonymously downloadable" (:296) and then installs each chart with
+  # `env -u GH_TOKEN helm pull "$n" --version "$v" --repo "$REPO_URL"` (:386) --
+  # an anonymous pull with the token explicitly unset. Our own 10 green releases
+  # called that version, so docs/MARKETPLACE.md's drop condition ("seen green for
+  # some caller") IS met, by this caller.
+  #
+  # What is left is thin: this job reads the served result independently of the
+  # publisher's own report of it, and a publisher that concludes green without
+  # having verified is invisible to its own check. Whether that is worth a second
+  # copy depends on something neither check has: a positive control. Ours has
+  # never failed (below) and the publisher's step is not known to have been
+  # proven able to fail either, so deleting one unproven check in favour of
+  # another unproven check buys nothing. Asked acmp for that answer on
+  # 2026-11-24; delete this job once it comes back, and do not delete it before.
   #
   # Its record, measured over the last 18 release-chart runs: 10 success, 2
   # skipped (the publish failed first, so there was nothing to verify), 6 before
