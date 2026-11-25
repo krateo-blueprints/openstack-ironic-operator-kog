@@ -9,6 +9,8 @@ docs/api.md: the CompositionDefinition CRD, the four generated composition CRDs,
 docs/examples.md: index of the runnable examples
 docs/release.md: how the four charts are published to GHCR (release-chart.yaml)
 docs/log.md: curated history
+examples/baremetal-host/README.md: a BaremetalHost CR that walks a real node enroll -> active, BMC password from a Secret
+examples/baremetal-host/composition.yaml: the composition CR itself
 manifests/baremetalhost-fake-demo.yaml: a BaremetalHost CR that walks a fake node enroll -> active
 # Deep-dive references (design + runbook):
 docs/MARKETPLACE.md: how the two blueprints reach the Krateo Marketplace — the channel gate, the two routes to a card, and the publish path

@@ -113,6 +113,9 @@ version lacks field X; switch to a newer one (see [docs/api.md](docs/api.md)).
 
 ## Examples
 
+- [examples/baremetal-host](examples/baremetal-host/README.md) — a `BaremetalHost` CR that
+  drives an Ironic node from `enroll` through inspection to `active`, with the BMC password
+  taken from a Secret rather than written into `driver_info`.
 - `manifests/baremetalhost-fake-demo.yaml` — a `BaremetalHost` that cdc walks from
   `enroll` to `active` against the local standalone Ironic, with no hardware. This is
   what `make composition-demo` applies.
