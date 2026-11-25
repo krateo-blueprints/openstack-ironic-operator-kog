@@ -437,12 +437,89 @@ jobs:
   # have fired, which is the worst kind of check to keep. See the retraction in
   # docs/MARKETPLACE.md.
   #
-  # krateo-blueprints/charts#7 (the org publishing standard) makes the publisher
-  # run this same verification for every caller, with an anonymous
-  # `helm pull --repo`. When that lands, this job becomes redundant rather than
-  # wrong, and the standard says callers may drop it. Keeping it until then, and
-  # arguably after: it checks the served result independently of the publisher's
-  # own report of it.
+  # CORRECTED 2026-11-24. This said krateo-blueprints/charts#7 "makes the
+  # publisher run this same verification for every caller ... When that lands,
+  # this job becomes redundant". **It landed on 2026-11-07** -- #7 is the merged
+  # PR that created PUBLISHING.md -- and the rule is now its rule 8: "The release
+  # isn't done until the Marketplace can install it. The publisher reads the
+  # served `index.yaml` until every chart it published is listed at its version,
+  # then installs each one anonymously with `helm pull --repo`, the path the
+  # Marketplace uses. If either check fails, the release fails. Callers don't
+  # need their own check."
+  #
+  # A comment waiting for something that already happened reads as current, so
+  # the condition below is the one that is actually still open.
+  #
+  # CORRECTED AGAIN, same day. The paragraph here said this job was redundant by
+  # the publisher's implementation as well as by the standard, and that
+  # docs/MARKETPLACE.md's drop condition was met. **That was wrong, and the error
+  # was reading that the publisher's code EXISTS and concluding that it WORKS.**
+  #
+  # Asked the acmp session whether the publisher's checks had a positive control.
+  # Answer: no -- and looking for one they found a hole, which verifies here at
+  # the SHA this repo actually pins (publish-chart.yaml@70095ab, 1.4.3):
+  #
+  #   :367  missing=()                      <- seeded EMPTY
+  #   :369  curl ... index.yaml ... || { sleep 30; continue; }
+  #   :370  missing=()                      <- re-seeded only AFTER a good curl
+  #   :379  if [ "${#missing[@]}" -gt 0 ]; then ... exit 1
+  #
+  # If all 20 attempts fail to fetch the index, :370 never runs, `missing` is
+  # still empty from :367, and the test at :379 is false -- the "served index
+  # lists every chart" arm PASSES having read nothing. (The `helm pull --repo` at
+  # :386 fetches the same index and would most likely fail anyway, so neither
+  # they nor I claim a release ever slipped through. The arm is vacuous, not the
+  # whole step.)
+  #
+  # This job fails closed on the same input, which is why it is kept -- but the
+  # FIRST version of this comment named the wrong line as the reason, and the
+  # control written to prove it is what caught that:
+  #
+  #   claimed:  `outstanding = list(wanted)` seeds every pair outstanding, so an
+  #             unreadable index leaves them all outstanding and the run fails.
+  #   measured: emptying that seeding changes NOTHING. It governs the retry only.
+  #             The verdict is read off `found`, which is POSITIVE evidence -- a
+  #             pair enters it only when an index was actually read and actually
+  #             advertised it. The publisher derives its verdict from `missing`,
+  #             seeded empty, so reading nothing leaves nothing missing.
+  #             Same shape, opposite default.
+  #
+  # Both arms are now in `python3 -I hack/verify-channel-entry.py --self-test`
+  # (12 cases, run by `make check` via check-channel-entry-selftest): mutation A
+  # requires emptying the seeding to change nothing, mutation B requires a
+  # verdict that trusts `found` blindly to make the unreadable-index arm pass.
+  # The script had no test at all until 2026-11-24.
+  #
+  # So the drop condition is NOT met. It is now: krateo-blueprints/charts#53
+  # (which re-seeds `missing` to everything published and adds
+  # test/publish-chart/run-availability.py, mutation-tested against stand-in
+  # curl/helm/sleep) merged AND carried by the publish-chart pin of whatever
+  # release-oci version this repo migrates to. MEASURED 2026-11-25, after acmp
+  # named 2.1.0 and then retracted it: #53 is merged (b7571b9, 2026-11-24) and
+  # NO tagged release-oci carries it. 2.1.0 (aa90d48) pins publish-chart at
+  # charts 1.9.3; 2.2.0 (705b79c) pins 1.11.0. Both still read `missing=()`
+  # at the pre-loop seed, byte-identical at 18175 bytes. The fix first appears
+  # in charts 1.12.0 as `missing=("${want[@]}")`, and 1.13.2 still has it --
+  # so the reading discriminates, it is not a failed grep. The condition is
+  # therefore unmet by MEASUREMENT, not by assumption: re-measure the PIN of
+  # the release-oci this repo adopts, never the PR number. A merged fix that
+  # nothing calls changes nothing.
+  # Delete this job then, and not before.
+  #
+  # Its record, measured over the last 18 release-chart runs: 10 success, 2
+  # skipped (the publish failed first, so there was nothing to verify), 6 before
+  # the job existed. It has never failed, and no positive control has ever been
+  # run for it -- nobody has shown it CAN fail. Unproven coverage, not a proven
+  # guard. docs/MARKETPLACE.md keeps the sharper drop condition: the publisher's
+  # own anonymous `helm pull` seen green for some caller.
+  #
+  # krateo-platformops/.github's release-oci will carry this as the last step of
+  # the publishing side (acmp accepted it on 2026-11-24, scheduled for the
+  # release after 2.2.0, written there with its own controls). Do not port it:
+  # keep running it here until that exists, then delete this job. If this repo
+  # migrates to release-oci first, `needs:` must move from
+  # `publish-blueprints-channel`, which the migration deletes, to the release-oci
+  # call -- see repository-standard R5's delete list.
   verify-channel-entry:
     needs: publish-blueprints-channel
     runs-on: ubuntu-latest
