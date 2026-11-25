@@ -1,8 +1,10 @@
 # Example KubernetesCluster: one control plane (blade01) + two workers (blade02, blade03).
 # Apply against a cluster where:
 #   - the kubernetes-cluster CompositionDefinition has been applied
-#   - the baremetal-lifecycle CompositionDefinition has been applied (the
-#     chart renders BaremetalLifecycle CRs that depend on this CRD)
+#   - the baremetal-host CompositionDefinition has been applied (the chart renders
+#     BaremetalHost CRs that depend on this CRD). This said baremetal-lifecycle until
+#     2026-11-25, which was wrong on both counts: that chart was retired, and
+#     kubernetes-cluster always rendered BaremetalHost -- see its _helpers.tpl.
 #   - the Ironic Node KOG primitive is installed (the chart's lookup reads
 #     nodes.baremetal.ogen.krateo.io to gate workers on the CP's join token)
 #   - the bare-metal blades can reach the management cluster's API server

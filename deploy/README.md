@@ -96,24 +96,15 @@ openstack baremetal node create \
 
 Then run state transitions: `manage`, `inspect`, `provide`, `deploy`.
 
-## Inspect → Provide Two-Phase Flow
+## Inspect → Provide: no longer a two-phase flow
 
-When using the baremetal-lifecycle chart with `runInspect: true`, the node stays in `manageable` after inspect completes. The chart would then emit `inspect` again on the next reconcile (infinite loop). To avoid this, use a **two-phase deployment**:
+This section used to describe a **two-phase deployment**: install the
+`baremetal-lifecycle` chart with `runInspect: true`, wait for the `ironic-inspect-*`
+Job, then `helm upgrade` with `runInspect: false` to emit `provide`. Without the second
+phase the chart re-emitted `inspect` on every reconcile and looped.
 
-1. **Phase 1**: Deploy with `runInspect: true`. Wait for the `ironic-inspect-*` Job to complete.
-2. **Phase 2**: Upgrade with `runInspect: false`. The chart will emit the `provide` Job.
-
-```bash
-# Phase 1
-helm upgrade --install baremetal-lifecycle ./charts/baremetal-lifecycle \
-  -n default --set nodeName=my-node \
-  --set runInspect=true ...
-
-# Wait for: kubectl get jobs -l app.kubernetes.io/name=baremetal-lifecycle
-# ironic-inspect-baremetal-lifecycle should be Completed
-
-# Phase 2
-helm upgrade baremetal-lifecycle ./charts/baremetal-lifecycle \
-  -n default --set nodeName=my-node \
-  --set runInspect=false ...
-```
+That chart was retired on 2026-11-25 and the workaround went with it. Set
+`enableInspection: true` on `baremetal-host` instead: inspection and provisioning are
+one convergent walk there, so there are no phases to sequence and nothing to upgrade
+between them. Walking transitions by hand with repeated `helm upgrade` is the YAML
+choreography this repo rules out -- the controller advances the state machine.

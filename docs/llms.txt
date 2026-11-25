@@ -9,8 +9,7 @@ docs/api.md: the CompositionDefinition CRD, the four generated composition CRDs,
 docs/examples.md: index of the runnable examples
 docs/release.md: how the four charts are published to GHCR (release-chart.yaml)
 docs/log.md: curated history
-examples/baremetal-lifecycle/README.md: a BaremetalLifecycle CR that walks a node enroll -> active
-examples/baremetal-lifecycle/composition.yaml: the composition CR itself
+manifests/baremetalhost-fake-demo.yaml: a BaremetalHost CR that walks a fake node enroll -> active
 # Deep-dive references (design + runbook):
 docs/MARKETPLACE.md: how the two blueprints reach the Krateo Marketplace — the channel gate, the two routes to a card, and the publish path
 docs/IMPLEMENTATION.md: Krateo Akmon — the complete implementation reference: two-blueprint architecture, the Ironic state machine, the Kubernetes layer and its two conformance-critical settings, operations, the failure modes that report success, and the open upstream issues
@@ -30,12 +29,8 @@ docs/quickstart.md: first-time smoke test with the openstack baremetal CLI
 charts/kubernetes-cluster/README.md: the kubernetes-cluster blueprint card — inputs, prerequisites and a worked 3-CP manifest
 charts/baremetal-host/README.md: the baremetal-host blueprint card — inputs and the enroll→active lifecycle
 charts/baremetal-host/values.yaml: the unified BaremetalHost composition values
-charts/baremetal-lifecycle/values.yaml: the provisioning-only composition values
-charts/baremetal-discovery/values.yaml: the discovery-only composition values
 charts/kubernetes-cluster/values.yaml: the kubeadm-cluster composition values
 manifests/compositiondefinition-baremetal-host.yaml: registers the baremetal-host chart
-manifests/compositiondefinition-baremetal-lifecycle.yaml: registers the baremetal-lifecycle chart
-manifests/compositiondefinition-baremetal-discovery.yaml: registers the baremetal-discovery chart
 manifests/compositiondefinition-kubernetes-cluster.yaml: registers the kubernetes-cluster chart
 manifests/restdefinition-node.yaml: KOG Node CRUD RestDefinition
 manifests/restdefinition-provision.yaml: KOG NodeProvision action RestDefinition

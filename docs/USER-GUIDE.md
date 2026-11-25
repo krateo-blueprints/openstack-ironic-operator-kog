@@ -610,7 +610,7 @@ CP's cloud-init. You don't need to paste a PEM into the CR. The
 hardened management clusters where root-ca-cert-publisher is disabled.
 
 If neither path produces a CA bundle, the `lifecycle-cp.yaml` template
-gate fails closed — no `BaremetalLifecycle` CR is rendered for the CP,
+gate fails closed — no `BaremetalHost` CR is rendered for the CP,
 so the cloud-init doesn't get baked with a broken `publish-join.sh`.
 
 ## Token rotation (kubeadm join TTL)

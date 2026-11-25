@@ -17,8 +17,7 @@ The four charts version **independently** — each carries its own `version` in 
 `.github/workflows/release-chart.yaml` runs on any plain-SemVer tag (`[0-9]+.[0-9]+.[0-9]+`,
 **no** `v` prefix) or manual dispatch:
 
-1. `helm lint` each of `charts/baremetal-discovery`, `charts/baremetal-host`,
-   `charts/baremetal-lifecycle`, `charts/kubernetes-cluster`.
+1. `helm lint` each of `charts/baremetal-host`, `charts/kubernetes-cluster`.
 2. `helm package` each into `dist/`.
 3. `helm registry login ghcr.io` with `GITHUB_TOKEN`.
 4. `helm push` each `.tgz` to `oci://ghcr.io/<owner>/charts` (owner lowercased from
@@ -40,7 +39,7 @@ Then verify the artifacts exist at the versions the `Chart.yaml`s declare, e.g.:
 
 ```console
 $ helm show chart oci://ghcr.io/krateo-blueprints/charts/baremetal-host --version 0.4.5 | head -3
-$ helm show chart oci://ghcr.io/krateo-blueprints/charts/baremetal-lifecycle --version 0.3.1 | head -3
+$ helm show chart oci://ghcr.io/krateo-blueprints/charts/kubernetes-cluster --version 0.16.1 | head -3
 ```
 
 After a chart is published, bump the matching `manifests/compositiondefinition-*.yaml`
@@ -62,11 +61,18 @@ four times** -- most recently inside the very pull request whose message said it
 been updated, where a rebase dropped the hunk. It is now enforced by
 `scripts/check-release-table.py`, so it cannot disagree with the charts again.
 
+`baremetal-lifecycle` (0.3.5) and `baremetal-discovery` (0.1.4) were **retired on
+2026-11-25** and are no longer published. Both were `deprecated: true`, both rendered a
+`kind: Node` that no RestDefinition here declares -- so their output could never be
+applied -- and both lacked the in-chart `compositiondefinition.yaml` the Marketplace
+index gate requires. Use `baremetal-host` with `enableInspection=true`, which does what
+the split did. Their published versions are immutable and stay served: the `blueprints`
+index still offers **`baremetal-lifecycle` 0.3.1** (published 2026-08-19) and nothing can
+withdraw it, so treat that entry as abandoned rather than current.
+
 | chart | version |
 |---|---|
 | `baremetal-host` | `0.7.0` |
-| `baremetal-lifecycle` | `0.3.5` |
-| `baremetal-discovery` | `0.1.4` |
 | `kubernetes-cluster` | `0.16.1` |
 
 > **`kubernetes-cluster` 0.15.2 is published and must not be used.** Its bundled

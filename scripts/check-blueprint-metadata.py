@@ -89,12 +89,15 @@ except ImportError:
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# The charts published to the Marketplace's `blueprints` channel. The other
-# charts in charts/ are deliberately NOT here: baremetal-discovery and
-# baremetal-lifecycle are the superseded split that baremetal-host absorbed, and
-# the two *-probe charts are throwaway measurement rigs. They have no in-chart
-# CompositionDefinition and would fail the gate, which is the correct outcome --
-# the publisher is called for the blueprint artifact only.
+# The charts published to the Marketplace's `blueprints` channel -- which, since
+# 2026-11-25, is every chart under charts/. baremetal-discovery and
+# baremetal-lifecycle, the superseded split that baremetal-host absorbed, were
+# RETIRED rather than left unpublished: both were `deprecated: true`, both lacked
+# the in-chart CompositionDefinition the index gate requires, and keeping them
+# meant the release path had to hand-pick charts by name. The two *-probe charts
+# are throwaway measurement rigs and live under tests/charts/, which the org
+# publisher's discovery prunes. So this tuple should now EQUAL the charts/ listing;
+# a chart under charts/ that is missing here is a finding, not an exclusion.
 BLUEPRINTS = ("kubernetes-cluster", "baremetal-host")
 
 SOURCE_REPO = "krateo-blueprints/openstack-ironic-operator-kog"

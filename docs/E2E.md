@@ -35,10 +35,10 @@ $KCTL -n openstack get deploy ironic-node-controller # rest-dynamic-controller R
 
 ```bash
 make composition-up    # package + host the chart, apply the CompositionDefinition
-make composition-demo  # create a BaremetalLifecycle instance (node metal-a)
+make composition-demo  # create a fake-hardware BaremetalHost (node metal-a)
 ```
 
-`core-provider` generates a `BaremetalLifecycle` CRD; composition-dynamic-controller reconciles
+`core-provider` generates a `BaremetalHost` CRD; composition-dynamic-controller reconciles
 the instance, helm-rendering the chart each reconcile. The chart renders, by `lookup` of the
 Node's current `provision_state`, exactly one `NodeProvision` CR per state:
 `enroll → manage`, `manageable → provide`, `available → active`. Each `NodeProvision` fires

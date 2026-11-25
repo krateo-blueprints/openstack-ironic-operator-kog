@@ -1,0 +1,39 @@
+# The free local composition demo: one BaremetalHost that cdc walks to `active`
+# against the standalone Ironic `make local-up` starts, with no hardware, no BMC
+# and no PXE. Applied by `make composition-demo` and screened by
+# `make check-examples` so it cannot drift from the generated CRDs.
+#
+# REPLACES manifests/baremetallifecycle-example.yaml, retired 2026-11-25 with the
+# baremetal-lifecycle chart. That one drove a LEAF chart; this is the composition
+# path, so composition-dynamic-controller advances every transition and a single
+# apply is the whole demo.
+#
+# Deliberately NOT one of the baremetalhost-blade*.yaml manifests: those address
+# real lab blades over Redfish, and a demo target must never power-cycle hardware.
+#
+# `fake-hardware` is the driver `make ironic-up` runs. It accepts any deploy without
+# touching a machine, which is why image.source can be an unreachable URL: Ironic
+# records it and the fake driver reports success. Against a real driver this must be
+# a genuinely fetchable image, and ports must carry the real MACs -- Ironic writes
+# `pxelinux.cfg/<MAC>` only at deploy-prepare, so a wrong MAC PXE-loops.
+apiVersion: composition.krateo.io/v0-7-0
+kind: BaremetalHost
+metadata:
+  name: metal-a
+  namespace: openstack
+spec:
+  nodeName: metal-a
+  nodeNamespace: openstack
+  driver: fake-hardware
+  # Ironic requires >=1 port before deploy validation, so one is declared even
+  # though the fake driver never PXE-boots it.
+  ports:
+    - address: "52:54:00:aa:bb:01"
+      pxe_enabled: true
+  # Inspection is a separate walk and is left off to keep the demo one path:
+  # available -> deploy -> active. Set it true to exercise inspect instead.
+  enableInspection: false
+  image:
+    source: http://example.invalid/debian-13-genericcloud-amd64.qcow2
+    checksum: "0"
+  online: true

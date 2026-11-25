@@ -66,7 +66,7 @@ flowchart TB
   class user,HW topLayer
 ```
 
-The siblings `BaremetalLifecycle` and `BaremetalDiscovery` ship separate composition charts that target the same L2 primitives at narrower scopes — `BaremetalLifecycle` is a slim `enroll → active` with no rebuild lifecycle, `BaremetalDiscovery` is a manage + inspect pass that surfaces inventory in `Node.status` for an operator to consume. `kubernetes-cluster` only renders `BaremetalHost` directly because it needs the full state machine.
+The siblings `BaremetalLifecycle` (a slim `enroll → active` with no rebuild lifecycle) and `BaremetalDiscovery` (a manage + inspect pass surfacing inventory in `Node.status`) used to ship separate composition charts at narrower scopes. Both were **retired on 2026-11-25**: `baremetal-host` absorbed the split, and `kubernetes-cluster` always rendered `BaremetalHost` directly because it needs the full state machine.
 
 ---
 

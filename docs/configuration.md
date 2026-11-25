@@ -1,7 +1,7 @@
 ---
 type: Configuration
 title: openstack-ironic-operator-kog — configuration
-description: The value surface of each of the four charts — baremetal-host, baremetal-lifecycle, baremetal-discovery, kubernetes-cluster — the keys that drive Ironic transitions, and the singleton NodeConfiguration every generated controller reads.
+description: The value surface of each of the two charts — baremetal-host, kubernetes-cluster — the keys that drive Ironic transitions, and the singleton NodeConfiguration every generated controller reads.
 resource: oci://ghcr.io/krateo-blueprints/charts/baremetal-host
 tags: [ironic, configuration, values, chart]
 timestamp: 2026-08-11T00:00:00Z
@@ -39,59 +39,16 @@ node at `available`; setting it walks to `active`.
 | `undeployMode` | `full` | `full`=`automated_clean=true` (IPA disk-erase; production); `none`=skip cleaning (seconds, keeps tenant data; labs only). |
 | `configurationRef.name` | `ironic-endpoint` | the singleton `NodeConfiguration` the Node CR points at. |
 
-## baremetal-lifecycle (`charts/baremetal-lifecycle`)
-
-Provisioning-only walk `enroll → active`. **DEPRECATED — use `baremetal-host`.**
-Inspection is out of scope here; `baremetal-host` does both, via
-`enableInspection: true`. Do not use `baremetal-discovery` for it: that chart is
-also deprecated and has never worked (it renders `kind: Node`, which no
-RestDefinition declares).
-
-| key | default | effect |
-|---|---|---|
-| `nodeName` / `nodeUuid` / `parentNode` | `""` | identity, as above. |
-| `driver` / `driver_info` | `ipmi` / *(empty)* | driver + BMC keys (ipmi or redfish). |
-| `ports` | *(empty)* | KOG `Port` CR per entry; `node_uuid` filled from `nodeUuid` (which must be set when ports are declared). |
-| `instance_info` | *(empty)* | `{image_source, image_checksum}`; required before deploy (`available → active`). |
-| `configDrive` | *(empty)* | cloud-init meta/user/network data merged into `instance_info` at deploy. |
-| `ironicApiUrl` | `http://ironic.openstack.svc.cluster.local:6385` | endpoint the provisioner Job hits. |
-| `ironicAuthType` | `none` | standalone/noauth by default. |
-| `ironicApiVersion` | `1.99` | microversion sent by the provisioner Job. |
-| `waitTimeout` | `300` | per-transition `--wait` seconds for the `openstack baremetal` CLI. |
-| `openstackClientImage` | `quay.io/airshipit/openstack-client:2026.1-ubuntu_noble` | client image for the provisioner Job. |
-| `online` | *(unset)* | power control; each flip renders a freshly-named NodePower CR. |
-| `nodeNamespace` | `""` | Node CR namespace (where the RDC watches). |
-| `configurationRef.name` | `ironic-endpoint` | singleton `NodeConfiguration`. |
-
-## baremetal-discovery (`charts/baremetal-discovery`) — DEPRECATED, AND NEVER WORKED
-
-**Do not use this chart.** It renders `kind: Node` at
-`baremetal.ogen.krateo.io/v1alpha1`, and no RestDefinition in this repo declares a
-kind called `Node` — the node kind is `BaremetalNode` at `v1-0-0`. `kubectl apply`
-of its output fails with "no matches for kind Node". Its own `lookup` uses the same
-non-existent kind, so every transition guard fails silently and it renders one
-inapplicable resource and nothing else: it appears to install and does nothing.
-The helper has carried `v1alpha1` since the chart's first commit.
-
-Use **`baremetal-host`** with `enableInspection: true`. `BaremetalNode`'s status
-carries `properties`, `inspection_started_at` and `inspection_finished_at` — the
-inventory this chart's description promises. The values below are recorded for
-readers of existing releases; they drive nothing.
-
-Discovery-only walk `enroll → manage → inspect → manageable`; inventory is read from the
-Node CR's status. Output feeds a lifecycle spec.
-
-| key | default | effect |
-|---|---|---|
-| `nodeName` / `nodeUuid` / `parentNode` | `""` | identity. Preserve `nodeUuid` if you later re-enroll the same node under lifecycle. |
-| `driver` / `driver_info` | `ipmi` / *(empty)* | driver + BMC keys. |
-| `ports` | *(empty)* | required for `inspect_interface: agent` — Ironic refuses `PUT target=inspect` with no port. |
-| `nodeNamespace` | `""` | Node CR namespace (defaults to release namespace). |
-| `configurationRef.name` | `ironic-endpoint` | the same singleton both compositions share. |
+`baremetal-lifecycle` and `baremetal-discovery` were retired on 2026-11-25: both were
+`deprecated: true`, both rendered a `kind: Node` that no RestDefinition declares (so their
+output could never be applied), and neither carried the in-chart `compositiondefinition.yaml`
+the Marketplace index gate requires. Use `baremetal-host` with `enableInspection: true`,
+which does what the split did. Already-published versions stay served and cannot be
+withdrawn — `baremetal-lifecycle` 0.3.1 is still in the `blueprints` index.
 
 ## kubernetes-cluster (`charts/kubernetes-cluster`)
 
-Renders one `BaremetalLifecycle` per member and gates the join sequence. Defaults here are
+Renders one `BaremetalHost` per member and gates the join sequence. Defaults here are
 placeholders — a real cluster overrides them on the `KubernetesCluster` CR.
 
 | key | default | effect |
@@ -100,8 +57,8 @@ placeholders — a real cluster overrides them on the `KubernetesCluster` CR.
 | `k8sVersion` | `v1.31.4` | kubeadm/kubelet/kubectl package version via cloud-init. |
 | `cni.install` / `.manifestUrl` | `flannel` / *(flannel release URL)* | CNI applied by the CP post-init. |
 | `image.source` / `.checksum` | *(empty)* | cloud-init OS image deployed onto every blade (Debian/Ubuntu-shaped). |
-| `lifecycleNamespace` | *(empty)* | where the rendered `BaremetalLifecycle` CRs land. |
-| `configurationRef` | `ironic-endpoint` / `openstack` | Ironic auth, same shape as lifecycle. |
+| `lifecycleNamespace` | *(empty)* | where the rendered `BaremetalHost` CRs land. (The key keeps its name for compatibility; the CRs are `BaremetalHost`.) |
+| `configurationRef` | `ironic-endpoint` / `openstack` | Ironic auth, same shape as `baremetal-host`. |
 | `conformance.install` / `.version` / `.runOnBoot` / `.outputDir` | `false` / `v0.8.0` / `false` / `/var/lib/conformance` | CNCF conformance runner on the bootstrap CP. **Reachable from a Composition since 0.14.0** -- the keys were read by the templates but absent from `values.schema.json`, so the generated CRD had no such field. |
 | `cni.kubeProxyReplacement` | `true` | Cilium replaces kube-proxy. **Reachable from a Composition since 0.14.0** -- `cni` declares properties, so it is a structural schema with no `x-kubernetes-preserve-unknown-fields`, and the API server silently PRUNED this key. |
 | `ironicAuth.*` | `""` (userDomain `Default`) | Keystone creds baked into CP cloud-init so `publish-join.sh` can PATCH Ironic's `node.extra` from the blade. |

@@ -1,7 +1,7 @@
 ---
 type: ChartRepo
 title: openstack-ironic-operator-kog — index
-description: The map of the OpenStack Ironic KOG blueprint bundle — four Krateo compositions (baremetal-host, baremetal-lifecycle, baremetal-discovery, kubernetes-cluster) that drive Ironic's bare-metal lifecycle through the Ironic REST API with no hand-written operator.
+description: The map of the OpenStack Ironic KOG blueprint bundle — two Krateo compositions (baremetal-host, kubernetes-cluster) that drive Ironic's bare-metal lifecycle through the Ironic REST API with no hand-written operator.
 resource: oci://ghcr.io/krateo-blueprints/charts/baremetal-host
 tags: [ironic, bare-metal, openstack, krateo, kog, composition]
 timestamp: 2026-08-11T00:00:00Z
@@ -28,9 +28,14 @@ The bundle ships **four charts**, versioned independently:
 | chart | Kind | what it does |
 |---|---|---|
 | `charts/baremetal-host` | `BaremetalHost` | unified single-CRD host lifecycle (metal3-equivalent surface) |
-| `charts/baremetal-lifecycle` | `BaremetalLifecycle` | provisioning-only walk `enroll → active` |
-| `charts/baremetal-discovery` | `BaremetalDiscovery` | **DEPRECATED** — use `baremetal-host`. Never worked: renders a `Node` kind that does not exist |
 | `charts/kubernetes-cluster` | `KubernetesCluster` | kubeadm cluster over Ironic-provisioned blades |
+
+`baremetal-lifecycle` and `baremetal-discovery` were retired on 2026-11-25: both were
+`deprecated: true`, both rendered a `kind: Node` that no RestDefinition declares (so their
+output could never be applied), and neither carried the in-chart `compositiondefinition.yaml`
+the Marketplace index gate requires. Use `baremetal-host` with `enableInspection: true`,
+which does what the split did. Already-published versions stay served and cannot be
+withdrawn — `baremetal-lifecycle` 0.3.1 is still in the `blueprints` index.
 
 ## The bundle (start here)
 
