@@ -494,7 +494,16 @@ jobs:
   # (which re-seeds `missing` to everything published and adds
   # test/publish-chart/run-availability.py, mutation-tested against stand-in
   # curl/helm/sleep) merged AND carried by the publish-chart pin of whatever
-  # release-oci version this repo migrates to. acmp will name that version.
+  # release-oci version this repo migrates to. MEASURED 2026-11-25, after acmp
+  # named 2.1.0 and then retracted it: #53 is merged (b7571b9, 2026-11-24) and
+  # NO tagged release-oci carries it. 2.1.0 (aa90d48) pins publish-chart at
+  # charts 1.9.3; 2.2.0 (705b79c) pins 1.11.0. Both still read `missing=()`
+  # at the pre-loop seed, byte-identical at 18175 bytes. The fix first appears
+  # in charts 1.12.0 as `missing=("${want[@]}")`, and 1.13.2 still has it --
+  # so the reading discriminates, it is not a failed grep. The condition is
+  # therefore unmet by MEASUREMENT, not by assumption: re-measure the PIN of
+  # the release-oci this repo adopts, never the PR number. A merged fix that
+  # nothing calls changes nothing.
   # Delete this job then, and not before.
   #
   # Its record, measured over the last 18 release-chart runs: 10 success, 2

@@ -247,7 +247,12 @@ condition was therefore met. **Reading that a check exists is not evidence that
 it can fail.** Asked for a positive control, the publisher's own session found
 that its index arm seeds `missing=()` before the retry loop and re-seeds it only
 after a successful fetch, so twenty unreadable attempts leave it empty and the
-arm passes having read nothing (`krateo-blueprints/charts#53` fixes it). This repo's check does fail closed on the same input, though not for the reason
+arm passes having read nothing (`krateo-blueprints/charts#53` fixes it). That is the
+index-listing ARM, not the whole job: the same script then runs `env -u GH_TOKEN helm
+pull` under `set -e`, so a repository that is wholly unreachable still fails there. The
+exposure the empty seeding leaves is the narrower one -- a `curl` of
+`index.yaml?nocache=...` that fails where helm's own index fetch succeeds. Recorded
+because it weakens the case for keeping this job, which is the reason to write it down. This repo's check does fail closed on the same input, though not for the reason
 first written here: emptying its retry seeding changes nothing, and what fails
 closed is that its verdict is read off `found` — positive evidence, a pair
 entering it only when an index was actually read and actually advertised it. The
@@ -256,6 +261,14 @@ default. Both arms are controls in
 `hack/verify-channel-entry.py --self-test` (12 cases, in `make check`), which the
 script had never had. The condition therefore moves to: #53 merged *and*
 carried by the publish-chart pin of whichever release-oci this repo migrates to.
+**Measured 2026-11-25: #53 is merged and NO tagged release-oci carries it.** #53 merged
+2026-11-24 as `b7571b9`; release-oci **2.1.0** (`aa90d48`) pins publish-chart at charts
+**1.9.3**, and **2.2.0** (`705b79c`) pins **1.11.0** -- both still seed `missing=()`,
+byte-identical at 18175 bytes. The fix first appears in charts **1.12.0**, which seeds
+`missing=("${want[@]}")`: everything is missing until an index has actually been read.
+charts is at 1.13.2 and still has it, so the control works and the reading is not an
+instrument failure. This job therefore stays. Whoever reads this next should re-measure
+the *pin*, not the PR: a merged fix nothing calls changes nothing.
 Rule 11's visibility grant is **not** this chart's job: the standard puts it on
 the registrar (installer `readerGroups`, or a manifest beside the
 CompositionDefinition), because the chart renders per instance.
