@@ -830,7 +830,7 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 	python3 -I scripts/check-blueprint-metadata.py --self-test && \
 		python3 -I scripts/check-blueprint-metadata.py $(if $(BLUEPRINT_ONLINE),--online,)
 
-check: check-release-set-selftest check-screen-flags check-go-fmt check-findby-reachability check-upstream-arm-drift check-properties-fixture check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-chart-version-moved check-chart-version-form check-chart-renders check-charts-render-something check-release-table check-worker-node-ip check-lab-cd-versions check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest check-committed-credentials   # every standing screen
+check: check-release-set-selftest check-screen-flags check-go-fmt check-findby-reachability check-upstream-arm-drift check-properties-fixture check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-chart-version-moved check-chart-version-form check-chart-renders check-charts-render-something check-release-table check-worker-node-ip check-lab-cd-versions check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest check-committed-credentials check-condition-flap-watcher-selftest   # every standing screen
 	@echo "all standing screens passed"
 
 # check-channel-entry-selftest stood here and went on 2026-11-28 with the release-chart
@@ -994,6 +994,16 @@ check-arm7-selftest:   # the premise arm's verdict mapping stays correct
 # broke (a flat `inferred` with a climbing `latched` MUST read premise-holds), and
 # case 10 exists because a mutation proved nothing covered a wrong-width header.
 	bash tests/provision-arms/arm7.sh --self-test
+
+check-condition-flap-watcher-selftest:   # the Ready-flap instrument can still return FLAP, NO FLAP and VOID
+# hack/watch-condition-flap.py is a TOOL, not a standing screen: it needs a live cluster and
+# is run by hand for one experiment (does oasgen-provider 0.99.0's post-create recheck make
+# Ready oscillate?). It is wired in here, and only its self-test, so the instrument cannot rot
+# unnoticed between experiments. A flap detector that silently stopped detecting reads as
+# "no flap" -- the exact false negative it exists to rule out -- so the self-test carries a
+# mutation arm (a verdict ignoring the second transition must turn FLAP into NO FLAP).
+# Fully offline: synthetic streams plus fake `kubectl` scripts, no cluster is touched.
+	python3 -I hack/watch-condition-flap.py --self-test
 
 check-publisher-scope-selftest:   # the scope verifier can still tell a 403 from a failure
 # The verifier itself needs a live OpenStack and so cannot run in CI. Its CLASSIFIER
