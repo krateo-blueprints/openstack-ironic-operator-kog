@@ -66,16 +66,22 @@ jobs:
   # standard (PUBLISHING.md rule 9): this workflow receives the registry credentials and
   # CHARTS_PUBLISH_TOKEN.
   #
-  # A SPLIT ON PURPOSE, AND TEMPORARY. This call is at 2.1.0 while security.yml, lint.yaml and
-  # release-notes.yaml sit at 2.0.0. 2.0.0 indexes only the charts a run actually pushed, so a
-  # chart skipped as already published at an unchanged version silently drops out of the
-  # index; 2.1.0 is the fix, so do NOT "fix" the split by lowering release-oci to 2.0.0.
-  # Dependabot's `actions` group now contains release-oci.yaml, so its next eligible run
-  # (new releases wait out a cooldown first) moves every krateo-platformops/.github
-  # reference together. Do not hand-bump the others ahead of it.
+  # ONE VERSION OF krateo-platformops/.github PER REPOSITORY. This call, security.yml,
+  # lint.yaml and release-notes.yaml all sit at 2.3.0 (5787de78): a shared internal script
+  # called at two versions is what that rule exists to prevent. Their workflow_call
+  # contracts (inputs, secrets, required-ness) were compared at 7da11cb6 (2.0.0) and
+  # 5787de78 (2.3.0) and are identical, and release-oci's is identical between 2.1.0 and
+  # 2.3.0, so no `with:` or `secrets:` changed.
+  #
+  # DELIBERATELY AHEAD OF DEPENDABOT'S COOLDOWN. 2.3.0 was adopted by hand, inside the
+  # cooldown window for new releases, because release-oci 2.3.0 is the first release that
+  # runs publish-chart at charts 1.13.2, which carries krateo-blueprints/charts#53 (the
+  # publisher's index arm no longer passes having read nothing). That is what let this
+  # repo delete its own verify-channel-entry job. Do not move any of the four back to
+  # "match" an older pin, and do not read the early bump as a mistake to revert.
   #
   # Verify the commit with
-  #   git ls-remote https://github.com/krateo-platformops/.github.git 'refs/tags/2.1.0^{}'
+  #   git ls-remote https://github.com/krateo-platformops/.github.git 'refs/tags/2.3.0^{}'
   # -- the `^{}` is load-bearing: it peels an annotated tag to the commit.
   #
   # `permissions` is explicit on the CALLING job although the workflow already sets it: a
@@ -91,7 +97,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    uses: krateo-platformops/.github/.github/workflows/release-oci.yaml@aa90d48e1a101d5e9b3e547bca116b97c49513b5 # 2.1.0
+    uses: krateo-platformops/.github/.github/workflows/release-oci.yaml@5787de78bab935e422e75f6eabc47fa7cc073045 # 2.3.0
     with:
       index_channel: blueprints
       oci_repo: oci://ghcr.io/krateo-blueprints/charts
@@ -124,149 +130,8 @@ jobs:
       - name: The charts release-oci built must be exactly the charts under charts/
         run: python3 -I hack/verify-release-set.py --dist built
 
-  # Fetch whatever URL the index ACTUALLY advertises, with no credentials. This
-  # is the only check in this pipeline that uses the CONSUMER's credentials
-  # rather than the publisher's: the portal's Marketplace and `helm` reach the
-  # .tgz anonymously, so an index entry can be written, concluded green, and
-  # still be unfetchable. It asserts nothing about which host the index names,
-  # so it survives krateo-blueprints/charts#6 and anything after it.
-  #
-  # A DETECTOR, not a gate -- by the time it runs the entry exists and failing
-  # this job does not retract it. It makes the failure loud on the first release
-  # instead of silent until someone tries to install.
-  #
-  # A sibling `channel-asset-host-gate` stood here and has been deleted. It
-  # refused the publish when the caller was non-public AND the publisher still
-  # derived asset URLs from the caller -- written on the false premise that THIS
-  # repository is private. It is not: `origin` is
-  # krateo-blueprints/openstack-ironic-operator-kog, which is PUBLIC, and that
-  # is what `github.repository` resolves to here. The gate could therefore never
-  # have fired, which is the worst kind of check to keep. See the retraction in
-  # docs/MARKETPLACE.md.
-  #
-  # CORRECTED 2026-11-24. This said krateo-blueprints/charts#7 "makes the
-  # publisher run this same verification for every caller ... When that lands,
-  # this job becomes redundant". **It landed on 2026-11-07** -- #7 is the merged
-  # PR that created PUBLISHING.md -- and the rule is now its rule 8: "The release
-  # isn't done until the Marketplace can install it. The publisher reads the
-  # served `index.yaml` until every chart it published is listed at its version,
-  # then installs each one anonymously with `helm pull --repo`, the path the
-  # Marketplace uses. If either check fails, the release fails. Callers don't
-  # need their own check."
-  #
-  # A comment waiting for something that already happened reads as current, so
-  # the condition below is the one that is actually still open.
-  #
-  # CORRECTED AGAIN, same day. The paragraph here said this job was redundant by
-  # the publisher's implementation as well as by the standard, and that
-  # docs/MARKETPLACE.md's drop condition was met. **That was wrong, and the error
-  # was reading that the publisher's code EXISTS and concluding that it WORKS.**
-  #
-  # Asked the acmp session whether the publisher's checks had a positive control.
-  # Answer: no -- and looking for one they found a hole, which verifies here at
-  # the SHA this repo pinned at the time (publish-chart.yaml@70095ab, 1.4.3):
-  #
-  #   :367  missing=()                      <- seeded EMPTY
-  #   :369  curl ... index.yaml ... || { sleep 30; continue; }
-  #   :370  missing=()                      <- re-seeded only AFTER a good curl
-  #   :379  if [ "${#missing[@]}" -gt 0 ]; then ... exit 1
-  #
-  # If all 20 attempts fail to fetch the index, :370 never runs, `missing` is
-  # still empty from :367, and the test at :379 is false -- the "served index
-  # lists every chart" arm PASSES having read nothing. (The `helm pull --repo` at
-  # :386 fetches the same index and would most likely fail anyway, so neither
-  # they nor I claim a release ever slipped through. The arm is vacuous, not the
-  # whole step.)
-  #
-  # This job fails closed on the same input, which is why it is kept -- but the
-  # FIRST version of this comment named the wrong line as the reason, and the
-  # control written to prove it is what caught that:
-  #
-  #   claimed:  `outstanding = list(wanted)` seeds every pair outstanding, so an
-  #             unreadable index leaves them all outstanding and the run fails.
-  #   measured: emptying that seeding changes NOTHING. It governs the retry only.
-  #             The verdict is read off `found`, which is POSITIVE evidence -- a
-  #             pair enters it only when an index was actually read and actually
-  #             advertised it. The publisher derives its verdict from `missing`,
-  #             seeded empty, so reading nothing leaves nothing missing.
-  #             Same shape, opposite default.
-  #
-  # Both arms are now in `python3 -I hack/verify-channel-entry.py --self-test`
-  # (12 cases, run by `make check` via check-channel-entry-selftest): mutation A
-  # requires emptying the seeding to change nothing, mutation B requires a
-  # verdict that trusts `found` blindly to make the unreadable-index arm pass.
-  # The script had no test at all until 2026-11-24.
-  #
-  # So the drop condition is NOT met. It is now: krateo-blueprints/charts#53
-  # (which re-seeds `missing` to everything published and adds
-  # test/publish-chart/run-availability.py, mutation-tested against stand-in
-  # curl/helm/sleep) merged AND carried by the publish-chart pin of whatever
-  # release-oci version this repo migrates to. MEASURED 2026-11-25, after acmp
-  # named 2.1.0 and then retracted it: #53 is merged (b7571b9, 2026-11-24) and
-  # NO tagged release-oci carries it. 2.1.0 (aa90d48) pins publish-chart at
-  # charts 1.9.3; 2.2.0 (705b79c) pins 1.11.0. Both still read `missing=()`
-  # at the pre-loop seed, byte-identical at 18175 bytes. The fix first appears
-  # in charts 1.12.0 as `missing=("${want[@]}")`, and 1.13.2 still has it --
-  # so the reading discriminates, it is not a failed grep. The condition is
-  # therefore unmet by MEASUREMENT, not by assumption: re-measure the PIN of
-  # the release-oci this repo adopts, never the PR number. A merged fix that
-  # nothing calls changes nothing.
-  # Delete this job then, and not before.
-  #
-  # Its record, measured over the last 18 release-chart runs: 10 success, 2
-  # skipped (the publish failed first, so there was nothing to verify), 6 before
-  # the job existed. It has never failed, and no positive control has ever been
-  # run for it -- nobody has shown it CAN fail. Unproven coverage, not a proven
-  # guard. docs/MARKETPLACE.md keeps the sharper drop condition: the publisher's
-  # own anonymous `helm pull` seen green for some caller.
-  #
-  # krateo-platformops/.github's release-oci will carry this as the last step of
-  # the publishing side (acmp accepted it on 2026-11-24, scheduled for the
-  # release after 2.2.0, written there with its own controls). Do not port it:
-  # keep running it here until that exists, then delete this job. This repo
-  # migrated to release-oci 2.1.0 on 2026-11-28, so `needs:` now names the `release`
-  # job below (the release-oci call) in place of `publish-blueprints-channel`, which
-  # that migration deleted -- see repository-standard R5's delete list.
-  verify-channel-entry:
-    needs: release
-    # Not on a rehearsal: a dry run publishes nothing, so the index is not expected to
-    # advertise the versions in Chart.yaml and this would fail for the right reason on
-    # every dry run.
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - name: The URL the index advertises must be fetchable with no credentials
-        run: |
-          set -euo pipefail
-          # PyYAML is needed only by hack/verify-channel-entry.py, to parse the
-          # 1.6 MB channel index -- the chart versions below use awk instead.
-          #
-          # The fallback had to change. `pip install pyyaml` on a runner with an
-          # externally-managed Python exits non-zero
-          # (error: externally-managed-environment) and, under `set -e`, fails
-          # this step with a message about pip rather than about a missing
-          # dependency -- killing the only consumer-credentials check in the
-          # pipeline. It had never run, because the image ships PyYAML, so the
-          # broken branch was invisible. /code-review caught it.
-          if ! python3 -c "import yaml" 2>/dev/null; then
-            pip install --quiet --break-system-packages pyyaml \
-              || pip install --quiet --user pyyaml \
-              || { echo "::error::PyYAML is unavailable and could not be installed; hack/verify-channel-entry.py needs it to parse the channel index"; exit 1; }
-          fi
-          # An ARRAY, expanded quoted. An unquoted "$pairs" string happens to
-          # work in bash and silently does not in zsh, where the whole string
-          # arrives as one argv entry -- and this script's argparse ACCEPTED
-          # that, because the mangled blob still contains an "=". Caught while
-          # testing this step by hand on 2026-11-07. Nothing here should depend
-          # on which shell splits what.
-          pairs=()
-          for chart in kubernetes-cluster baremetal-host; do
-            # awk, the idiom the Makefile already uses -- no YAML parser needed
-            # for a top-level scalar. Verified to give the same answer as the
-            # yaml read for both charts before switching.
-            ver="$(awk '/^version:/{print $2; exit}' "charts/$chart/Chart.yaml")"
-            [ -n "$ver" ] || { echo "::error::no version: line in charts/$chart/Chart.yaml"; exit 1; }
-            pairs+=("$chart=$ver")
-          done
-          python3 hack/verify-channel-entry.py "${pairs[@]}"
+  # `verify-channel-entry` stood here until 2026-11-28 and was deleted with
+  # hack/verify-channel-entry.py: release-oci 2.3.0 runs publish-chart at charts 1.13.2,
+  # which carries krateo-blueprints/charts#53, so the publisher's own anonymous
+  # `helm pull` check is no longer vacuous (PUBLISHING.md rule 8, "Callers don't need
+  # their own check"). The history is in docs/MARKETPLACE.md.
