@@ -821,7 +821,7 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 	python3 -I scripts/check-blueprint-metadata.py --self-test && \
 		python3 -I scripts/check-blueprint-metadata.py $(if $(BLUEPRINT_ONLINE),--online,)
 
-check: check-channel-entry-selftest check-release-set-selftest check-screen-flags check-go-fmt check-findby-reachability check-upstream-arm-drift check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-chart-version-moved check-chart-version-form check-chart-renders check-charts-render-something check-release-table check-worker-node-ip check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest check-committed-credentials   # every standing screen
+check: check-channel-entry-selftest check-release-set-selftest check-screen-flags check-go-fmt check-findby-reachability check-upstream-arm-drift check-properties-fixture check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-chart-version-moved check-chart-version-form check-chart-renders check-charts-render-something check-release-table check-worker-node-ip check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest check-committed-credentials   # every standing screen
 	@echo "all standing screens passed"
 
 check-channel-entry-selftest:   # prove the channel-entry check can FAIL before trusting its silence
@@ -887,6 +887,14 @@ check-upstream-arm-drift:   # the contributed arm still matches the documents it
 # a note, not a contradiction -- a subset is not a false claim.
 	python3 -I scripts/check-upstream-arm-drift.py --self-test && \
 		python3 -I scripts/check-upstream-arm-drift.py
+
+check-properties-fixture:   # status.properties fixture still holds its three measured facts
+# tests/properties-inspection/ pins what a BaremetalNode's inspection fields really look
+# like (flat string map, `+00:00` offset timestamp, Ready=True/Available), measured on the
+# lab 2026-11-28. The lab is an EMULATED BMC, so the fixture cannot exercise multi-key
+# `properties` and the screen refuses a fixture that claims to. Controls run first.
+	python3 -I scripts/check-properties-fixture.py --self-test && \
+		python3 -I scripts/check-properties-fixture.py
 
 check-screen-flags:   # every screen's mode flag takes both spellings and refuses the rest
 # This repo spelled it `--selftest` on 7 screens and `--self-test` on 11, and the ones

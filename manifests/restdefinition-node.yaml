@@ -27,7 +27,9 @@ spec:
       # Inspection outputs — surfaced in BaremetalNode CR status so the baremetal-discovery
       # composition (or any operator/policy) can read inventory + completion timestamp
       # without going through openstacksdk. `properties` is the freeform object Ironic
-      # populates after inspect (cpus, memory_mb, local_gb, cpu_arch, capabilities, ...).
+      # populates after inspect. Its content depends on the inspection source: real IPA
+      # inspection yields cpus, memory_mb, local_gb, cpu_arch, capabilities, ...; the lab's
+      # emulated BMC yields cpu_arch alone (tests/properties-inspection/).
       - properties
       - inspection_started_at
       - inspection_finished_at
