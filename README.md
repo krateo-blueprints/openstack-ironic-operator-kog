@@ -203,8 +203,8 @@ Chart: `validate-chart`. (`provision-demo`, `deploy-chart`, `package-chart` and
 
 The two charts version independently (each carries its own `version` in `Chart.yaml`) but
 are published together by `.github/workflows/release-chart.yaml` on any plain-SemVer tag
-(`X.Y.Z`, **no** `v` prefix): it lints, packages and pushes both to
-`oci://ghcr.io/krateo-blueprints/charts/<name>`. Full flow in [docs/release.md](docs/release.md).
+(`X.Y.Z`, **no** `v` prefix): it calls the org's `release-oci` workflow, which packages and
+pushes both to `oci://ghcr.io/krateo-blueprints/charts/<name>` and indexes them. Full flow in [docs/release.md](docs/release.md).
 
 ```bash
 git tag X.Y.Z && git push origin X.Y.Z

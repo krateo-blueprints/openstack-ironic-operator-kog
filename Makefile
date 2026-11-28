@@ -643,18 +643,19 @@ check-oas-defaults:   # no OAS body schema may acquire the v1.26.x defaulting sh
 	python3 -I scripts/check-defaulted-optional-objects.py
 
 check-chart-version-form:   # every PUBLISHED chart version is a plain X.Y.Z (rule 13)
-# WHY IT RUNS HERE AND NOT ONLY AT RELEASE TIME. publish-chart.yaml refuses a non-X.Y.Z
-# version at INDEX time -- after the GHCR push -- so the artifact is published and the
-# index entry is not, and the run fails having already written to the registry. This
-# screen makes that unreachable: `make check` is step 2 of the publish job and the push is
-# step 7, so it gates a tag AND a workflow_dispatch, and it also runs on every pull
-# request, which is where a bad version belongs: at the commit that writes it.
+# WHY IT RUNS HERE AND NOT ONLY AT RELEASE TIME. The index refuses a non-X.Y.Z version
+# at INDEX time -- after the GHCR push -- so the artifact is published and the index entry
+# is not, and the run fails having already written to the registry. This screen makes
+# that unreachable: it runs on every pull request, which is where a bad version belongs:
+# at the commit that writes it.
 #
-# hack/release-preflight (the charts rule-12 hook) calls this same file, so rule 13 has
-# ONE implementation here rather than a copy in the hook and another in a screen.
+# hack/release-preflight (the charts rule-12 hook, which release-oci's release-preflight
+# job runs before anything is pushed) calls this same file, so rule 13 has ONE
+# implementation here rather than a copy in the hook and another in a screen.
 #
-# The chart list is DERIVED from release-chart.yaml's `helm package` loop, never restated,
-# and the screen VOIDs rather than passing if it cannot read that loop.
+# The chart list is DERIVED by release-oci's own discovery rule (every first-class
+# Chart.yaml, minus the pruned directory names), never restated, and the screen VOIDs
+# rather than passing if discovery finds nothing.
 	python3 -I scripts/check-chart-version-form.py --self-test && \
 		python3 -I scripts/check-chart-version-form.py
 
@@ -719,24 +720,12 @@ check-chart-version-moved:   # a published chart whose CONTENT moved must move i
 	python3 -I scripts/check-chart-version-moved.py --selftest && \
 		python3 -I scripts/check-chart-version-moved.py
 
-check-publish-set:   # the release workflow's chart list agrees with each chart's own declaration
-	# `.github/workflows/release-chart.yaml` publishes a HAND-MAINTAINED list, written
-	# out twice (lint, then package; push globs dist/). A chart added to charts/ and
-	# not to that list is NEVER PUBLISHED, SILENTLY -- it lints clean, the tag
-	# succeeds, and the artifact just never appears in the registry.
-	#
-	# This repo paid for the same shape once already: `apply-restdef` applied four of
-	# five RestDefinitions, omitting `power`, while NodePower was live. Nothing
-	# re-applies a RestDefinition in normal operation, so the broken target was
-	# indistinguishable from a working one.
-	#
-	# The list deliberately STAYS explicit rather than becoming a glob: a push to GHCR
-	# cannot be withdrawn (tag 0.3.7 shipped a broken kubernetes-cluster 0.15.2), so a
-	# new directory must not publish itself without a reviewable diff. Each chart
-	# declares `krateo.io/publish` in its own Chart.yaml and this screen makes any
-	# disagreement loud, offline, before a tag.
-	python3 -I scripts/check-publish-set.py --selftest && \
-		python3 -I scripts/check-publish-set.py
+# check-publish-set was RETIRED 2026-11-28. It policed the hand-maintained
+# `helm lint`/`helm package` chart list in release-chart.yaml against each chart's
+# `krateo.io/publish` annotation. The release now calls release-oci, which DISCOVERS the
+# charts to publish, so there is no list left to drift and the screen had no subject
+# (it would have VOIDed on every run). check-blueprint-metadata.py now carries the
+# gate-reproduction role (see check-blueprints below).
 
 check-restdefinition-shape:   # every declared verb/identifier/mapping resolves against its OAS
 	# The two most expensive defects this repo has had were both a reference from one
@@ -777,11 +766,13 @@ check-path-forms:   # no RestDefinition uses the dotted-index path form oasgen 0
 	python3 -I scripts/check-oasgen-path-forms.py manifests/restdefinition-*.yaml tests/identifier-arms/restdefinitions.yaml
 
 check-blueprints:   # the two Marketplace blueprints would publish AND render a usable form
-	# Three of the nine checks reproduce the publisher's own channel gate
-	# (krateo-blueprints/charts publish-chart.yaml): values.schema.json and
-	# compositiondefinition.yaml must be in the PACKAGED .tgz, and `icon` must be an
-	# absolute https URL. We package and read the archive rather than the source
-	# tree, because .helmignore is invisible to a source-tree check.
+	# Four of the ten checks reproduce the index's own content gate
+	# (krateo-blueprints/charts index-gate, run by release-oci before anything is
+	# pushed): values.schema.json and compositiondefinition.yaml must be in the
+	# PACKAGED .tgz, `icon` must be an absolute https URL, and Chart.yaml `sources:`
+	# must list this repository (checked 2026-11-28 -- no screen did before, and it
+	# is the rule that fails a whole release). We package and read the archive rather
+	# than the source tree, because .helmignore is invisible to a source-tree check.
 	#
 	# The other six cover what the gate passes and the Marketplace then shows:
 	#
@@ -801,8 +792,8 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 	#    `spec.debug: {connectorVerbose: false}` no manifest ever wrote.
 	#  - additionalProperties:false -> an opaque chart-inspector 500 (#325).
 	#
-	# The self-test runs first and the && is load-bearing, as everywhere here: 13
-	# cases, three of which must NOT fire, so the screen is shown to discriminate
+	# The self-test runs first and the && is load-bearing, as everywhere here: 20
+	# cases, five of which must NOT fire, so the screen is shown to discriminate
 	# rather than merely to complain.
 	#
 	# Pass BLUEPRINT_ONLINE=1 to resolve the icon URL as well. Off by default so
@@ -810,7 +801,7 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 	python3 -I scripts/check-blueprint-metadata.py --self-test && \
 		python3 -I scripts/check-blueprint-metadata.py $(if $(BLUEPRINT_ONLINE),--online,)
 
-check: check-channel-entry-selftest check-screen-flags check-go-fmt check-findby-reachability check-upstream-arm-drift check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-publish-set check-chart-version-moved check-chart-version-form check-chart-renders check-release-table check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest check-committed-credentials   # every standing screen
+check: check-channel-entry-selftest check-release-set-selftest check-screen-flags check-go-fmt check-findby-reachability check-upstream-arm-drift check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-chart-version-moved check-chart-version-form check-chart-renders check-release-table check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest check-committed-credentials   # every standing screen
 	@echo "all standing screens passed"
 
 check-channel-entry-selftest:   # prove the channel-entry check can FAIL before trusting its silence
@@ -831,6 +822,14 @@ check-channel-entry-selftest:   # prove the channel-entry check can FAIL before 
 # The real run needs the served index and so belongs to the release workflow, not here.
 # This target is the controls only -- the same split as check-schema-warnings-selftest.
 	python3 -I hack/verify-channel-entry.py --self-test
+
+check-release-set-selftest:   # prove the built-set check can FAIL before trusting its silence
+# hack/verify-release-set.py compares what release-oci built with charts/*/Chart.yaml, in
+# the release workflow's verify-release-set job. The real run needs the release artifact
+# and belongs there; this target is the controls only, the same split as
+# check-channel-entry-selftest. An empty artifact must FAIL, and a mutation arm must show
+# that seeding `missing` the other way would let it pass.
+	python3 -I hack/verify-release-set.py --self-test
 
 check-findby-reachability:   # a findby verb that can NEVER fire, carrying dead config
 # Observe consults findby only when IsResourceKnown is false, and IsResourceKnown has

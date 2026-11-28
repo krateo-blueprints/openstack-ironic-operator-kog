@@ -239,7 +239,7 @@ check has been seen green for some caller — redundant then, rather than wrong.
 The *rule* is no longer the open part: `charts#7` merged 2026-11-07 and
 PUBLISHING.md rule 8 now requires the publisher to do exactly this and says
 "Callers don't need their own check." That evidence does **not** exist yet, and the attempt to claim it is worth
-recording. At `publish-chart.yaml@70095ab`, the SHA this repo pins, the
+recording. At `publish-chart.yaml@70095ab`, the SHA this repo pinned then, the
 publisher does refuse a tarball that is not anonymously downloadable (`:296`)
 and does install each chart with `env -u GH_TOKEN helm pull ... --repo`
 (`:386`) — so the code is there, and on 2026-11-24 this file briefly said the
@@ -277,19 +277,22 @@ CompositionDefinition), because the chart renders per instance.
 ```
 git tag 1.2.3 && git push --tags
       │
-      ├─ release-chart.yaml / publish           → oci://ghcr.io/krateo-blueprints/charts/<name>
-      │                                           (all four charts; source of truth)
-      │                                           uploads the TWO blueprints as `charts-dist-blueprints`
+      ├─ release-chart.yaml / release           → krateo-platformops/.github release-oci 2.1.0, which runs
+      │                                           index-preflight (token present, no whitespace),
+      │                                           verify-images, release-preflight (hack/release-preflight),
+      │                                           package-and-push → oci://ghcr.io/krateo-blueprints/charts/<name>
+      │                                           (source of truth), then collect + publish-index, which
+      │                                           republishes the same bytes into the `blueprints` channel
       │
-      ├─ blueprints-token-preflight             → fails early and legibly if the token is unset
-      │
-      └─ publish-blueprints-channel             → krateo-blueprints/charts, `blueprints` channel
-                                                  (republishes the same bytes)
+      └─ release-chart.yaml / verify-channel-entry  → fetches the advertised URL anonymously (kept until a
+                                                      release-oci carries krateo-blueprints/charts#53)
 ```
 
-The artifact deliberately holds only the two blueprints: the gate loops over
-**every** `.tgz` it is given, so including the superseded charts would fail the
-whole publish.
+Before 2026-11-28 this was four jobs in this repository (`publish`,
+`blueprints-token-preflight`, `publish-blueprints-channel` and a rule-12 preflight);
+release-oci replaced them. It discovers the charts to publish instead of being given a
+list, and the index gate runs on **every** discovered package, which is why `charts/`
+holds exactly the two blueprints.
 
 ### The publish token — present is not the same as valid
 

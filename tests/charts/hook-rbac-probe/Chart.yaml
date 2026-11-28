@@ -12,9 +12,9 @@ appVersion: "1.0"
 # tests/, which the org release workflow's chart discovery prunes by name, so
 # there is no publish annotation here to be kept in step with anything -- one
 # mechanism, not two. The annotation this replaced named
-# scripts/check-publish-set.py as its enforcer; that screen scans charts/ only,
+# scripts/check-publish-set.py as its enforcer; that screen scanned charts/ only,
 # so from here it would have been read by nothing while still reading as
-# load-bearing. A chart moved back under charts/ must declare it again:
-# check-publish-set raises VOID for a chart there that declares nothing, and
-# flags any name in the workflow's list that is not a chart under charts/.
+# load-bearing, and it was retired 2026-11-28 when the release moved to release-oci,
+# whose discovery replaced the hand-maintained list it policed. A chart moved back
+# under charts/ is released by that discovery with no declaration at all.
 # A spent instrument: it measured core-provider's hook RBAC fix end to end. Kept for reproducibility, never shipped.
