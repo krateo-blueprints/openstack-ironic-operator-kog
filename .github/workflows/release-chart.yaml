@@ -135,6 +135,7 @@ jobs:
 
   # `verify-channel-entry` stood here until 2026-11-28 and was deleted with
   # hack/verify-channel-entry.py: release-oci 2.3.0 ran publish-chart at charts 1.13.2,
-  # which carries krateo-blueprints/charts#53, so the publisher's own anonymous
+  # which carries krateo-blueprints/charts#53 (this repo is now on 2.3.2, charts 1.14.1, so
+  # the condition still holds), so the publisher's own anonymous
   # `helm pull` check is no longer vacuous (PUBLISHING.md rule 8, "Callers don't need
   # their own check"). The history is in docs/MARKETPLACE.md.

@@ -271,7 +271,9 @@ pins `publish-chart.yaml` and `release-preflight.yaml` at `5825f896...`, charts 
 repo calls 2.3.0 as of that date, so the publisher it runs is the fixed one, and rule 8
 finally applies to it. The reading discriminates (it separated 1.11.0 from 1.12.0), so it is
 not a failed grep. The lesson that held throughout: re-measure the PIN of the release-oci a
-repo calls, never the PR number, because a merged fix nothing calls changes nothing.
+repo calls, never the PR number, because a merged fix nothing calls changes nothing. The pin has since moved to 2.3.2
+(charts 1.14.1), which keeps the fix and adds `--connect-timeout 10 --max-time 30` to the
+wait loop's curls.
 
 What was NOT shown: this repo's own job record was 10 green runs of 18, 2 skipped, 6 before
 it existed, and it never failed. Nobody ever ran a positive control against the live job. The
@@ -284,7 +286,7 @@ CompositionDefinition), because the chart renders per instance.
 
 ```
 git tag 1.2.3 && git push --tags
-      └─ release-chart.yaml / release           → krateo-platformops/.github release-oci 2.3.0, which runs
+      └─ release-chart.yaml / release           → krateo-platformops/.github release-oci 2.3.2, which runs
                                                    index-preflight (token present, no whitespace),
                                                    verify-images, release-preflight (hack/release-preflight),
                                                    package-and-push → oci://ghcr.io/krateo-blueprints/charts/<name>
@@ -551,8 +553,9 @@ path" above. It was a detector that ran after the publish: it read the URL the i
 *actually advertised* and fetched it **with no credentials**, the only check in the
 pipeline that used the consumer's credentials rather than the publisher's, and its
 purpose was to make an unfetchable entry loud on the first release instead of silent until
-someone tried to install. That job is now the publisher's (release-oci 2.3.0, charts
-1.13.2, PUBLISHING.md rule 8). The script is in git history before the deletion commit.
+someone tried to install. That job is now the publisher's (release-oci 2.3.0 at charts
+1.13.2 when it was deleted; this repo is now on 2.3.2, charts 1.14.1, which also bounds the
+wait loop's curls; PUBLISHING.md rule 8). The script is in git history before the deletion commit.
 
 Both were exercised before shipping, each branch with a control:
 

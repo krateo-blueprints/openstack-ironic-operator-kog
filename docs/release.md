@@ -18,7 +18,7 @@ The four charts version **independently** — each carries its own `version` in 
 **no** `v` prefix) or manual dispatch:
 
 Since 2026-11-28 it is one call to the organisation's reusable `release-oci` workflow
-(pinned by commit, 2.3.0) with `index_channel: blueprints` and
+(pinned by commit, 2.3.2) with `index_channel: blueprints` and
 `oci_repo: oci://ghcr.io/krateo-blueprints/charts`. That workflow discovers every
 first-class `Chart.yaml` (here `charts/baremetal-host` and `charts/kubernetes-cluster`;
 `tests/` is pruned), runs `hack/release-preflight`, the image gate and the index's content
