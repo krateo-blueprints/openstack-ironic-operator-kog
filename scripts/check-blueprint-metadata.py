@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Screen the Marketplace blueprints: would they publish, and would the form be usable?
 
-Nine checks over charts/*/ for the charts listed in BLUEPRINTS. Three reproduce
+Ten checks over charts/*/ for the charts listed in BLUEPRINTS. Four reproduce
 the publisher's own channel gate so a rejection is seen here rather than in a
 release run; the rest cover failures the gate passes and the Marketplace then
 shows -- a card that never appears, a blank icon, a form of unlabelled keys.
@@ -68,6 +68,17 @@ WHY EACH CHECK EARNS ITS PLACE
 9. The root must NOT set `additionalProperties: false`. chart-inspector performs
    a real dry-run install to derive RBAC and helm injects `global`, so the
    rejection surfaces as an opaque HTTP 500 (core-provider#325).
+
+10. `sources:` must list this repository's URL. krateo-blueprints/charts'
+   .github/actions/index-gate/gate.sh requires it of every chart it indexes
+   (`yq -r '.sources // [] | .[]'`, lower-cased, trailing slashes stripped, then an
+   exact whole-line match against https://github.com/<building repo>), and since
+   2026-11-28 release-oci runs that gate on every package BEFORE anything is pushed,
+   so a chart missing it fails the whole release -- not just its own entry, because
+   the gate's channel is repo-wide. No local screen checked it until now, although the
+   README says `make check-blueprints` reproduces the gate. We apply the same
+   normalisation, so a casing or trailing-slash difference the gate forgives is not
+   reported here and one it refuses is.
 """
 import glob
 import json
@@ -251,6 +262,20 @@ def check_chart(root, name, online=False):
         if not annotations.get(required_annotation):
             problems.append(f"{rel}: Chart.yaml has no `{required_annotation}` annotation")
 
+    # 10 -- the index gate's `sources:` rule, in the gate's own normalisation:
+    # lower-cased, trailing slashes stripped, whole-entry match
+    want_src = ("https://github.com/" + SOURCE_REPO).lower()
+    raw_sources = chart.get("sources") or []
+    if not isinstance(raw_sources, list):
+        raw_sources = [raw_sources]
+    have_src = {str(x).lower().rstrip("/") for x in raw_sources}
+    if want_src not in have_src:
+        problems.append(
+            f"{rel}: Chart.yaml `sources:` does not list https://github.com/{SOURCE_REPO}. "
+            f"The index gate requires the building repository there for every chart it "
+            f"indexes, and release-oci runs it before anything is pushed, so this one "
+            f"chart fails the whole release (found: {sorted(have_src) or 'no sources'})")
+
     # 5 + 6 -- the in-chart CompositionDefinition
     cd_path = None
     for candidate in ("compositiondefinition.yaml", "compositiondefinition.yml"):
@@ -354,6 +379,8 @@ def self_test():
     cases = []
     root = tempfile.mkdtemp()
     try:
+        DROP = object()  # a chart_extra value meaning "remove this key"
+
         def build(label, chart_extra=None, schema=None, cd=None, drop_schema=False):
             name = "probe-" + label
             d = os.path.join(root, "charts", name)
@@ -362,6 +389,7 @@ def self_test():
                 "apiVersion": "v2", "name": name, "version": "1.0.0",
                 "description": "probe", "type": "application",
                 "icon": "https://example.invalid/i.svg",
+                "sources": ["https://github.com/" + SOURCE_REPO],
                 "annotations": {
                     "krateo.io/source-repo": SOURCE_REPO,
                     "krateo.io/category": "compute",
@@ -369,6 +397,7 @@ def self_test():
                 },
             }
             chart.update(chart_extra or {})
+            chart = {k: v for k, v in chart.items() if v is not DROP}
             with open(os.path.join(d, "Chart.yaml"), "w") as fh:
                 yaml.safe_dump(chart, fh)
             with open(os.path.join(d, "templates", "cm.yaml"), "w") as fh:
@@ -409,6 +438,22 @@ def self_test():
                       build("nosrc", chart_extra={"annotations": {
                           "krateo.io/category": "compute",
                           "krateo.io/maturity": "beta"}}), True))
+        # 10 -- the index gate's `sources:` rule. Two ways to fail it (absent, wrong), and
+        # the spellings the gate FORGIVES must pass: a check stricter than the gate would
+        # fail a release the gate admits, and one looser would pass what it refuses.
+        cases.append(("a chart with NO sources is caught",
+                      build("nosources", chart_extra={"sources": DROP}), True))
+        cases.append(("a chart whose sources name ANOTHER repository is caught",
+                      build("wrongsources", chart_extra={"sources": [
+                          "https://github.com/someone-else/other-repo",
+                          "https://docs.openstack.org/ironic/latest/"]}), True))
+        cases.append(("a sources entry that only CONTAINS the URL is caught (whole-entry match)",
+                      build("substrsources", chart_extra={"sources": [
+                          "https://github.com/" + SOURCE_REPO + "-fork"]}), True))
+        cases.append(("sources spelled with different case and a trailing slash is accepted",
+                      build("casesources", chart_extra={"sources": [
+                          "https://docs.openstack.org/ironic/latest/",
+                          "https://GitHub.com/" + SOURCE_REPO.upper() + "/"]}), False))
         cases.append(("a CD version that drifts from Chart.yaml is caught",
                       build("drift", cd={
                           "apiVersion": "core.krateo.io/v1alpha1",

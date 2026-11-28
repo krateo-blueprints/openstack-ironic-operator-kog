@@ -1,13 +1,24 @@
 name: release-chart
 
-# Publishes all four ironic-KOG charts (each at its own Chart.yaml version) to
-# oci://ghcr.io/<owner>/charts/<name> on any SemVer tag or manual dispatch. No
-# single tag-version guard (the four charts version independently).
+# Publishes the two Marketplace blueprints -- kubernetes-cluster and baremetal-host,
+# each at its own literal Chart.yaml version -- to oci://ghcr.io/krateo-blueprints/charts
+# and into the Marketplace's `blueprints` index channel, on any SemVer tag or manual
+# dispatch, by calling the organisation's reusable release-oci workflow.
 #
-# It then mirrors the TWO MARKETPLACE BLUEPRINTS -- kubernetes-cluster and
-# baremetal-host -- into the Krateo Marketplace's `blueprints` channel, by
-# calling krateo-blueprints/charts' reusable publisher with the same bytes the
-# OCI job produced. OCI stays the source of truth; the channel republishes it.
+# MIGRATED 2026-11-28 (repository standard R5). This file used to carry its own
+# lint/package/push, a credential preflight, a mirror into the channel via
+# krateo-blueprints/charts' publish-chart.yaml, and a `make check` step in front of the
+# push. release-oci does all of that itself, and discovers the charts to publish from
+# the layout instead of from a hand-written list, so there is no list here to keep in
+# step with charts/ -- which is also why scripts/check-publish-set.py was retired.
+#
+# A MANUAL RUN IS A REHEARSAL BY DEFAULT: the `dry_run` input defaults to true and is
+# passed through, so a tag push publishes and a dispatch builds and checks everything
+# and pushes nothing. release-oci takes the release version from `chart_version`, and
+# from the git ref when that is empty; it refuses anything that is not X.Y.Z, and a
+# dispatch ref is a BRANCH. So the dispatch has a `chart_version` input, passed through
+# on a dispatch only: a tag push keeps using the tag. On a rehearsal it names the
+# version the run is rehearsing; it never changes what a chart's own Chart.yaml says.
 #
 # RETIRED 2026-11-25: baremetal-discovery and baremetal-lifecycle, the superseded
 # split that baremetal-host absorbed, used to sit in charts/ and be deliberately
@@ -29,403 +40,89 @@ on:
   push:
     tags:
       - "[0-9]+.[0-9]+.[0-9]+"
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      chart_version:
+        description: "The release version this run names, X.Y.Z (a dispatch ref is a branch, which release-preflight refuses). Required in practice."
+        type: string
+        default: ""
+      dry_run:
+        description: "Build and check everything, push nothing. Leave true unless you mean to publish."
+        type: boolean
+        default: true
 
 permissions:
   contents: read
   packages: write
 
-env:
-  HELM_VERSION: v3.19.0
-
 jobs:
-  # krateo-blueprints/charts PUBLISHING.md rule 12: a release is refused BEFORE anything is
-  # packaged or pushed. publish-chart.yaml enforces rule 13 -- a chart version must be a
-  # plain X.Y.Z -- but at INDEX time, which is after the GHCR push, so a bad version is
-  # published as an artifact and then refused an index entry. The run fails having already
-  # written to the registry.
+  # ONE call replaces what used to be four jobs here (release-preflight,
+  # blueprints-token-preflight, publish, publish-blueprints-channel). Its own jobs are
+  # index-preflight, verify-images, release-preflight, package-and-push, collect and
+  # publish-index; release-preflight runs hack/release-preflight, which still gates the
+  # chart versions before anything is pushed.
   #
-  # ONLY ON A TAG, and the skip is safe for a stated reason rather than by luck. On a
-  # workflow_dispatch `github.ref_name` is a branch, which rule 13's pattern refuses, so
-  # calling this would fail every manual run. It is skipped there instead -- and the four
-  # chart versions are still checked on that path, because the real check is a standing
-  # screen (scripts/check-chart-version-form.py) that runs in `make check`, step 2 of
-  # publish, where the push is step 7. hack/release-preflight calls that same screen, so
-  # this job is not the vacuous pass it would be for a repository with no hook, and there
-  # is ONE implementation of rule 13 here rather than a copy per caller.
-  release-preflight:
-    if: github.ref_type == 'tag'
+  # Pinned by FULL COMMIT SHA with the version in the comment, per the org publishing
+  # standard (PUBLISHING.md rule 9): this workflow receives the registry credentials and
+  # CHARTS_PUBLISH_TOKEN.
+  #
+  # A SPLIT ON PURPOSE, AND TEMPORARY. This call is at 2.1.0 while security.yml, lint.yaml and
+  # release-notes.yaml sit at 2.0.0. 2.0.0 indexes only the charts a run actually pushed, so a
+  # chart skipped as already published at an unchanged version silently drops out of the
+  # index; 2.1.0 is the fix, so do NOT "fix" the split by lowering release-oci to 2.0.0.
+  # Dependabot's `actions` group now contains release-oci.yaml, so its next eligible run
+  # (new releases wait out a cooldown first) moves every krateo-platformops/.github
+  # reference together. Do not hand-bump the others ahead of it.
+  #
+  # Verify the commit with
+  #   git ls-remote https://github.com/krateo-platformops/.github.git 'refs/tags/2.1.0^{}'
+  # -- the `^{}` is load-bearing: it peels an annotated tag to the commit.
+  #
+  # `permissions` is explicit on the CALLING job although the workflow already sets it: a
+  # called workflow's permissions are capped at its caller's, and a run that asks for more
+  # than the caller grants dies at startup with the reason visible only on the run's web page.
+  #
+  # `oci_repo` MUST be set: index_channel `blueprints` publishes to
+  # oci://ghcr.io/krateo-blueprints/charts and release-oci errors if oci_repo is its default
+  # (krateo-platformops'). `chart_root` stays at its default `.`: discovery prunes
+  # tests/ (so the probe charts under tests/charts/ are never released) and takes
+  # charts/baremetal-host and charts/kubernetes-cluster as first-class.
+  release:
     permissions:
       contents: read
-    uses: krateo-blueprints/charts/.github/workflows/release-preflight.yaml@db05838e80afecd49ec1fded8daac207bf780ec1 # 1.11.0
+      packages: write
+    uses: krateo-platformops/.github/.github/workflows/release-oci.yaml@aa90d48e1a101d5e9b3e547bca116b97c49513b5 # 2.1.0
     with:
-      # The tag names the RELEASE, not any chart: this repository publishes four charts at
-      # their own Chart.yaml versions. The shared job checks this string's shape, and
-      # hack/release-preflight checks the versions GHCR will actually receive.
-      version: ${{ github.ref_name }}
-
-  publish:
-    # Gated on the credential check above, so a release is all-or-nothing: see
-    # the comment on blueprints-token-preflight for why this inverted.
-    #
-    # THE ACCEPTABLE RESULTS ARE ENUMERATED, not one bad one excluded. `release-preflight`
-    # is skipped on a dispatch, so it must be allowed to be `skipped` -- but writing that
-    # as `result != 'failure'` would also accept `cancelled`, which is not a reading that
-    # the preflight approved anything. success-or-skipped says what is meant and blocks
-    # both failure and cancellation.
-    needs: [blueprints-token-preflight, release-preflight]
-    if: >-
-      ${{ !cancelled()
-          && needs.blueprints-token-preflight.result == 'success'
-          && (needs.release-preflight.result == 'success'
-              || needs.release-preflight.result == 'skipped') }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-        with:
-          # FULL HISTORY AND TAGS, REQUIRED. The default is a shallow fetch of the
-          # single triggering ref, so at tag time the only tag present is the one
-          # being built -- and scripts/check-chart-version-moved.py compares the
-          # working tree against the newest EARLIER tag. Measured in the 0.3.9 run,
-          # where the shallow checkout made it compare 0.3.9 with itself and print
-          #   baremetal-discovery  0.1.3 -> 0.1.3
-          # for all four charts then in charts/, with no "content moved" anywhere:
-          # the screen that
-          # guards this job was vacuous in the only place it runs.
-          #
-          # With that screen fixed to skip HEAD's own tags, a shallow checkout now
-          # VOIDs instead of passing, which would FAIL this job rather than mislead
-          # it. Both halves are needed: the fix makes the failure honest, this makes
-          # the comparison possible.
-          fetch-depth: 0
-
-      - name: Install helm
-        uses: azure/setup-helm@v5
-        with:
-          version: ${{ env.HELM_VERSION }}
-
-      # BEFORE anything is packaged or pushed. Added 2026-11-11 after tag 0.3.7
-      # published a broken `kubernetes-cluster` 0.15.2: its bundled
-      # compositiondefinition.yaml pinned version "0.15.1" while Chart.yaml said
-      # "0.15.2". The `publish-blueprints-channel` gate DID catch it --
-      #   kubernetes-cluster 0.15.2: its CompositionDefinition installs version '0.15.1'
-      # -- but that gate is a DEPENDENT JOB, so it runs after `helm push` has already
-      # succeeded. The artifact exists and cannot be withdrawn; 0.15.3 is the fix.
-      #
-      # `make check` catches it locally and is entirely offline, so there is no reason
-      # for it not to be the first thing this job does. The gate existed; it ran too
-      # late, and nobody had run the local one.
-      - name: standing screens must pass before anything is packaged or pushed
-        run: make check
-
-      - name: helm lint (all charts)
-        run: |
-          for dir in charts/baremetal-host charts/kubernetes-cluster; do
-            helm lint "$dir"
-          done
-
-      - name: helm package (all charts)
-        run: |
-          mkdir -p dist
-          for dir in charts/baremetal-host charts/kubernetes-cluster; do
-            helm package "$dir" --destination dist
-          done
-
-      - name: helm registry login (GHCR)
-        # The only pipeline in any workflow here, and it deliberately does NOT
-        # set pipefail. Audited 2026-11-04 alongside a `set -e` without pipefail
-        # in scripts/create-ironic-oas-configmap.sh, which DID mask a failing
-        # left side and was fixed.
-        #
-        # This one is correct by construction rather than by luck: the only
-        # command whose failure matters is the last, and a pipeline's status is
-        # already the right side's, so `-e` (the Actions default shell) fails
-        # the step when login fails. An empty token does not slip through
-        # either — `echo ""` succeeds, helm gets empty input on --password-stdin
-        # and login fails. The left side is `echo`, which can only fail on
-        # EPIPE, which requires helm to have exited first, which is already
-        # nonzero.
-        #
-        # Left unchanged on purpose: adding pipefail here would guard nothing,
-        # and an unexplained line in this repo invites the next reader to work
-        # out what it protects and find that it protects nothing.
-        run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" \
-            | helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
-
-      # krateo-blueprints/charts PUBLISHING.md rule 14: charts go through the organisation's
-      # chart-push action, never a bare `helm push`. It survives GHCR's tag read-after-write race:
-      # `helm push` PUTs the manifest by digest and then tags it, and the tag step first GETs that
-      # digest -- GHCR has answered that GET 404 about a second after accepting the PUT, leaving an
-      # untagged manifest behind. The action polls until the registry serves that digest, pushes the
-      # SAME archive again, and FAILS if the second push reports a different one, so a tag can never
-      # land on bytes other than the ones first pushed.
-      #
-      # WHAT THIS REPLACED, and why it was worse. A 5x `helm push` loop with a 10s sleep that
-      # retried on ANY failure: a real error -- bad credentials, a malformed chart, a quota -- burned
-      # 50 seconds and then reported "failed after 5 attempts", which names the symptom and buries
-      # the cause. It also never checked which digest the tag landed on, so the one failure mode
-      # worth guarding was the one it could not see.
-      #
-      # Pinned by commit and NEVER floated, because it receives this repository's registry write
-      # credentials (rule 14 says so explicitly).
-      #
-      # `# 1.0.0` since 2026-11-18, and the version comment is the point rather than decoration:
-      # Dependabot finds a newer version from releases or tags, so while krateo-platformops/.github
-      # published none, this pin and the three workflow pins were frozen with nothing to advance
-      # them -- the state this repo's own .github/dependabot.yml calls worse than `@main`, because
-      # it looks deliberate while going quietly stale. That was raised as
-      # krateo-blueprints/charts#23 and resolved by that repository cutting its first tag, so all
-      # four moved from `# main <date>` to `# 1.0.0` in one pass and Dependabot advances them now.
-      # Do not reintroduce the dated form here: it is transitional, for a publisher with no tags.
-      - name: Locate the shared chart-push script
-        id: chart-push
-        uses: krateo-platformops/.github/.github/actions/chart-push@7da11cb60cee5cbfc7d9e8c9328692807b43cefd # 2.0.0
-
-      # THE CHART LOOP STAYS; only the retry loop goes. push.sh takes ONE archive, so dropping the
-      # outer loop here would publish one chart and silently skip the other three.
-      - name: push (all charts)
-        env:
-          CHART_PUSH: ${{ steps.chart-push.outputs.path }}
-          # Read by push.sh for the registry's own token challenge when it reads the manifest back
-          # to confirm the digest is served. Same identity as the login above, so no new secret is
-          # introduced. The script passes them to curl on stdin (`-K -`, never argv, where any
-          # process in the job could read them) and only to a token realm on the registry's own
-          # host, so a redirected challenge cannot harvest them.
-          REGISTRY_USERNAME: ${{ github.actor }}
-          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          owner="${GITHUB_REPOSITORY_OWNER,,}"
-          for tgz in dist/*.tgz; do
-            bash "${CHART_PUSH}" "$tgz" "oci://ghcr.io/${owner}/charts"
-          done
-
-      - name: Collect the blueprint tarballs (and only those)
-        run: |
-          set -euo pipefail
-          mkdir -p blueprints-dist
-          for name in kubernetes-cluster baremetal-host; do
-            # One glob per name, resolved explicitly, so a chart that failed to
-            # package is a hard error here rather than a silently thinner upload.
-            found=0
-            for tgz in dist/"$name"-*.tgz; do
-              [ -e "$tgz" ] || continue
-              cp "$tgz" blueprints-dist/
-              found=1
-            done
-            [ "$found" = 1 ] || { echo "::error::no packaged chart for blueprint '$name'"; exit 1; }
-          done
-          ls -1 blueprints-dist/
-
-      - name: Upload the blueprint tarballs for the channel publisher
-        uses: actions/upload-artifact@v7
-        with:
-          name: charts-dist-blueprints
-          path: blueprints-dist/*.tgz
-          if-no-files-found: error
-
-  # A missing token otherwise surfaces from inside the reusable workflow, where
-  # the message is about an unauthenticated git push rather than about what is
-  # actually wrong. This says it here instead.
-  #
-  # RUNS BEFORE THE GHCR PUSH, inverted 2026-11-07. It used to carry
-  # `needs: publish` with the stated reason that it "does not run until the OCI
-  # push -- the source of truth -- has succeeded", so a credential problem could
-  # not block the real artifact. That reasoning is coherent and it is wrong under
-  # the org publishing standard, which rule 1 states as: a chart that is in GHCR
-  # and not in the index IS NOT PUBLISHED, because the Marketplace installs from
-  # the index and nothing re-resolves it against GHCR. Checking after the push
-  # is precisely how you reach that half-published state -- version in GHCR,
-  # absent from the index -- and tag 0.3.0 did exactly that: `publish`
-  # succeeded, both charts landed at 0.14.0 / 0.6.3, and the channel job then
-  # died on a 401.
-  #
-  # So the invariant is both or neither, and the cost is accepted: with no valid
-  # token a release now produces NOTHING, not even the OCI artifact. Raised by
-  # the openstack-as-a-service session against rule 7; being written into the
-  # standard as charts#9.
-  blueprints-token-preflight:
-    runs-on: ubuntu-latest
-    steps:
-      # PRESENCE IS NOT VALIDITY, and this step learned that the expensive way.
-      # It used to test `-n` on the secret only. On 2026-11-07 that passed,
-      # `publish` pushed both charts to GHCR, and then the channel job died with
-      # `HTTP 401: Bad credentials` -- RELEASE_FEED_TOKEN was set and dead. A
-      # check that cannot distinguish a live credential from an expired one is
-      # not a preflight; it is a reassurance.
-      - name: A publish token must be reachable AND authenticate
-        env:
-          # Must be the SAME token the publish call uses. When these diverge the
-          # preflight validates a credential the publish will not send, which is
-          # the presence-is-not-validity defect this job already learned once.
-          GH_TOKEN: ${{ secrets.CHARTS_PUBLISH_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${GH_TOKEN}" ]; then
-            echo "::error::CHARTS_PUBLISH_TOKEN is not set. It is now the ONLY credential this release uses for the channel (org publishing standard rule 7) -- the RELEASE_FEED_TOKEN fallback was removed deliberately. Set the ORGANISATION secret CHARTS_PUBLISH_TOKEN at visibility=all: a CLASSIC PAT with the 'repo' scope, since classic tokens have no granular contents:write. See docs/MARKETPLACE.md."
-            exit 1
-          fi
-          which=CHARTS_PUBLISH_TOKEN
-          echo "resolved: $which"
-          # The publisher writes Releases on THIS repo and gh-pages on
-          # krateo-blueprints/charts. A read of each is the cheapest thing that
-          # fails on a dead credential; it does NOT prove write scope, and that
-          # limit is deliberate -- a preflight should not make writes.
-          for repo in "${GITHUB_REPOSITORY}" krateo-blueprints/charts; do
-            if ! gh api "repos/$repo" --jq .full_name >/dev/null 2>&1; then
-              echo "::error::$which is set but does not authenticate against $repo ('HTTP 401: Bad credentials'). Nothing has been published yet -- this job now runs before the GHCR push. Rotate it. See docs/MARKETPLACE.md."
-              exit 1
-            fi
-          done
-          # AND IT MUST SURVIVE BEING PUT IN A URL. Added 2026-11-07 after tag
-          # 0.3.1: this preflight passed, `publish` pushed both charts to GHCR,
-          # and the publisher then died on
-          #   fatal: unable to access 'https://github.com/krateo-blueprints/charts/':
-          #          URL rejected: Malformed input to a URL function
-          # because it clones with the token in the userinfo of
-          #   https://x-access-token:${GH_TOKEN}@github.com/<index repo>
-          # `gh api` sends the token as an Authorization HEADER, where trailing
-          # whitespace or a newline is tolerated; curl rejects the same bytes
-          # inside a URL. So the token was PRESENT, AUTHENTICATED, and unusable.
-          #
-          # Presence is not validity, and validity in one transport is not
-          # validity in another. This step had already learned the first half the
-          # expensive way; this is the second.
-          case "${GH_TOKEN}" in
-            *[[:space:]]*)
-              echo "::error::$which contains whitespace or a newline. It authenticates as a header but git rejects it inside a clone URL ('Malformed input to a URL function'), which is how the publisher uses it. Recreate the secret with no trailing newline -- printf '%s' instead of echo, and no copy-paste line break."
-              exit 1 ;;
-          esac
-          # THE git ls-remote GATE WAS REMOVED, 2026-11-08. It embedded the
-          # token in a clone URL and refused the release if that failed -- which
-          # was exactly right against publisher 1.0.0, and is STRICTER THAN THE
-          # TRUTH against 1.0.1: that version puts no token in any URL and
-          # authenticates git through gh's credential helper instead (measured:
-          # `x-access-token` appears zero times at 36ea357). So a token that is
-          # fine for the helper but not URL-safe would have been refused here,
-          # producing a release that yields nothing -- not even the OCI artifact,
-          # since `publish` depends on this job. /code-review caught that the
-          # justification had been fixed upstream by the same commit that wrote
-          # it.
-          #
-          # The whitespace check above stays: it is the ACTUAL failure mode tag
-          # 0.3.1 hit, it is cheap, and it is true regardless of which transport
-          # the publisher uses.
-          echo "$which authenticates against both repositories"
-
-  # Republishes the same bytes into the Marketplace's blueprints channel. The
-  # publisher stamps nothing: `krateo.io/source-repo` has to be committed in each
-  # Chart.yaml, and without it the chart lands in the index and never gets a card.
-  # `make check-blueprints` fails the build if it goes missing.
-  publish-blueprints-channel:
-    needs:
-      # `publish` already depends on blueprints-token-preflight, so naming it
-      # here too would be redundant rather than safer.
-      - publish
-    # Pinned by FULL COMMIT SHA, with the version in the comment, per the org
-    # publishing standard (krateo-blueprints/charts PUBLISHING.md rule 9). NOT a
-    # moving major tag such as @1: whoever can move that tag could run code with
-    # CHARTS_PUBLISH_TOKEN in every caller at once, which is a supply-chain
-    # property rather than a convenience one.
-    #
-    # HOW TO VERIFY THE PIN BELOW. No SHA is recorded here on purpose -- see the
-    # history note. Resolve the version in the pin's own comment and compare:
-    #
-    #   git ls-remote https://github.com/krateo-blueprints/charts.git 'refs/tags/<X.Y.Z>^{}'
-    #
-    # THE `^{}` IS LOAD-BEARING, and it is the whole reason a recorded SHA was
-    # worth having. An annotated tag's OBJECT is a different sha from the commit it
-    # points at -- for 1.0.4 the object was a98bd9db -- so pinning the unpeeled ref
-    # pins something that is not the reviewed tree. Upstream's own #9 is about
-    # exactly that ("pin the tag's commit, not the tag object"), and charts 1.4.2's
-    # dated-pin notice now says it too. A reviewer who checks a correct pin with a
-    # plain `refs/tags/<v>` will see a mismatch and think the pin is wrong.
-    #
-    # (HISTORY, and the reason this block no longer records a SHA. It described
-    #  1.0.0 / a2d63ba after the pin moved to 1.0.1 in fd45819, so a reader
-    #  auditing the supply-chain pin read a verification of a SHA that was not in
-    #  use. /code-review caught it, and the note then PREDICTED that Dependabot
-    #  advancing the pin would do it again. It did: #79 moved the pin to 1.0.4
-    #  while the record still read 1.0.1 / 36ea357. Twice, and its own conclusion
-    #  was "a record that has to be moved by hand is a record that gets left
-    #  behind, so treat the prediction as the finding rather than the warning".
-    #
-    #  Moving the pin to 1.4.2 would have been the third time, by the reader the
-    #  warning was addressed to. So the duplication is gone instead: the SHA now
-    #  appears exactly ONCE in this file, on the `uses:` line, and a record that
-    #  does not repeat it cannot disagree with it. That is cheaper than a screen
-    #  policing a duplication that need not exist.)
-    #
-    # THE MEASUREMENTS BELOW WERE TAKEN AT 1.0.4 AND CARRY ACROSS TO 1.4.2 -- not
-    # on faith, which is what this block criticised, but because the whole diff of
-    # publish-chart.yaml from 1.0.4 to 1.4.2 is TWO HUNKS: one comment line, and
-    # the rule 13 version check. Nothing else changed, so nothing they measured
-    # moved. (They were re-measured rather than carried at 1.0.4 itself, because
-    # 1.0.2/1.0.3/1.0.4 did change this very file, +57/-40.)
-    #   RELEASES_BASE   still hardcoded to
-    #                   github.com/krateo-blueprints/charts/releases/download --
-    #                   3 occurrences, ZERO derived from `inputs.source_repo`
-    #   served index    still `env -u GH_TOKEN helm pull --repo`, the line
-    #                   byte-identical to 36ea357's
-    #
-    # AND SCOPED DELIBERATELY, where the old wording was absolute. `env -u GH_TOKEN`
-    # removes the only token this workflow puts in the environment: GH_TOKEN, set at
-    # workflow level from PUBLISH_TOKEN, with no GITHUB_TOKEN, HELM_REGISTRY_CONFIG
-    # or HELM_REPOSITORY_CONFIG anywhere in the file. That is what was measured. It
-    # is NOT a proof that helm sends no credential from some other source, which is
-    # what the old "genuinely anonymous" claimed. Upstream dropped an unmeasured
-    # "trims it" from their own docs in 545626e6 for the same reason; this is that
-    # correction applied on the caller's side.
-    #
-    # INPUT CONTRACT UNCHANGED across the bump, checked rather than assumed, by
-    # parsing `on.workflow_call` at both commits rather than reading the diff:
-    # inputs [artifact, channel*, git_tag*, source_repo*] and secret
-    # [PUBLISH_TOKEN*] are identical, so the `with:` block below needs no edit --
-    # and a contract break here would surface only at tag time, on the one path
-    # that publishes. Checked this way for the 1.0.1 -> 1.0.4 move and again for
-    # 1.0.4 -> 1.4.2.
-    #
-    # ONE charts VERSION PER REPO. This pin sat at 1.0.4 while lint.yaml's
-    # pinned-uses reached 1.4.2 -- one repository served at two commits, which is
-    # how a shared internal script ends up called at two versions. The cause was
-    # dependabot.yml excluding charts from its group, so each charts pin arrived in
-    # its own PR and they drifted; there is a `charts` GROUP now, which keeps the
-    # separate review and moves them together.
-    #
-    # The only behaviour change from 1.0.4 to 1.4.2 is rule 13: a chart version
-    # must be plain X.Y.Z -- no `v`, no leading zeros, no -prerelease, no +build --
-    # because an index entry is never removed and the Marketplace offers the live
-    # index newest first, so a pre-release would be on offer forever. Checked
-    # before bumping, against the rule's own regex: all six charts here pass, and
-    # the two this job actually uploads are kubernetes-cluster and
-    # baremetal-host.
-    #
-    # .github/dependabot.yml advances this; a SHA pin with nothing advancing it
-    # is worse than @main because it looks deliberate while going stale.
-    uses: krateo-blueprints/charts/.github/workflows/publish-chart.yaml@db05838e80afecd49ec1fded8daac207bf780ec1 # 1.11.0
-    with:
-      source_repo: ${{ github.repository }}
-      git_tag: ${{ github.ref_name }}
-      channel: blueprints
-      artifact: charts-dist-blueprints
+      index_channel: blueprints
+      oci_repo: oci://ghcr.io/krateo-blueprints/charts
+      chart_version: ${{ github.event_name == 'workflow_dispatch' && inputs.chart_version || '' }}
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
     secrets:
-      # ONE TOKEN, NO FALLBACK -- standard rule 7. The `|| secrets.RELEASE_FEED_TOKEN`
-      # fallback that used to be here is gone on purpose: RELEASE_FEED_TOKEN is
-      # for the release-notes cross-org feed and is not an index credential, and
-      # falling back to it is how a release could publish with a token nobody
-      # intended. It is also dead (401 on tag 0.3.0).
-      #
-      # CONSEQUENCE, accepted: with no valid token a release produces NOTHING,
-      # not even the OCI artifact, because `publish` depends on
-      # blueprints-token-preflight. This comment used to say the release
-      # "reaches GHCR and then fails at the preflight" -- which described the
-      # ordering before d3bd4a3 inverted it, and contradicted the job comment
-      # 100 lines above on the exact half-published question the inversion was
-      # made to settle. /code-review caught it, and a reader lands on this
-      # `secrets:` block precisely when the token is the question, which is the
-      # worst place for a stale answer.
-      PUBLISH_TOKEN: ${{ secrets.CHARTS_PUBLISH_TOKEN }}
+      charts_publish_token: ${{ secrets.CHARTS_PUBLISH_TOKEN }}
+
+  # release-oci asserts the set its DISCOVERY found, so a chart discovery misses fails
+  # nothing there: what it checks is what it built. This reads the other side -- the
+  # packages in the `release-oci-charts` artifact (uploaded on a rehearsal as well as a
+  # release) against charts/*/Chart.yaml in the checkout, which does not go through
+  # discovery -- and requires them to be the SAME set, versions included. See
+  # hack/verify-release-set.py for the verdict's seeding.
+  #
+  # HOW WE KNOW IT CAN FAIL: `make check` runs `hack/verify-release-set.py --self-test`
+  # first (check-release-set-selftest), whose cases include an empty artifact, a missing
+  # chart, a version that differs and an extra chart, each required to FAIL, plus a mutation
+  # arm that seeds the verdict the wrong way round and requires the empty artifact to then
+  # PASS. It has not yet run against a real artifact on a runner.
+  verify-release-set:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v7
+        with:
+          name: release-oci-charts
+          path: built
+      - name: The charts release-oci built must be exactly the charts under charts/
+        run: python3 -I hack/verify-release-set.py --dist built
 
   # Fetch whatever URL the index ACTUALLY advertises, with no credentials. This
   # is the only check in this pipeline that uses the CONSUMER's credentials
@@ -467,7 +164,7 @@ jobs:
   #
   # Asked the acmp session whether the publisher's checks had a positive control.
   # Answer: no -- and looking for one they found a hole, which verifies here at
-  # the SHA this repo actually pins (publish-chart.yaml@70095ab, 1.4.3):
+  # the SHA this repo pinned at the time (publish-chart.yaml@70095ab, 1.4.3):
   #
   #   :367  missing=()                      <- seeded EMPTY
   #   :369  curl ... index.yaml ... || { sleep 30; continue; }
@@ -526,12 +223,16 @@ jobs:
   # krateo-platformops/.github's release-oci will carry this as the last step of
   # the publishing side (acmp accepted it on 2026-11-24, scheduled for the
   # release after 2.2.0, written there with its own controls). Do not port it:
-  # keep running it here until that exists, then delete this job. If this repo
-  # migrates to release-oci first, `needs:` must move from
-  # `publish-blueprints-channel`, which the migration deletes, to the release-oci
-  # call -- see repository-standard R5's delete list.
+  # keep running it here until that exists, then delete this job. This repo
+  # migrated to release-oci 2.1.0 on 2026-11-28, so `needs:` now names the `release`
+  # job below (the release-oci call) in place of `publish-blueprints-channel`, which
+  # that migration deleted -- see repository-standard R5's delete list.
   verify-channel-entry:
-    needs: publish-blueprints-channel
+    needs: release
+    # Not on a rehearsal: a dry run publishes nothing, so the index is not expected to
+    # advertise the versions in Chart.yaml and this would fail for the right reason on
+    # every dry run.
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

@@ -99,10 +99,10 @@ def chart_version(text):
 def is_published(text):
     """Does this chart declare itself published?
 
-    Read from the chart's OWN annotation rather than from the workflow's list,
-    because scripts/check-publish-set.py already asserts the two agree. Two
-    screens reading the same fact from two places would disagree the moment that
-    other screen is the one that is broken.
+    Read from the chart's OWN annotation. (Until 2026-11-28 the alternative was the
+    release workflow's hand-written chart list, and scripts/check-publish-set.py
+    asserted the two agreed; that list and that screen are gone with the move to
+    release-oci, so the annotation is now the only declaration this screen reads.)
     """
     if not text:
         return False

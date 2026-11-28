@@ -17,12 +17,15 @@ The four charts version **independently** — each carries its own `version` in 
 `.github/workflows/release-chart.yaml` runs on any plain-SemVer tag (`[0-9]+.[0-9]+.[0-9]+`,
 **no** `v` prefix) or manual dispatch:
 
-1. `helm lint` each of `charts/baremetal-host`, `charts/kubernetes-cluster`.
-2. `helm package` each into `dist/`.
-3. `helm registry login ghcr.io` with `GITHUB_TOKEN`.
-4. `helm push` each `.tgz` to `oci://ghcr.io/<owner>/charts` (owner lowercased from
-   `GITHUB_REPOSITORY_OWNER` — `GITHUB_TOKEN` can only write its own namespace, so a
-   hardcoded org would 403 if the repo moved), with retry on GHCR flakiness.
+Since 2026-11-28 it is one call to the organisation's reusable `release-oci` workflow
+(pinned by commit, 2.1.0) with `index_channel: blueprints` and
+`oci_repo: oci://ghcr.io/krateo-blueprints/charts`. That workflow discovers every
+first-class `Chart.yaml` (here `charts/baremetal-host` and `charts/kubernetes-cluster`;
+`tests/` is pruned), runs `hack/release-preflight`, the image gate and the index's content
+gate, packages and pushes each chart at the literal version its own `Chart.yaml`
+declares, then pulls the pushed bytes back and publishes them to the Marketplace's
+`blueprints` channel. A **manual dispatch is a rehearsal by default** (`dry_run: true`):
+everything is built and checked and nothing is pushed.
 
 There is **no single tag-version guard**: the tag triggers the run, but each chart is pushed
 at whatever version its own `Chart.yaml` declares. Bumping one chart and tagging still
