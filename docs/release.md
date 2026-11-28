@@ -42,7 +42,7 @@ Then verify the artifacts exist at the versions the `Chart.yaml`s declare, e.g.:
 
 ```console
 $ helm show chart oci://ghcr.io/krateo-blueprints/charts/baremetal-host --version 0.4.5 | head -3
-$ helm show chart oci://ghcr.io/krateo-blueprints/charts/kubernetes-cluster --version 0.16.1 | head -3
+$ helm show chart oci://ghcr.io/krateo-blueprints/charts/kubernetes-cluster --version 0.17.0 | head -3
 ```
 
 After a chart is published, bump the matching `manifests/compositiondefinition-*.yaml`
@@ -76,7 +76,7 @@ withdraw it, so treat that entry as abandoned rather than current.
 | chart | version |
 |---|---|
 | `baremetal-host` | `0.7.0` |
-| `kubernetes-cluster` | `0.16.1` |
+| `kubernetes-cluster` | `0.17.0` |
 
 > **`kubernetes-cluster` 0.15.2 is published and must not be used.** Its bundled
 > `compositiondefinition.yaml` pins `version: "0.15.1"` while the chart is `0.15.2`, so a
