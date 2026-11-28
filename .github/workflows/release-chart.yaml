@@ -67,21 +67,24 @@ jobs:
   # CHARTS_PUBLISH_TOKEN.
   #
   # ONE VERSION OF krateo-platformops/.github PER REPOSITORY. This call, security.yml,
-  # lint.yaml and release-notes.yaml all sit at 2.3.0 (5787de78): a shared internal script
+  # lint.yaml and release-notes.yaml all sit at 2.3.2 (ce078932): a shared internal script
   # called at two versions is what that rule exists to prevent. Their workflow_call
-  # contracts (inputs, secrets, required-ness) were compared at 7da11cb6 (2.0.0) and
-  # 5787de78 (2.3.0) and are identical, and release-oci's is identical between 2.1.0 and
-  # 2.3.0, so no `with:` or `secrets:` changed.
+  # contracts (inputs, secrets, required-ness) are identical at 5787de78 (2.3.0) and
+  # ce078932 (2.3.2), so no `with:` or `secrets:` changed.
   #
-  # DELIBERATELY AHEAD OF DEPENDABOT'S COOLDOWN. 2.3.0 was adopted by hand, inside the
-  # cooldown window for new releases, because release-oci 2.3.0 is the first release that
-  # runs publish-chart at charts 1.13.2, which carries krateo-blueprints/charts#53 (the
-  # publisher's index arm no longer passes having read nothing). That is what let this
-  # repo delete its own verify-channel-entry job. Do not move any of the four back to
-  # "match" an older pin, and do not read the early bump as a mistake to revert.
+  # DELIBERATELY AHEAD OF DEPENDABOT'S COOLDOWN. 2.3.2 was adopted by hand, inside the
+  # cooldown window for new releases, because it pins publish-chart at charts 1.14.1,
+  # which puts --connect-timeout 10 --max-time 30 on the two curls in publish-chart's wait
+  # loop. At charts 1.13.2 they had no timeout, so the loop's 20 x 30s budget bounded only
+  # the sleeps: a connection that hung could consume the job timeout and die without
+  # printing "the served ${CHANNEL} index still lacks: ...", the one diagnostic the #53
+  # fix exists to produce. This repo's next tag is the first real exercise of that loop
+  # anywhere (no other caller pins publish-chart at 1.12.0 or later), so it should run
+  # with the bounded curl. Do not move any of the four back to "match" an older pin, and
+  # do not read the early bump as a mistake to revert.
   #
   # Verify the commit with
-  #   git ls-remote https://github.com/krateo-platformops/.github.git 'refs/tags/2.3.0^{}'
+  #   git ls-remote https://github.com/krateo-platformops/.github.git 'refs/tags/2.3.2^{}'
   # -- the `^{}` is load-bearing: it peels an annotated tag to the commit.
   #
   # `permissions` is explicit on the CALLING job although the workflow already sets it: a
@@ -97,7 +100,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    uses: krateo-platformops/.github/.github/workflows/release-oci.yaml@5787de78bab935e422e75f6eabc47fa7cc073045 # 2.3.0
+    uses: krateo-platformops/.github/.github/workflows/release-oci.yaml@ce0789323d6a51a9928d574b420a0e57385c1498 # 2.3.2
     with:
       index_channel: blueprints
       oci_repo: oci://ghcr.io/krateo-blueprints/charts
@@ -131,7 +134,8 @@ jobs:
         run: python3 -I hack/verify-release-set.py --dist built
 
   # `verify-channel-entry` stood here until 2026-11-28 and was deleted with
-  # hack/verify-channel-entry.py: release-oci 2.3.0 runs publish-chart at charts 1.13.2,
-  # which carries krateo-blueprints/charts#53, so the publisher's own anonymous
+  # hack/verify-channel-entry.py: release-oci 2.3.0 ran publish-chart at charts 1.13.2,
+  # which carries krateo-blueprints/charts#53 (this repo is now on 2.3.2, charts 1.14.1, so
+  # the condition still holds), so the publisher's own anonymous
   # `helm pull` check is no longer vacuous (PUBLISHING.md rule 8, "Callers don't need
   # their own check"). The history is in docs/MARKETPLACE.md.

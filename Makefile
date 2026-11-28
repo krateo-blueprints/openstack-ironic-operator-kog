@@ -825,9 +825,10 @@ check: check-release-set-selftest check-screen-flags check-go-fmt check-findby-r
 	@echo "all standing screens passed"
 
 # check-channel-entry-selftest stood here and went on 2026-11-28 with the release-chart
-# `verify-channel-entry` job and hack/verify-channel-entry.py: release-oci 2.3.0 runs
-# publish-chart at charts 1.13.2, which carries krateo-blueprints/charts#53. Its history
-# is in docs/MARKETPLACE.md.
+# `verify-channel-entry` job and hack/verify-channel-entry.py: release-oci 2.3.0 ran
+# publish-chart at charts 1.13.2, which carries krateo-blueprints/charts#53; this repo is
+# now on 2.3.2, which pins charts 1.14.1, so the condition still holds. Its history is in
+# docs/MARKETPLACE.md.
 
 check-release-set-selftest:   # prove the built-set check can FAIL before trusting its silence
 # hack/verify-release-set.py compares what release-oci built with charts/*/Chart.yaml, in
