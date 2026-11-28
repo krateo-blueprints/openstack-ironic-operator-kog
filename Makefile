@@ -702,6 +702,15 @@ check-chart-renders:   # what a chart RENDERS must be a kind that exists, at a s
 	python3 -I scripts/check-chart-renders.py --selftest && \
 		python3 -I scripts/check-chart-renders.py
 
+check-charts-render-something:   # the image gate passes a chart that renders NOTHING
+	# release-oci's verify-images renders every chart from its defaults and reported
+	# "checked 0 image reference(s) across 2 chart(s)": baremetal-host is wrapped in
+	# `if .Values.nodeName`, so it renders successfully and emits nothing, and the gate
+	# fails only on a render FAILURE. This renders each chart as the gate does
+	# (ci/*-values.yaml as -f) and fails on zero documents. Self-test first.
+	python3 -I scripts/check-charts-render-something.py --self-test && \
+		python3 -I scripts/check-charts-render-something.py
+
 check-chart-version-moved:   # a published chart whose CONTENT moved must move its VERSION
 	# `helm push` OVERWRITES an existing version, and a tag re-pushes every published
 	# chart at whatever its Chart.yaml currently says. So a chart whose content changed
@@ -801,7 +810,7 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 	python3 -I scripts/check-blueprint-metadata.py --self-test && \
 		python3 -I scripts/check-blueprint-metadata.py $(if $(BLUEPRINT_ONLINE),--online,)
 
-check: check-channel-entry-selftest check-release-set-selftest check-screen-flags check-go-fmt check-findby-reachability check-upstream-arm-drift check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-chart-version-moved check-chart-version-form check-chart-renders check-release-table check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest check-committed-credentials   # every standing screen
+check: check-channel-entry-selftest check-release-set-selftest check-screen-flags check-go-fmt check-findby-reachability check-upstream-arm-drift check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-chart-version-moved check-chart-version-form check-chart-renders check-charts-render-something check-release-table check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest check-committed-credentials   # every standing screen
 	@echo "all standing screens passed"
 
 check-channel-entry-selftest:   # prove the channel-entry check can FAIL before trusting its silence

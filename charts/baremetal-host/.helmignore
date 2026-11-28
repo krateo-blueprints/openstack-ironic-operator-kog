@@ -1,0 +1,5 @@
+# Keep the gate's render-values out of the package so the published chart is byte-for-byte
+# what it was. `.helmignore` must list itself too: helm packages it otherwise, which would
+# add a member and force a version bump.
+ci/
+.helmignore
