@@ -57,7 +57,7 @@ jobs:
     if: github.ref_type == 'tag'
     permissions:
       contents: read
-    uses: krateo-blueprints/charts/.github/workflows/release-preflight.yaml@70095ab05f1c5dc6c8dd39d0b1fdbbc7382a841c # 1.4.3
+    uses: krateo-blueprints/charts/.github/workflows/release-preflight.yaml@db05838e80afecd49ec1fded8daac207bf780ec1 # 1.11.0
     with:
       # The tag names the RELEASE, not any chart: this repository publishes four charts at
       # their own Chart.yaml versions. The shared job checks this string's shape, and
@@ -403,7 +403,7 @@ jobs:
     #
     # .github/dependabot.yml advances this; a SHA pin with nothing advancing it
     # is worse than @main because it looks deliberate while going stale.
-    uses: krateo-blueprints/charts/.github/workflows/publish-chart.yaml@70095ab05f1c5dc6c8dd39d0b1fdbbc7382a841c # 1.4.3
+    uses: krateo-blueprints/charts/.github/workflows/publish-chart.yaml@db05838e80afecd49ec1fded8daac207bf780ec1 # 1.11.0
     with:
       source_repo: ${{ github.repository }}
       git_tag: ${{ github.ref_name }}
