@@ -54,10 +54,11 @@ image:
   source:
   checksum:
 
-# Where the rendered BaremetalLifecycle CRs land (defaults to release ns).
+# Where the rendered BaremetalHost CRs land (defaults to release ns). The key keeps
+# its historical name for compatibility.
 lifecycleNamespace:
 
-# Ironic auth — same shape as BaremetalLifecycle.
+# Ironic auth — same shape as BaremetalHost.
 configurationRef:
   name: ironic-endpoint
   namespace: openstack

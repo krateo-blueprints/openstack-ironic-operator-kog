@@ -18,7 +18,7 @@
 # child shape and manifests/kubernetescluster-ettore-ha.example.yaml for a real
 # deployment that commits no password at all. Left as-is here because its job is to be applyable with one command and no prerequisites.
 ---
-apiVersion: composition.krateo.io/v0-16-1
+apiVersion: composition.krateo.io/v0-17-0
 kind: KubernetesCluster
 metadata:
   name: lab

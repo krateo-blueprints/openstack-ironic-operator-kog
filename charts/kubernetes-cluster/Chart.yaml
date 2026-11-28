@@ -4,7 +4,7 @@ description: Turn a set of physical servers into a working Kubernetes cluster. D
 type: application
 
 # The chart version IS the served composition apiVersion: 0.15.3 is served as
-# composition.krateo.io/v0-15-1. Minor rather than patch because the input
+# composition.krateo.io/v0-15-3. Minor rather than patch because the input
 # contract changed in three ways -- `cni.kubeProxyReplacement` and `conformance`
 # are now reachable, and the two inert `ironicApi*` inputs are gone.
 # 0.16.1: values.yaml and values.schema.json now say the four
@@ -12,7 +12,13 @@ type: application
 # rendered output changes -- but packaged bytes moved, and a published chart
 # whose content moves must move its version or the next tag overwrites what
 # consumers hold (scripts/check-chart-version-moved.py).
-version: 0.16.1
+# 0.17.0: the worker join derives its node-ip from the VIP and the mask each
+# interface actually has, instead of matching the VIP's first three octets as a
+# string (a /24 assumption). Workers on a /22 or /16 now pin node-ip. Also
+# corrects stale BaremetalLifecycle wording in NOTES.txt (which told readers to
+# `get baremetallifecycle`, a kind retired 2026-11-25), values.yaml and
+# _helpers.tpl comments, and the Chart.yaml notes above.
+version: 0.17.0
 appVersion: "1.0"
 
 home: https://github.com/krateo-blueprints/openstack-ironic-operator-kog
@@ -40,11 +46,11 @@ maintainers:
     url: https://github.com/krateo-blueprints/openstack-ironic-operator-kog
 
 annotations:
-  # Declares whether .github/workflows/release-chart.yaml publishes this
-  # chart. scripts/check-publish-set.py asserts this agrees with the
-  # workflow's hand-maintained lint and package lists -- so a new chart
-  # that nobody adds to the workflow fails `make check` offline instead of
-  # silently never appearing in the registry.
+  # Declares whether this chart is published. The release workflow no longer keeps
+  # a hand-maintained chart list: release-oci discovers the charts, and
+  # scripts/check-blueprint-metadata.py reproduces its metadata gate offline, so a
+  # chart missing what the gate requires fails `make check` instead of failing the
+  # release.
   "krateo.io/publish": "true"
   krateo.io/category: "compute"
   krateo.io/display-name: "Kubernetes on Bare Metal"

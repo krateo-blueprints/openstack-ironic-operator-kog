@@ -672,6 +672,17 @@ check-release-table:   # docs/release.md's table must agree with charts/*/Chart.
 	python3 -I scripts/check-release-table.py --selftest && \
 		python3 -I scripts/check-release-table.py
 
+check-worker-node-ip:   # the worker's node-ip must honour the subnet mask the blade has (#128)
+	# Through kubernetes-cluster 0.16.1 the join matched the VIP's first three octets as a
+	# string -- a /24 assumption. This renders the REAL worker userData with helm, cuts the
+	# node-ip block out of the rendered join.sh and EXECUTES it against a case table (/24,
+	# /22, /16, a different subnet, ordering, no match) plus a random sweep judged by
+	# Python's ipaddress module. It does not copy the algorithm: the shell runs on a blade
+	# and cannot source a repo file, so a duplicate here would drift. Self-test first,
+	# including a negative control that splices the old /24 code back in and must fail.
+	python3 -I scripts/check-worker-node-ip.py --self-test && \
+		python3 -I scripts/check-worker-node-ip.py
+
 check-bmc-passthrough:   # the BMC-secret pointer survives parent -> child -> resolver
 # WHY A SCREEN AND NOT A RENDER, in one line because the script says it at length:
 # every BaremetalHost render in kubernetes-cluster is gated on a `lookup` of a live
@@ -810,7 +821,7 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 	python3 -I scripts/check-blueprint-metadata.py --self-test && \
 		python3 -I scripts/check-blueprint-metadata.py $(if $(BLUEPRINT_ONLINE),--online,)
 
-check: check-channel-entry-selftest check-release-set-selftest check-screen-flags check-go-fmt check-findby-reachability check-upstream-arm-drift check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-chart-version-moved check-chart-version-form check-chart-renders check-charts-render-something check-release-table check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest check-committed-credentials   # every standing screen
+check: check-channel-entry-selftest check-release-set-selftest check-screen-flags check-go-fmt check-findby-reachability check-upstream-arm-drift check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-chart-version-moved check-chart-version-form check-chart-renders check-charts-render-something check-release-table check-worker-node-ip check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest check-committed-credentials   # every standing screen
 	@echo "all standing screens passed"
 
 check-channel-entry-selftest:   # prove the channel-entry check can FAIL before trusting its silence

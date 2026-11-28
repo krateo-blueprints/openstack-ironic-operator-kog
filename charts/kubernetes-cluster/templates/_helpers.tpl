@@ -86,7 +86,7 @@ instead of waiting for a fresh cluster CR to discover it.
 {{- if .Values.lifecycleNamespace -}}{{- .Values.lifecycleNamespace -}}{{- else -}}{{- .Release.Namespace -}}{{- end -}}
 {{- end -}}
 
-{{/* Stable name for the rendered BaremetalLifecycle CR for a given node. */}}
+{{/* Stable name for the rendered BaremetalHost CR for a given node. */}}
 {{- define "kubernetes-cluster.lifecycleName" -}}
 {{- .nodeName -}}
 {{- end -}}
@@ -204,7 +204,7 @@ instead of waiting for a fresh cluster CR to discover it.
 {{/* The captured `kubeadm join` command, read live from the CP BaremetalNode CR's
      spec.extra.kubeadm_join. Empty until the CP cloud-init has finished
      `kubeadm init` AND patched its own BaremetalNode CR. This is the FSM gate
-     that controls whether worker BaremetalLifecycles get rendered. */}}
+     that controls whether worker BaremetalHosts get rendered. */}}
 {{- define "kubernetes-cluster.joinCommand" -}}
 {{- $ns  := include "kubernetes-cluster.lifecycleNamespace" . -}}
 {{- $cp  := include "kubernetes-cluster.cpNodeName"          . -}}
@@ -2039,19 +2039,52 @@ write_files:
       # v0.13.20: pin the worker's node-ip too. `kubeadm join` has no
       # --node-ip flag in its CLI form, so it goes to the kubelet via
       # /etc/default/kubelet, which kubeadm's systemd drop-in sources. Derived
-      # from the VIP's /24 so workers report the same network as the control
+      # from the VIP's subnet so workers report the same network as the control
       # plane; without it kubelet picks the first NIC (the OOB network) and the
       # cluster reports addresses on two different networks.
-      NODE_IP_PREFIX=$(echo "$VIP" | awk -F: '{print $1}' | awk -F. '{print $1"."$2"."$3"."}')
-      NODE_IP=$(ip -o -4 addr show \
-        | awk -v p="$NODE_IP_PREFIX" '$4 ~ "^"p {sub("/.*","",$4); print $4; exit}')
+      #
+      # v0.17.0: "the VIP's subnet" is decided by the mask each interface
+      # actually has. Through 0.16.1 this took the VIP's first three octets as
+      # a string prefix, a hard /24 assumption: on a /22 or /16 a worker in the
+      # SAME subnet with a different third octet matched nothing and fell back
+      # to the kubelet autodetect this block exists to prevent. `ip -o -4 addr
+      # show` prints addr/prefixlen in field 4, so an address is on the VIP's
+      # network when both agree after masking with THAT interface's prefix.
+      # Pure bash arithmetic: no awk bit operations (Debian's awk is mawk, which
+      # has none). scripts/check-worker-node-ip.py extracts these functions from
+      # the RENDERED chart and runs them against a case table.
+      ip4_to_int() {
+        local IFS=. o
+        local -a q
+        [[ "$1" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || return 1
+        read -r -a q <<< "$1"
+        for o in "${q[@]}"; do (( 10#$o <= 255 )) || return 1; done
+        echo $(( (10#${q[0]} << 24) + (10#${q[1]} << 16) + (10#${q[2]} << 8) + 10#${q[3]} ))
+      }
+      derive_node_ip() {
+        local vip="${1%%:*}" cidr addr plen vint aint mask
+        vint=$(ip4_to_int "$vip") || return 1
+        while read -r _ _ _ cidr _; do
+          addr="${cidr%/*}"
+          plen="${cidr#*/}"
+          [[ "$plen" =~ ^[0-9]+$ ]] && (( plen >= 1 && plen <= 32 )) || continue
+          aint=$(ip4_to_int "$addr") || continue
+          mask=$(( (0xFFFFFFFF << (32 - plen)) & 0xFFFFFFFF ))
+          if (( (aint & mask) == (vint & mask) )); then
+            echo "$addr"
+            return 0
+          fi
+        done < <(ip -o -4 addr show)
+        return 1
+      }
+      NODE_IP=$(derive_node_ip "$VIP" || true)
       if [ -n "$NODE_IP" ]; then
         echo "KUBELET_EXTRA_ARGS=--node-ip=$NODE_IP" > /etc/default/kubelet
-        echo "worker node-ip pinned to $NODE_IP (from VIP prefix $NODE_IP_PREFIX)"
+        echo "worker node-ip pinned to $NODE_IP (same subnet as VIP $VIP)"
       else
         # Not fatal: the join still works, the node just reports whichever
         # address kubelet picks. Say so rather than failing a working join.
-        echo "WARNING: no address in $NODE_IP_PREFIX0/24; leaving node-ip to kubelet autodetect" >&2
+        echo "WARNING: no address in the same subnet as VIP $VIP; leaving node-ip to kubelet autodetect" >&2
       fi
       kubeadm join "$VIP" \
         --token "$TOKEN" \
