@@ -8,6 +8,15 @@
 # (charts/<name>/compositiondefinition.yaml), which points at the published OCI
 # artifact. The two are deliberately separate -- a lab iterating on an unpublished
 # chart must not be made to publish it first.
+#
+# BUMPING THIS PIN has a live-lab caveat. Applying a CompositionDefinition at a NEW
+# version ADDS a served CRD version; it does not replace the old one, and the apiserver
+# answers GETs with the OLDEST served version, stripping fields the newer schema added.
+# So editing this file changes what the NEXT `make composition-up` applies -- it does not
+# move a CD that is already applied. Deleting the CD to force it is hazardous: it can
+# leave the generated CRD Terminating, and the apiserver then deletes every CR instance
+# every 60s. scripts/check-lab-cd-versions.py keeps `version:` and the `url:` filename in
+# step with the chart; it cannot tell you what a live cluster has already applied.
 ---
 apiVersion: core.krateo.io/v1alpha1
 kind: CompositionDefinition
@@ -16,5 +25,5 @@ metadata:
   namespace: krateo-system
 spec:
   chart:
-    url: http://chartrepo.openstack.svc.cluster.local/kubernetes-cluster-0.15.1.tgz
-    version: "0.15.1"
+    url: http://chartrepo.openstack.svc.cluster.local/kubernetes-cluster-0.17.0.tgz
+    version: "0.17.0"

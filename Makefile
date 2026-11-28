@@ -683,6 +683,15 @@ check-worker-node-ip:   # the worker's node-ip must honour the subnet mask the b
 	python3 -I scripts/check-worker-node-ip.py --self-test && \
 		python3 -I scripts/check-worker-node-ip.py
 
+check-lab-cd-versions:   # the LAB-path CompositionDefinitions must pin their chart's current version
+	# manifests/compositiondefinition-<chart>.yaml is what `make composition-up` applies; the
+	# in-chart marketplace copy is already screened by check-blueprint-metadata.py, this one
+	# was screened by nothing and lagged two charts (kubernetes-cluster 0.15.1 vs 0.17.0,
+	# baremetal-host 0.6.3 vs 0.7.0). Asserts `version:` AND the `url:` filename; a chart
+	# with no lab manifest is not a finding. Self-test first, with negative controls.
+	python3 -I scripts/check-lab-cd-versions.py --self-test && \
+		python3 -I scripts/check-lab-cd-versions.py
+
 check-bmc-passthrough:   # the BMC-secret pointer survives parent -> child -> resolver
 # WHY A SCREEN AND NOT A RENDER, in one line because the script says it at length:
 # every BaremetalHost render in kubernetes-cluster is gated on a `lookup` of a live
@@ -821,7 +830,7 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 	python3 -I scripts/check-blueprint-metadata.py --self-test && \
 		python3 -I scripts/check-blueprint-metadata.py $(if $(BLUEPRINT_ONLINE),--online,)
 
-check: check-release-set-selftest check-screen-flags check-go-fmt check-findby-reachability check-upstream-arm-drift check-properties-fixture check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-chart-version-moved check-chart-version-form check-chart-renders check-charts-render-something check-release-table check-worker-node-ip check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest check-committed-credentials   # every standing screen
+check: check-release-set-selftest check-screen-flags check-go-fmt check-findby-reachability check-upstream-arm-drift check-properties-fixture check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-chart-version-moved check-chart-version-form check-chart-renders check-charts-render-something check-release-table check-worker-node-ip check-lab-cd-versions check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest check-committed-credentials   # every standing screen
 	@echo "all standing screens passed"
 
 # check-channel-entry-selftest stood here and went on 2026-11-28 with the release-chart
