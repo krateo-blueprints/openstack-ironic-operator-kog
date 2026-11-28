@@ -98,8 +98,11 @@ Two corrections here, 2026-11-05, both of which made this step unable to verify 
 
 ### 4. Provision (real hardware values)
 
-The fake driver from the local env won't drive real hardware. Edit
-`manifests/baremetallifecycle-example.yaml` (or your composition instance) for your node:
+The fake driver from the local env won't drive real hardware. Copy
+`manifests/baremetalhost-blade02-e2e.yaml` (or your own composition instance) and edit it
+for your node. This used to edit `manifests/baremetallifecycle-example.yaml`, retired on
+2026-11-25 with its chart; `BaremetalHost` nests the image under `spec.image` where the
+old chart had a flat `instance_info`:
 
 ```yaml
 spec:
@@ -112,16 +115,19 @@ spec:
     redfish_verify_ca: false
   ports:                          # PXE NIC MAC(s)
     - address: "aa:bb:cc:dd:ee:ff"
-  instance_info:                  # OS image to deploy
-    image_source: http://<http-or-glance>/image.qcow2
-    image_checksum: <sha256-or-url>
+      pxe_enabled: true
+  image:                          # OS image to deploy
+    source: http://<http-or-glance>/image.qcow2
+    checksum: <sha256-or-url>
+  online: true
 ```
 
 Then drive it through composition-dynamic-controller:
 
 ```bash
-make composition-up      # host the chart + install the CompositionDefinition
-make composition-demo    # create the BaremetalLifecycle instance
+make composition-up      # host the charts + install the CompositionDefinitions
+kubectl apply -f <your-baremetalhost>.yaml   # NOT `make composition-demo`: that applies
+                                             # the fake-hardware demo node
 # watch it walk enroll -> manage -> manageable -> provide -> available -> deploy -> active:
 $KCTL -n openstack get node.baremetal.ogen.krateo.io server01 -o jsonpath='{.status.provision_state}'
 ```

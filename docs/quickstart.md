@@ -99,7 +99,7 @@ is not always the one you wrote.
 
 Then drive `enroll → manageable → available → active` with `NodeProvision` CRs,
 or let a composition do it: `make composition-demo` creates a
-`BaremetalLifecycle` and the composition-dynamic-controller walks the whole
+`BaremetalHost` and the composition-dynamic-controller walks the whole
 state machine. `make smoke-test` does the same end to end and cleans up after
 itself with `CLEANUP=1`.
 

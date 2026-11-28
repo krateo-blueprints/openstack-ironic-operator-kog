@@ -40,8 +40,7 @@ kind-ironic-kog`, so your default `~/.kube/config` is never modified.
 ```bash
 make local-up          # kind + standalone Ironic + Krateo (KOG + core) + both RestDefinitions
 make composition-up    # host the chart + install the CompositionDefinition (real cdc path)
-make composition-demo  # create a BaremetalLifecycle instance; cdc walks node 'metal-a' -> active
-make provision-demo    # alt: provision 'server01' via simulated reconciles (repeated helm upgrade)
+make composition-demo  # create a fake-hardware BaremetalHost; cdc walks node 'metal-a' -> active
 make smoke-test        # alt: drive a fake node enroll -> active directly (no Krateo)
 make ironic-forward    # expose the API at http://localhost:6385 (separate shell)
 make local-down        # delete the kind cluster
@@ -112,9 +111,11 @@ real time to diagnose. `make chart-host-pinned` reads each CD's pinned version,
 finds the commit where that chart last carried it, packages it from git and
 uploads it. It skips charts served from OCI, is idempotent, and exits non-zero
 if a pinned version cannot be found in history — which is itself worth knowing:
-the `baremetal-discovery` CD pins 0.2.0, a version that has never existed in
-this repo, so it was applied from some other source and cannot be satisfied
-here. Nothing currently uses it.
+the `baremetal-discovery` CD pinned 0.2.0, a version that never existed in this
+repo, so it had been applied from some other source and could not be satisfied
+here. That chart and its CompositionDefinition were retired on 2026-11-25, so the
+example is historical -- kept because the failure mode it describes (a CD pinning a
+version no commit ever carried) is not specific to that chart.
 
 ### Why a paused control plane is not dangerous
 

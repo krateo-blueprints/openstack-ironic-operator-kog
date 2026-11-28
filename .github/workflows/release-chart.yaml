@@ -9,12 +9,21 @@ name: release-chart
 # calling krateo-blueprints/charts' reusable publisher with the same bytes the
 # OCI job produced. OCI stays the source of truth; the channel republishes it.
 #
-# The other two charts are deliberately NOT mirrored. baremetal-discovery and
-# baremetal-lifecycle are the superseded split that baremetal-host absorbed, and
-# they carry no in-chart compositiondefinition.yaml, so the blueprints gate would
-# reject them -- correctly. That gate loops over EVERY .tgz in the artifact it is
-# given, so the artifact below holds the two blueprints and nothing else: adding
-# a fifth chart to `dist` without adding it here is safe, the reverse is not.
+# RETIRED 2026-11-25: baremetal-discovery and baremetal-lifecycle, the superseded
+# split that baremetal-host absorbed, used to sit in charts/ and be deliberately
+# left out of the mirror, because they carry no in-chart compositiondefinition.yaml
+# and the blueprints gate rejects them -- correctly. Both were `deprecated: true`
+# and both rendered a `kind: Node` that no RestDefinition here declares, so their
+# output could never be applied. They are deleted rather than excluded, because the
+# exclusion was the only reason this workflow had to hand-pick charts by name, and
+# that hand-picking is what blocks adopting the org's release-oci: its index_channel
+# is repo-wide and gates EVERY discovered chart before anything is pushed, so one
+# gate-failing chart in charts/ would kill the whole release. charts/ now holds
+# exactly the two blueprints, which is what that discovery needs.
+#
+# Their already-published versions are immutable and stay served forever, index
+# entries included -- baremetal-lifecycle 0.3.1 among them. Retiring the chart does
+# not withdraw them; it stops new ones.
 
 on:
   push:
@@ -81,7 +90,8 @@ jobs:
           # working tree against the newest EARLIER tag. Measured in the 0.3.9 run,
           # where the shallow checkout made it compare 0.3.9 with itself and print
           #   baremetal-discovery  0.1.3 -> 0.1.3
-          # for all four charts, with no "content moved" anywhere: the screen that
+          # for all four charts then in charts/, with no "content moved" anywhere:
+          # the screen that
           # guards this job was vacuous in the only place it runs.
           #
           # With that screen fixed to skip HEAD's own tags, a shallow checkout now
@@ -111,14 +121,14 @@ jobs:
 
       - name: helm lint (all charts)
         run: |
-          for dir in charts/baremetal-discovery charts/baremetal-host charts/baremetal-lifecycle charts/kubernetes-cluster; do
+          for dir in charts/baremetal-host charts/kubernetes-cluster; do
             helm lint "$dir"
           done
 
       - name: helm package (all charts)
         run: |
           mkdir -p dist
-          for dir in charts/baremetal-discovery charts/baremetal-host charts/baremetal-lifecycle charts/kubernetes-cluster; do
+          for dir in charts/baremetal-host charts/kubernetes-cluster; do
             helm package "$dir" --destination dist
           done
 

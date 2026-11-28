@@ -104,8 +104,11 @@ curl -s -H "X-OpenStack-Ironic-API-Version: 1.109" http://localhost:6385/v1/node
 
 ## 4. Provision a real VM via the operator
 
-Edit `manifests/baremetallifecycle-example.yaml` with the test VM's actual values (UUID and MAC
-from step 1, image URL served by Bifrost's HTTP):
+Copy `manifests/baremetalhost-blade02-e2e.yaml` and edit it with the test VM's actual
+values (UUID and MAC from step 1, image URL served by Bifrost's HTTP). This used to
+edit `manifests/baremetallifecycle-example.yaml`, retired on 2026-11-25 with its chart;
+`BaremetalHost` nests the image under `spec.image` where the old chart had a flat
+`instance_info`:
 
 ```yaml
 spec:
@@ -118,9 +121,11 @@ spec:
     redfish_verify_ca: false
   ports:
     - address: "<vm-mac>"          # e.g. 52:54:00:aa:bb:cc
-  instance_info:
-    image_source: http://<bifrost-host>:8080/deploy/ubuntu-22.04.qcow2
-    image_checksum: <sha256>
+      pxe_enabled: true
+  image:
+    source: http://<bifrost-host>:8080/deploy/ubuntu-22.04.qcow2
+    checksum: <sha256>
+  online: true
 ```
 
 Then drive it through composition-dynamic-controller:

@@ -1,7 +1,7 @@
 ---
 type: API
 title: openstack-ironic-operator-kog — API
-description: The CRD contracts of this blueprint — the core-provider CompositionDefinition that registers each chart, the four generated composition CRDs (BaremetalHost, BaremetalLifecycle, BaremetalDiscovery, KubernetesCluster), and the KOG-generated Ironic primitives (Node, NodeProvision, Port, NodePower) they drive.
+description: The CRD contracts of this blueprint — the core-provider CompositionDefinition that registers each chart, the two generated composition CRDs (BaremetalHost, KubernetesCluster), and the KOG-generated Ironic primitives (Node, NodeProvision, Port, NodePower) they drive.
 resource: oci://ghcr.io/krateo-blueprints/charts/baremetal-host
 tags: [ironic, api, crd, compositiondefinition, kog]
 timestamp: 2026-08-11T00:00:00Z
@@ -24,17 +24,17 @@ chart per instance.
 apiVersion: core.krateo.io/v1alpha1
 kind: CompositionDefinition
 metadata:
-  name: baremetal-lifecycle          # -> Kind BaremetalLifecycle (dashes dropped, CamelCased)
+  name: baremetal-host               # -> Kind BaremetalHost (dashes dropped, CamelCased)
   namespace: krateo-system
 spec:
   chart:
-    url: oci://ghcr.io/krateo-blueprints/charts/baremetal-lifecycle
-    version: "0.3.1"                  # -> apiVersion composition.krateo.io/v0-3-1
+    url: oci://ghcr.io/krateo-blueprints/charts/baremetal-host
+    version: "0.7.0"                  # -> apiVersion composition.krateo.io/v0-7-0
 ```
 
 | field | meaning |
 |---|---|
-| `metadata.name` | the chart/composition name. The generated **Kind** is its PascalCase (`baremetal-lifecycle` → `BaremetalLifecycle`). |
+| `metadata.name` | the chart/composition name. The generated **Kind** is its PascalCase (`baremetal-host` → `BaremetalHost`). |
 | `spec.chart.url` | where the chart lives. GHCR OCI for released charts; an in-cluster HTTP server (`http://chartrepo.openstack.svc.cluster.local/<name>-<ver>.tgz`) for local dev. |
 | `spec.chart.version` | the chart's published version. The generated **apiVersion** is `composition.krateo.io/v0-X-Y` derived from it (`0.3.1` → `v0-3-1`). |
 
@@ -43,8 +43,6 @@ The four definitions:
 | file | name | published chart URL (released) |
 |---|---|---|
 | `compositiondefinition-baremetal-host.yaml` | `baremetal-host` | `oci://ghcr.io/krateo-blueprints/charts/baremetal-host` |
-| `compositiondefinition-baremetal-lifecycle.yaml` | `baremetal-lifecycle` | `oci://ghcr.io/krateo-blueprints/charts/baremetal-lifecycle` |
-| `compositiondefinition-baremetal-discovery.yaml` | `baremetal-discovery` | `oci://ghcr.io/krateo-blueprints/charts/baremetal-discovery` |
 | `compositiondefinition-kubernetes-cluster.yaml` | `kubernetes-cluster` | `oci://ghcr.io/krateo-blueprints/charts/kubernetes-cluster` |
 
 ## The generated composition CRDs (`composition.krateo.io`)
@@ -56,9 +54,7 @@ Each `CompositionDefinition` produces one CRD. Its spec schema **is** the chart'
 | Kind | drives | key spec fields |
 |---|---|---|
 | `BaremetalHost` | the whole `registering → available → provisioned` machine behind one CRD | `nodeName`, `driver`, `driver_info`, `ports`, `image`, `online`, `maintenance`, `detached`, `cleanSteps`, `undeploy`, `undeployMode`, `enableInspection`, `configDrive` |
-| `BaremetalLifecycle` | provisioning-only `enroll → active` | `nodeName`, `driver`, `driver_info`, `ports`, `instance_info`, `online` |
-| `BaremetalDiscovery` | discovery-only `enroll → manage → inspect` | `nodeName`, `driver`, `driver_info`, `ports` |
-| `KubernetesCluster` | one `BaremetalLifecycle` per member + kubeadm bootstrap | `clusterName`, `k8sVersion`, `cni`, `image`, `controlPlane`, `network`, `ironicAuth`, `managementCluster` |
+| `KubernetesCluster` | one `BaremetalHost` per member + kubeadm bootstrap | `clusterName`, `k8sVersion`, `cni`, `image`, `controlPlane`, `network`, `ironicAuth`, `managementCluster` |
 
 ### Multi-version served CRDs
 

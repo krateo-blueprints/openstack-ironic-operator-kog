@@ -1,5 +1,5 @@
 # openstack-ironic-operator - Ironic + Krateo integration
-.PHONY: help apply-oas apply-restdef deploy-chart package-chart template-chart deploy-ironic validate-chart \
+.PHONY: help apply-oas apply-restdef deploy-ironic validate-chart \
         kind-up kind-down local-up local-down ironic-up ironic-image ironic-down ironic-forward smoke-test kubeconfig \
         ironic-backend-direct ironic-backend-local
 
@@ -21,12 +21,12 @@ HELMK := helm --kubeconfig $(KUBECONFIG_FILE) --kube-context $(KCTX)
 # which 8 are referenced by no prerequisite, no CI workflow, no doc and no script:
 #
 #     check-schema-warnings
-#     deploy-chart
+#     deploy-chart        (removed 2026-11-25 with baremetal-lifecycle)
 #     deploy-ironic
 #     ironic-down
 #     lab-down
 #     lab-up
-#     template-chart
+#     template-chart      (removed 2026-11-25 with baremetal-lifecycle)
 #     validate-chart
 #
 # Only one of them was a real defect: LAB_CLUSTER named `ironic-lab`, a cluster that
@@ -85,9 +85,6 @@ help:
 	@echo "Targets:"
 	@echo "  apply-oas      - Create ConfigMap with OAS in cluster"
 	@echo "  apply-restdef  - Apply RestDefinition (requires apply-oas first)"
-	@echo "  deploy-chart   - Helm install baremetal-lifecycle chart"
-	@echo "  package-chart  - Package chart to .tgz for publishing"
-	@echo "  template-chart - Dry-run helm template (requires nodeName in values)"
 	@echo "  validate-chart - Render the live chart, assert the BaremetalNode CR is there"
 	@echo "  deploy-ironic  - Helm install Ironic with overrides (req: openstack-helm repo, backends)"
 	@echo "Local test env (isolated kind cluster, never touches ~/.kube/config):"
@@ -95,9 +92,8 @@ help:
 	@echo "  krateo-up      - Install Krateo KOG (oasgen) + composition (core) providers"
 	@echo "  restdef-up     - Apply OAS ConfigMaps + RestDefinitions (Node + Port + NodeProvision) + singleton Node/PortConfiguration"
 	@echo "  ironic-up      - (Re)deploy standalone Ironic into the kind cluster"
-	@echo "  provision-demo - Provision a sample fake node -> active (simulated reconciles via helm)"
 	@echo "  composition-up - Host the chart + install the CompositionDefinition (real cdc path)"
-	@echo "  composition-demo - Create a BaremetalLifecycle instance; cdc walks it to active"
+	@echo "  composition-demo - Create a fake-hardware BaremetalHost; cdc walks it to active"
 	@echo "  bifrost-up     - Point the operator at a remote standalone Ironic (BIFROST_URL=http://host:6385)"
 	@echo "  ironic-backend-direct - Point Service/ironic at IRONIC_BACKEND_MANIFEST's endpoint"
 	@echo "  ironic-backend-local  - Point Service/ironic at the in-cluster fake Ironic"
@@ -130,24 +126,11 @@ apply-restdef: apply-oas
 	$(KUBECTL) apply -f manifests/restdefinition-deploy-template.yaml
 	$(KUBECTL) apply -f manifests/restdefinition-portgroup.yaml
 
-deploy-chart:
-	$(HELMK) upgrade --install baremetal-lifecycle ./charts/baremetal-lifecycle \
-		-n $(HELM_NAMESPACE) --create-namespace
-
-package-chart:   # legacy: packages ONLY the deprecated baremetal-lifecycle
-	# Left as-is deliberately. It predates the other charts, is a local
-	# convenience, and CI does its own `helm package` over every chart directory
-	# rather than calling this. The chart it names is deprecated -- use
-	# `chart-host` for anything you intend to install.
-	@mkdir -p dist
-	helm package charts/baremetal-lifecycle -d dist/
-
-template-chart:
-	helm template baremetal-lifecycle ./charts/baremetal-lifecycle \
-		-n $(HELM_NAMESPACE) \
-		--set nodeName=test-node \
-		--set driver_info.ipmi_address=172.19.74.202 \
-		--set driver_info.ipmi_password=secret
+# deploy-chart, package-chart and template-chart removed 2026-11-25 with the
+# baremetal-lifecycle chart they operated. Each named that chart directly and
+# nothing else, and none was in `check:`. To render the live chart use
+# validate-chart below; for packaging, CI does its own `helm package` over every
+# chart directory.
 
 # BROKEN FROM 2026-06-11 TO 2026-11-22, and nothing noticed because `check:` does not
 # run this target -- only `make help` advertised it. Two separate defects:
@@ -436,7 +419,8 @@ restdef-up:   # apply OAS ConfigMaps + all SEVEN RestDefinitions + endpoint sing
 	$(KUBECTL) -n $(IRONIC_NS) wait --for=condition=Ready restdefinition/ironic-deploy-template --timeout=180s
 	$(KUBECTL) -n $(IRONIC_NS) wait --for=condition=Ready restdefinition/ironic-portgroup --timeout=180s
 	# Singleton NodeConfiguration + PortConfiguration. Applied AFTER the RestDefinitions are
-	# Ready so the *Configuration CRDs exist. Kept OUT of charts/baremetal-lifecycle so RDC
+	# Ready so the *Configuration CRDs exist. Kept OUT of the per-node chart (then
+	# baremetal-lifecycle, retired 2026-11-25; now baremetal-host) so RDC
 	# can still resolve spec.configurationRef during the per-node delete drain (see
 	# manifests/nodeconfiguration-ironic.yaml header for the orphan-on-uninstall race).
 	$(KUBECTL) apply -f manifests/nodeconfiguration-ironic.yaml
@@ -471,21 +455,19 @@ restdef-up:   # apply OAS ConfigMaps + all SEVEN RestDefinitions + endpoint sing
 	# checking what the list was missing.
 	$(KUBECTL) apply -f manifests/transitionconfiguration-ironic.yaml
 
-# Provision a sample fake node. The state machine is lookup-driven: each reconcile renders the
-# NodeProvision CR for the node's current state. composition-dynamic-controller does this on its
-# reconcile loop; here we simulate reconciles with repeated `helm upgrade` until the node is active.
-PROVISION_NODE ?= server01
-provision-demo:
-	@for i in $$(seq 1 40); do \
-	  $(HELMK) upgrade --install baremetal-lifecycle ./charts/baremetal-lifecycle -n $(IRONIC_NS) \
-	    --set nodeName=$(PROVISION_NODE) --set driver=fake-hardware \
-	    --set instance_info.image_source=http://example.invalid/image.qcow2 \
-	    --set instance_info.image_checksum=0 >/dev/null; \
-	  st=$$($(KUBECTL) -n $(IRONIC_NS) get node.baremetal.ogen.krateo.io $(PROVISION_NODE) -o jsonpath='{.status.provision_state}' 2>/dev/null); \
-	  echo "reconcile $$i: $(PROVISION_NODE) provision_state=$$st"; \
-	  [ "$$st" = "active" ] && { echo "server provisioned (active)"; break; }; \
-	  sleep 12; \
-	done
+# provision-demo and PROVISION_NODE removed 2026-11-25. It provisioned a fake node by
+# running `helm upgrade` forty times against charts/baremetal-lifecycle, simulating the
+# reconcile loop because a LEAF chart renders the NodeProvision CR for the current state
+# and nothing advanced it. baremetal-host is a COMPOSITION chart: one install creates the
+# BaremetalNode CR and composition-dynamic-controller drives the state machine, so there
+# is no loop left to simulate -- and walking the transitions by hand is the YAML
+# choreography this repo rules out. To provision against the lab, install baremetal-host
+# once with image.source set (the node then walks available -> deploy -> active) and
+# watch the CR.
+# REMOVED rather than re-pointed: the replacement renders correctly offline (checked --
+# one BaremetalNode, with and without a port) but cannot be proven against a live Ironic
+# while the lab is stopped, and this repo has already shipped a chart target that was
+# broken for five months because nothing ran it.
 
 # LIFECYCLE_CHART_VERSION removed 2026-11-08. Its only consumer was the
 # `kubectl cp` of the lifecycle tgz, deleted when chart-host became
@@ -493,10 +475,12 @@ provision-demo:
 # left -- its own definition -- while sitting next to three CHART_VERSION
 # variables that are still live, so the next reader bumping versions would have
 # updated an input nothing consumes. /code-review caught it.
-DISCOVERY_CHART_VERSION ?= $(shell awk '/^version:/ {print $$2; exit}' charts/baremetal-discovery/Chart.yaml)
+# DISCOVERY_CHART_VERSION removed 2026-11-25 with charts/baremetal-discovery, for the
+# same reason LIFECYCLE_CHART_VERSION went below: an input nothing consumes, sitting
+# beside live ones, is a thing the next reader bumps.
 HOST_CHART_VERSION      ?= $(shell awk '/^version:/ {print $$2; exit}' charts/baremetal-host/Chart.yaml)
 CLUSTER_CHART_VERSION   ?= $(shell awk '/^version:/ {print $$2; exit}' charts/kubernetes-cluster/Chart.yaml)
-chart-host:   # package all four charts and serve them from a ConfigMap-backed nginx
+chart-host:   # package both blueprint charts and serve them from a ConfigMap-backed nginx
 	# The charts are served from a ConfigMap mounted into nginx, NOT copied into
 	# a running container. See local/chartrepo.yaml for the whole story: the
 	# `kubectl cp` version wrote into the container filesystem with no volume
@@ -504,10 +488,10 @@ chart-host:   # package all four charts and serve them from a ConfigMap-backed n
 	# compositions from 2026-11-04T14:17 until 2026-11-07, and the condition it
 	# produced (reason=Unavailable, a chart-inspector 500 wrapping a 404) sent me
 	# looking at child health for three days.
-	# baremetal-lifecycle is DEPRECATED (see its Chart.yaml) and is no longer
-	# packaged or served here. The ConfigMap MERGES, so the copy already in it
-	# stays served and an existing composition pinning 0.3.2 still resolves.
-	helm package charts/baremetal-discovery -d dist/
+	# baremetal-lifecycle and baremetal-discovery were RETIRED (2026-11-25) and are no
+	# longer packaged or served here. The ConfigMap MERGES, so copies already in it stay
+	# served and a composition pinning lifecycle 0.3.2 or a discovery version still
+	# resolves -- retiring a chart does not withdraw what was already published.
 	helm package charts/baremetal-host      -d dist/
 	helm package charts/kubernetes-cluster  -d dist/
 	# The readiness probe in local/chartrepo.yaml names ONE chart by version, so
@@ -519,7 +503,7 @@ chart-host:   # package all four charts and serve them from a ConfigMap-backed n
 		echo "       Update the probe path when HOST_CHART_VERSION changes, or Ready stops meaning anything."; \
 		exit 1; }
 	# MERGE, never regenerate. `create configmap --from-file=... | apply` used to
-	# build the ConfigMap from only today's four versions, and apply PRUNES keys
+	# build the ConfigMap from only today's versions, and apply PRUNES keys
 	# it no longer lists -- so bumping baremetal-host to 0.6.4 would DELETE
 	# baremetal-host-0.6.3.tgz, which manifests/compositiondefinition-baremetal-host.yaml
 	# still pins, bringing back the chart-inspector 500-wrapping-404 this whole
@@ -528,7 +512,6 @@ chart-host:   # package all four charts and serve them from a ConfigMap-backed n
 	# refuses to grow past a budget rather than failing inside the API server.
 	python3 hack/chartrepo-sync.py \
 		--namespace $(IRONIC_NS) --kubeconfig $(KUBECONFIG_FILE) --context $(KCTX) \
-		dist/baremetal-discovery-$(DISCOVERY_CHART_VERSION).tgz \
 		dist/baremetal-host-$(HOST_CHART_VERSION).tgz \
 		dist/kubernetes-cluster-$(CLUSTER_CHART_VERSION).tgz \
 		| $(KUBECTL) apply --server-side --force-conflicts -f -
@@ -1008,18 +991,19 @@ chart-host-pinned:   # add the chart versions the LIVE CompositionDefinitions pi
 	# rebuilds that version from git and merges it in.
 	./scripts/chart-host-pinned.sh
 
-composition-up: chart-host   # install all four CompositionDefinitions
-	$(KUBECTL) apply -f manifests/compositiondefinition-baremetal-lifecycle.yaml
-	$(KUBECTL) apply -f manifests/compositiondefinition-baremetal-discovery.yaml
+composition-up: chart-host   # install both CompositionDefinitions
 	$(KUBECTL) apply -f manifests/compositiondefinition-baremetal-host.yaml
 	$(KUBECTL) apply -f manifests/compositiondefinition-kubernetes-cluster.yaml
-	$(KUBECTL) -n krateo-system wait --for=condition=Ready compositiondefinition/baremetal-lifecycle --timeout=180s
-	$(KUBECTL) -n krateo-system wait --for=condition=Ready compositiondefinition/baremetal-discovery --timeout=180s
 	$(KUBECTL) -n krateo-system wait --for=condition=Ready compositiondefinition/baremetal-host --timeout=180s
 	$(KUBECTL) -n krateo-system wait --for=condition=Ready compositiondefinition/kubernetes-cluster --timeout=180s
 
-composition-demo: # create a BaremetalLifecycle instance; composition-dynamic-controller walks it enroll -> active
-	$(KUBECTL) apply -f manifests/baremetallifecycle-example.yaml
+# RE-POINTED 2026-11-25. It applied manifests/baremetallifecycle-example.yaml, a
+# BaremetalLifecycle instance of the retired chart. It now applies a BaremetalHost, so
+# the free local demo survives the retirement -- deliberately NOT one of the
+# baremetalhost-blade*.yaml manifests, which address real lab blades over Redfish: a
+# demo target must never power-cycle hardware.
+composition-demo: # create a fake-hardware BaremetalHost; cdc walks it enroll -> active
+	$(KUBECTL) apply -f manifests/baremetalhost-fake-demo.yaml
 	@echo "watch: $(KUBECTL) -n $(IRONIC_NS) get node.baremetal.ogen.krateo.io metal-a -o jsonpath='{.status.provision_state}'"
 
 # --- Real Ironic via a Keystone-auth proxy --------------------------------------

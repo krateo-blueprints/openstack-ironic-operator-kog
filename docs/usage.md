@@ -1,7 +1,7 @@
 ---
 type: Usage
 title: openstack-ironic-operator-kog — usage
-description: How to run the blueprint — the free local kind + standalone Ironic env, installing Krateo KOG and the compositions, driving a BaremetalLifecycle to active with composition-dynamic-controller, and pointing at a real Ironic API (Bifrost or Keystone-protected).
+description: How to run the blueprint — the free local kind + standalone Ironic env, installing Krateo KOG and the compositions, driving a BaremetalHost to active with composition-dynamic-controller, and pointing at a real Ironic API (Bifrost or Keystone-protected).
 resource: oci://ghcr.io/krateo-blueprints/charts/baremetal-host
 tags: [ironic, usage, kind, composition, kog]
 timestamp: 2026-08-11T00:00:00Z
@@ -39,7 +39,7 @@ reconciles — a single `helm install` advances only one step.
 
 ```bash
 make composition-up    # package + host all four charts, apply the CompositionDefinitions
-make composition-demo  # create a BaremetalLifecycle instance; cdc walks it enroll -> active
+make composition-demo  # create a fake-hardware BaremetalHost; cdc walks it enroll -> active
 # watch:
 kubectl -n openstack get node.baremetal.ogen.krateo.io metal-a \
   -o jsonpath='{.status.provision_state}'

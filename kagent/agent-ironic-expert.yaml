@@ -58,8 +58,9 @@ spec:
         `BaremetalHost` per blade with cloud-init userData that bootstraps a
         real kubeadm cluster.
       - **L3 — the three blade compositions**: `BaremetalHost` (full lifecycle
-        with rebuild — what L4 uses), `BaremetalLifecycle` (slim enroll→active
-        with no ports/rebuild), `BaremetalDiscovery` (manage+inspect inventory
+        with rebuild — what L4 uses, and the only per-node composition now:
+        `BaremetalLifecycle` (slim enroll→active) and `BaremetalDiscovery`
+        (manage+inspect inventory) were RETIRED on 2026-11-25
         pass that surfaces cpus/memory/disks in `Node.status`). All three sit
         on top of the same L2 KOG primitives.
       - **L2 — KOG primitives**: OAS specs (`oas/`) describing the Ironic v1

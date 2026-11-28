@@ -53,8 +53,8 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # composition Kind -> the chart that generates it
 KIND_TO_CHART = {
     "BaremetalHost": "baremetal-host",
-    "BaremetalLifecycle": "baremetal-lifecycle",
-    "BaremetalDiscovery": "baremetal-discovery",
+    # BaremetalLifecycle and BaremetalDiscovery were retired 2026-11-25 with their
+    # charts; a manifest naming either kind now has no chart and is a finding.
     "KubernetesCluster": "kubernetes-cluster",
 }
 

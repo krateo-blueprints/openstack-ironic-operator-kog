@@ -6,8 +6,7 @@ WHY THIS EXISTS. `.github/workflows/release-chart.yaml` publishes a HAND-MAINTAI
 list, written out twice -- once for `helm lint`, once for `helm package` (the push
 step globs `dist/`, so it follows package):
 
-    for dir in charts/baremetal-discovery charts/baremetal-host \\
-               charts/baremetal-lifecycle charts/kubernetes-cluster; do
+    for dir in charts/baremetal-host charts/kubernetes-cluster; do
 
 A chart added to `charts/` and not to that list is **never published, silently**. It
 lints clean, `make check` passes, the tag succeeds, and the artifact simply never

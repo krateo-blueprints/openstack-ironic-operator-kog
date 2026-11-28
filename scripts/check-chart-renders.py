@@ -60,11 +60,7 @@ GROUP = "baremetal.ogen.krateo.io"
 # Per-chart values. A chart that cannot be rendered is VOID, never a pass, so these
 # exist to get as far as `helm template` honestly can -- not to force output.
 CHART_VALUES = {
-    "baremetal-discovery": ["nodeName=b1", "driver=redfish"],
     "baremetal-host": ["nodeName=b1", "driver=redfish"],
-    "baremetal-lifecycle": ["nodeName=b1", "driver=redfish",
-                            "instance_info.image_source=http://example.invalid/i.qcow2",
-                            "instance_info.image_checksum=0"],
     "kubernetes-cluster": ["clusterName=lab", "managementCluster.caBundle=Zm9v",
                            "controlPlane.nodes[0].nodeName=cp1"],
 }
@@ -72,17 +68,20 @@ CHART_VALUES = {
 # The MINIMUM --set values that make each chart emit any document at all. Guards
 # only -- never an image source, a checksum or a CA bundle. Measured per chart on
 # 2026-11-22 by counting `kind:` lines: the three probe/cluster charts emit from
-# their own defaults alone, so their guard is empty; the three node charts are
-# wrapped in `if .Values.nodeName` and emit nothing without it.
+# their own defaults alone, so their guard is empty; the node charts are wrapped in
+# `if .Values.nodeName` and emit nothing without it. That said THREE node charts
+# until 2026-11-25, when baremetal-discovery and baremetal-lifecycle were retired
+# (both `deprecated: true`, both rendering a `kind: Node` no RestDefinition
+# declares); baremetal-host is the only one left. The count is restated rather than
+# left at three because a stale number in a comment that says "measured" is read as
+# a measurement.
 #
 # A guard value MUST also appear in that chart's CHART_VALUES, so the two tables
 # cannot describe different worlds; asserted in selftest(). A chart whose guard
 # render emits zero documents is VOID for this arm, never a pass -- that is what
 # keeps this table honest if someone trims it too far.
 CHART_GUARD_VALUES = {
-    "baremetal-discovery": ["nodeName=b1"],
     "baremetal-host": ["nodeName=b1"],
-    "baremetal-lifecycle": ["nodeName=b1"],
     "hook-rbac-probe": [],
     "kubernetes-cluster": [],
     "release-adopt-probe": [],
