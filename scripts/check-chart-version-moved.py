@@ -21,11 +21,15 @@ one command away.
 The comparison is against the newest TAG, not against a branch point: the tag is
 what was published, and that is the only thing a consumer can be holding.
 """
+import glob
+import io
+import os
 import re
+import shutil
 import subprocess
 import sys
-import glob
-import os
+import tarfile
+import tempfile
 
 PUBLISH_ANNOTATION = "krateo.io/publish"
 
@@ -89,6 +93,57 @@ def pick_tag(tags, sha_of, head):
     return usable[0]
 
 
+def package_members(chart_dir):
+    """What `helm package` would PUBLISH for this chart: {member path: bytes}.
+
+    HELM decides the membership, not this script. A published chart is the PACKAGE, and
+    `.helmignore` removes files from it (`ci/` values, chart-local docs, the ignore file
+    itself). Comparing the raw directory flagged a change confined to ignored files as
+    "content moved" and demanded a version bump for bytes nobody can hold -- the false
+    positive that blocked #149. `.helmignore` glob semantics (negation, anchoring,
+    directory matching) are deliberately NOT reimplemented: a filter slightly too greedy
+    would silently stop reporting real changes.
+
+    Both sides are packaged with the same helm, and only paths and contents are compared,
+    which is what upstream chart-version-guard compares. Raises Void when it cannot
+    measure -- "could not compare" must never read as "nothing moved".
+    """
+    if shutil.which("helm") is None:
+        raise Void("helm is not installed, so the packaged contents cannot be compared")
+    out = tempfile.mkdtemp(prefix="pkg-")
+    try:
+        r = subprocess.run(["helm", "package", chart_dir, "-d", out],
+                           capture_output=True, text=True)
+        tgzs = glob.glob(os.path.join(out, "*.tgz"))
+        if r.returncode != 0 or len(tgzs) != 1:
+            raise Void("helm package failed for %s: %s"
+                       % (chart_dir, (r.stderr.strip().splitlines() or ["no output"])[-1]))
+        members = {}
+        with tarfile.open(tgzs[0]) as t:
+            for m in t.getmembers():
+                if m.isfile():
+                    members[m.name] = t.extractfile(m).read()
+        return members
+    finally:
+        shutil.rmtree(out, ignore_errors=True)
+
+
+def package_diff(old_dir, new_dir):
+    """Member paths whose presence or contents differ between two chart directories."""
+    a, b = package_members(old_dir), package_members(new_dir)
+    return sorted(k for k in set(a) | set(b) if a.get(k) != b.get(k))
+
+
+def chart_at_tag(tag, chart, dest):
+    """Extract charts/<chart> as of `tag` into dest -> its directory, or None if absent."""
+    r = subprocess.run(["git", "archive", tag, "--", "charts/%s" % chart], capture_output=True)
+    if r.returncode != 0:
+        return None
+    with tarfile.open(fileobj=io.BytesIO(r.stdout)) as t:
+        t.extractall(dest, filter="data")
+    return os.path.join(dest, "charts", chart)
+
+
 def chart_version(text):
     for line in (text or "").split("\n"):
         if line.startswith("version:"):
@@ -149,6 +204,9 @@ def run():
                    "That is not the same as every chart being safe" % PUBLISH_ANNOTATION)
 
     def moved(c):
+        # THE PACKAGE AT THE TAG vs THE PACKAGE FROM THE WORKING TREE (see
+        # package_members: what is published is the package, not the directory).
+        #
         # TAG vs THE WORKING TREE, not tag..HEAD.
         #
         # This read `tag HEAD` until 2026-11-13 and was INCONSISTENT with itself: it
@@ -161,10 +219,14 @@ def run():
         # description went unreported while a committed edit to baremetal-discovery
         # was flagged, in the same run. Omitting the second ref diffs the tag against
         # the working tree, which is the state a human is about to commit and tag.
-        out, rc = sh("git", "diff", "--name-only", tag, "--", "charts/%s" % c)
-        if rc != 0:
-            raise Void("git diff failed for charts/%s against %s" % (c, tag))
-        return bool(out)
+        tmp = tempfile.mkdtemp(prefix="at-tag-")
+        try:
+            old_dir = chart_at_tag(tag, c, tmp)
+            if old_dir is None:
+                return False   # absent at the tag: audit() treats that as new
+            return bool(package_diff(old_dir, "charts/%s" % c))
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def old_v(c):
         out, rc = sh("git", "show", "%s:charts/%s/Chart.yaml" % (tag, c))
@@ -271,6 +333,62 @@ def selftest():
     f, _ = audit(["x"], lambda c: True, lambda c: "9.9.9", lambda c: "9.9.9")
     case("DISCRIMINATOR: audit CAN return a finding", len(f) == 1)
 
+    # ---- the PACKAGE comparison, through real helm on fixtures ----
+    def fixture(root, name, files):
+        d = os.path.join(root, name)
+        for rel, body in files.items():
+            os.makedirs(os.path.dirname(os.path.join(d, rel)), exist_ok=True)
+            with open(os.path.join(d, rel), "w") as fh:
+                fh.write(body)
+        return d
+
+    BASE = {"Chart.yaml": "apiVersion: v2\nname: c\nversion: 1.0.0\n",
+            "values.yaml": "a: 1\n",
+            "templates/t.yaml": "kind: ConfigMap\napiVersion: v1\nmetadata:\n  name: x\n",
+            ".helmignore": "ci/\n.helmignore\n"}
+    tmp = tempfile.mkdtemp(prefix="vm-selftest-")
+    try:
+        def pair(tag_files, tree_files):
+            return package_diff(fixture(tmp, "old%d" % len(os.listdir(tmp)), tag_files),
+                                fixture(tmp, "new%d" % len(os.listdir(tmp)), tree_files))
+
+        def with_(extra, drop=()):
+            d = dict(BASE); d.update(extra)
+            for k in drop:
+                d.pop(k)
+            return d
+
+        case("PACKAGE: identical trees -> nothing moved", pair(BASE, BASE) == [])
+        # NEGATIVE CONTROL: if either of these stops firing the fix has disabled the screen.
+        case("NEGATIVE CONTROL: a templates/ change at an unchanged version -> MOVED",
+             pair(BASE, with_({"templates/t.yaml": "kind: Secret\n"})) == ["c/templates/t.yaml"])
+        case("NEGATIVE CONTROL: a values.yaml change -> MOVED",
+             pair(BASE, with_({"values.yaml": "a: 2\n"})) == ["c/values.yaml"])
+        case("NEGATIVE CONTROL: a NEW published file -> MOVED",
+             pair(BASE, with_({"templates/u.yaml": "kind: Secret\n"})) == ["c/templates/u.yaml"])
+        case("a change confined to ignored paths (ci/) -> NOT moved",
+             pair(BASE, with_({"ci/render-values.yaml": "a: 9\n"})) == [])
+        case("a change to ignored .helmignore-listed docs only -> NOT moved",
+             pair(with_({"ci/v.yaml": "a: 1\n"}), with_({"ci/v.yaml": "a: 2\n"})) == [])
+        # THE THIRD CASE: editing .helmignore so a previously-ignored file ships changes
+        # the package, and must be reported even though the file existed before.
+        old = with_({"notes.txt": "hello\n"}, ())
+        old[".helmignore"] = "ci/\n.helmignore\nnotes.txt\n"
+        new = dict(old); new[".helmignore"] = "ci/\n.helmignore\n"
+        case("a .helmignore edit that makes an ignored file PUBLISHED -> MOVED",
+             pair(old, new) == ["c/notes.txt"])
+        # And the same: dropping `.helmignore` from its own list ships the ignore file.
+        new2 = dict(BASE); new2[".helmignore"] = "ci/\n"
+        case("an edit that makes .helmignore itself published -> MOVED",
+             pair(BASE, new2) == ["c/.helmignore"])
+        try:
+            package_members(os.path.join(tmp, "does-not-exist"))
+            case("a chart that cannot be packaged -> VOID", False)
+        except Void:
+            case("a chart that cannot be packaged -> VOID", True)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
     for n, ok in cases:
         print("  %-62s %s" % (n, "ok" if ok else "FAIL"))
     print("selftest: %d cases, %d failure(s)" % (len(cases), len(failures)))
@@ -301,9 +419,9 @@ if __name__ == "__main__":
         sys.stderr.write("a mistyped mode flag would otherwise run the OTHER mode and exit 0.\n")
         sys.exit(64)
     _WANT_SELFTEST = bool({"--self-test", "--selftest"} & set(sys.argv[1:]))
-    if _WANT_SELFTEST:
-        sys.exit(selftest())
     try:
+        if _WANT_SELFTEST:
+            sys.exit(selftest())
         sys.exit(run())
     except Void as v:
         print("VOID: %s" % v)
