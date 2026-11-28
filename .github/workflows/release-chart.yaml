@@ -181,7 +181,7 @@ jobs:
       # Do not reintroduce the dated form here: it is transitional, for a publisher with no tags.
       - name: Locate the shared chart-push script
         id: chart-push
-        uses: krateo-platformops/.github/.github/actions/chart-push@e1d3e99215e80ae56eca4a67e9e061b2c73168b8 # 1.0.0
+        uses: krateo-platformops/.github/.github/actions/chart-push@7da11cb60cee5cbfc7d9e8c9328692807b43cefd # 2.0.0
 
       # THE CHART LOOP STAYS; only the retry loop goes. push.sh takes ONE archive, so dropping the
       # outer loop here would publish one chart and silently skip the other three.
