@@ -164,9 +164,13 @@ top.
 
 metal3 publishes a separate `HardwareData` CR per BMH with fully structured inventory
 (CPUs, NICs with MAC + speed, disks with WWN + sizes, etc.). We surface
-`status.properties` (cpu_arch + a few capabilities) and `status.inspection_finished_at`
-on the Node CR. The Ironic inventory IS available via the `properties` field; we just
-don't flatten it into a dedicated CR.
+`status.properties` and `status.inspection_finished_at` on the Node CR. `properties` is
+the whole object, verbatim from Ironic: we do not pick sub-fields, so its content depends
+on the inspection source, not on us. Measured on the lab (2026-11-28, redfish driver
+against an emulated BMC), the one node that has completed inspection holds `cpu_arch`
+alone; real hardware with IPA inspection populates more. See
+`tests/properties-inspection/`. The Ironic inventory IS available via the `properties`
+field; we just don't flatten it into a dedicated CR.
 
 ### 6. Pre-provisioning network data
 

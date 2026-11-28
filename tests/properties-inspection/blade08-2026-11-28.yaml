@@ -1,0 +1,54 @@
+# `properties` inspection fixture -- what a BaremetalNode CR's inspection fields ACTUALLY
+# look like, captured from the lab, not imagined.
+#
+# PROVENANCE
+#   measured:   2026-11-28, read from the live lab (nothing was written to it)
+#   lab:        kind + standalone Ironic, KVM guests behind an EMULATED BMC
+#               (sushy-emulator) driven by the REAL `redfish` driver
+#   node:       blade08, the ONE of 8 BaremetalNode CRs that has ever completed
+#               inspection; the other seven report `properties` empty
+#   inspected:  2026-11-10
+#
+# SCOPE LIMIT -- READ BEFORE ASSERTING ANYTHING ABOUT `properties` CONTENT
+#   This fixture CANNOT exercise multi-key `properties`. A single `cpu_arch` key is what
+#   a redfish inspection against an EMULATOR yields. Real hardware with IPA inspection
+#   populates more (typically cpus, memory_mb, local_gb and capabilities alongside
+#   cpu_arch). An assertion that `properties` holds those keys cannot be falsified by
+#   this lab, so it would report a pass whether or not it is true: a test whose setup
+#   cannot produce the condition. Do not build one from this file.
+#
+# WHAT IS PINNED (scripts/check-properties-fixture.py reads this file)
+#   1. `properties` is a FLAT map of string -> string, not a structured object.
+#   2. `inspection_finished_at` is RFC3339 with a `+00:00` OFFSET, not `Z`.
+#   3. An inspected node at rest reads Ready=True/Available at the KOG level. This is the
+#      BaremetalNode CR, NOT the BaremetalHost composition parent, which sits at
+#      Ready=False/Creating for a separate reason (oasgen #648).
+measurement:
+  date: "2026-11-28"
+  lab: kind + standalone Ironic
+  bmc: sushy-emulator (emulated), driven by the real redfish driver
+  node: blade08
+  inspected_on: "2026-11-10"
+
+scope_limit:
+  exercises_multi_key_properties: false
+  statement: >-
+    Emulator output. A single cpu_arch key is what redfish inspection against
+    sushy-emulator yields; real hardware with IPA inspection populates more (cpus,
+    memory_mb, local_gb, capabilities). This fixture cannot exercise multi-key
+    properties and must not be used to assert on them.
+
+# The CR's status, restricted to the fields this fixture pins.
+status:
+  uuid: daef0a77-1db5-4181-a577-bcfb31becc72
+  provision_state: active
+  power_state: power on
+  maintenance: false
+  automated_clean: null
+  properties:
+    cpu_arch: x86_64
+  inspection_finished_at: "2026-11-10T16:15:34+00:00"
+  conditions:
+    - {type: Ready,    status: "True", reason: Available}
+    - {type: Synced,   status: "True", reason: ReconcileSuccess}
+    - {type: Observed, status: "True", reason: ResponseObtained}
