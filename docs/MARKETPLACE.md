@@ -234,41 +234,49 @@ API 404d for the whole namespace). It has them now — 1.0.0 `a2d63ba`, 1.0.1
 `36ea357`, and this repo is pinned to 1.0.1, and dropping the fallback today removes the only
 token that exists, converting a legible 401 into an unresolvable-ref error.
 
-`verify-channel-entry` can go once the publisher's own anonymous `helm pull`
-check has been seen green for some caller — redundant then, rather than wrong.
-The *rule* is no longer the open part: `charts#7` merged 2026-11-07 and
-PUBLISHING.md rule 8 now requires the publisher to do exactly this and says
-"Callers don't need their own check." That evidence does **not** exist yet, and the attempt to claim it is worth
-recording. At `publish-chart.yaml@70095ab`, the SHA this repo pinned then, the
-publisher does refuse a tarball that is not anonymously downloadable (`:296`)
-and does install each chart with `env -u GH_TOKEN helm pull ... --repo`
-(`:386`) — so the code is there, and on 2026-11-24 this file briefly said the
-condition was therefore met. **Reading that a check exists is not evidence that
-it can fail.** Asked for a positive control, the publisher's own session found
-that its index arm seeds `missing=()` before the retry loop and re-seeds it only
-after a successful fetch, so twenty unreadable attempts leave it empty and the
-arm passes having read nothing (`krateo-blueprints/charts#53` fixes it). That is the
-index-listing ARM, not the whole job: the same script then runs `env -u GH_TOKEN helm
-pull` under `set -e`, so a repository that is wholly unreachable still fails there. The
-exposure the empty seeding leaves is the narrower one -- a `curl` of
-`index.yaml?nocache=...` that fails where helm's own index fetch succeeds. Recorded
-because it weakens the case for keeping this job, which is the reason to write it down. This repo's check does fail closed on the same input, though not for the reason
-first written here: emptying its retry seeding changes nothing, and what fails
-closed is that its verdict is read off `found` — positive evidence, a pair
-entering it only when an index was actually read and actually advertised it. The
-publisher derives its verdict from `missing`, seeded empty. Same shape, opposite
-default. Both arms are controls in
-`hack/verify-channel-entry.py --self-test` (12 cases, in `make check`), which the
-script had never had. The condition therefore moves to: #53 merged *and*
-carried by the publish-chart pin of whichever release-oci this repo migrates to.
-**Measured 2026-11-25: #53 is merged and NO tagged release-oci carries it.** #53 merged
-2026-11-24 as `b7571b9`; release-oci **2.1.0** (`aa90d48`) pins publish-chart at charts
-**1.9.3**, and **2.2.0** (`705b79c`) pins **1.11.0** -- both still seed `missing=()`,
-byte-identical at 18175 bytes. The fix first appears in charts **1.12.0**, which seeds
-`missing=("${want[@]}")`: everything is missing until an index has actually been read.
-charts is at 1.13.2 and still has it, so the control works and the reading is not an
-instrument failure. This job therefore stays. Whoever reads this next should re-measure
-the *pin*, not the PR: a merged fix nothing calls changes nothing.
+`verify-channel-entry` **WAS DROPPED on 2026-11-28**, together with
+`hack/verify-channel-entry.py` and the `check-channel-entry-selftest` target. The
+condition was met by measurement, and the measurement is below. What follows is the
+history of why it was kept for weeks, which is the part worth keeping.
+
+*Why it was kept.* `krateo-blueprints/charts#7` merged 2026-11-07 and PUBLISHING.md rule 8
+requires the publisher to verify, anonymously, what it published: "Callers don't need their
+own check." On 2026-11-24 this file briefly said the condition was therefore met, because at
+`publish-chart.yaml@70095ab` the code was there (the tarball refusal at `:296`, the
+`env -u GH_TOKEN helm pull ... --repo` at `:386`). **Reading that a check exists is not
+evidence that it can fail.** Asked for a positive control, the publisher's own session found
+that its index arm seeded `missing=()` before the retry loop and re-seeded it only after a
+successful fetch, so twenty unreadable attempts left it empty and the arm passed having read
+nothing (`krateo-blueprints/charts#53`). That was the index-listing ARM, not the whole job:
+the same script then ran `env -u GH_TOKEN helm pull` under `set -e`, so a wholly unreachable
+repository still failed there. The exposure was the narrower one, a `curl` of
+`index.yaml?nocache=...` failing where helm's own index fetch succeeds. This repo's check
+failed closed on the same input, though not for the reason first written here: emptying its
+retry seeding changed nothing, and what failed closed was that its verdict was read off
+`found`, positive evidence, a pair entering it only when an index was actually read and
+actually advertised it. The publisher derived its verdict from `missing`, seeded empty. Same
+shape, opposite default. Both arms were controls in the script's `--self-test` (12 cases),
+which it had never had until 2026-11-24. The condition was therefore: #53 merged *and*
+carried by the publish-chart pin of whichever release-oci this repo calls.
+
+*Measured 2026-11-25, still unmet:* #53 was merged (`b7571b9`, 2026-11-24) and NO tagged
+release-oci carried it. release-oci **2.1.0** (`aa90d48`) pinned publish-chart at charts
+**1.9.3** and **2.2.0** (`705b79c`) pinned **1.11.0**, both still seeding `missing=()`,
+byte-identical at 18175 bytes.
+
+*Measured 2026-11-28, met:* the fix first appears in charts **1.12.0** as
+`missing=("${want[@]}")`, and charts **1.13.2** still has it; **1.9.3** and **1.11.0** read
+`missing=()`. release-oci **2.3.0** (tag to commit `5787de78bab935e422e75f6eabc47fa7cc073045`)
+pins `publish-chart.yaml` and `release-preflight.yaml` at `5825f896...`, charts 1.13.2. This
+repo calls 2.3.0 as of that date, so the publisher it runs is the fixed one, and rule 8
+finally applies to it. The reading discriminates (it separated 1.11.0 from 1.12.0), so it is
+not a failed grep. The lesson that held throughout: re-measure the PIN of the release-oci a
+repo calls, never the PR number, because a merged fix nothing calls changes nothing.
+
+What was NOT shown: this repo's own job record was 10 green runs of 18, 2 skipped, 6 before
+it existed, and it never failed. Nobody ever ran a positive control against the live job. The
+deletion rests on the publisher's fix, not on that record.
+
 Rule 11's visibility grant is **not** this chart's job: the standard puts it on
 the registrar (installer `readerGroups`, or a manifest beside the
 CompositionDefinition), because the chart renders per instance.
@@ -276,16 +284,13 @@ CompositionDefinition), because the chart renders per instance.
 
 ```
 git tag 1.2.3 && git push --tags
+      └─ release-chart.yaml / release           → krateo-platformops/.github release-oci 2.3.0, which runs
+                                                   index-preflight (token present, no whitespace),
+                                                   verify-images, release-preflight (hack/release-preflight),
+                                                   package-and-push → oci://ghcr.io/krateo-blueprints/charts/<name>
+                                                   (source of truth), then collect + publish-index, which
+                                                   republishes the same bytes into the `blueprints` channel
       │
-      ├─ release-chart.yaml / release           → krateo-platformops/.github release-oci 2.1.0, which runs
-      │                                           index-preflight (token present, no whitespace),
-      │                                           verify-images, release-preflight (hack/release-preflight),
-      │                                           package-and-push → oci://ghcr.io/krateo-blueprints/charts/<name>
-      │                                           (source of truth), then collect + publish-index, which
-      │                                           republishes the same bytes into the `blueprints` channel
-      │
-      └─ release-chart.yaml / verify-channel-entry  → fetches the advertised URL anonymously (kept until a
-                                                      release-oci carries krateo-blueprints/charts#53)
 ```
 
 Before 2026-11-28 this was four jobs in this repository (`publish`,
@@ -437,8 +442,8 @@ already public.
 
 For the general rule this was supposed to illustrate — verify a published
 artifact with the **consumer's** credentials, not the publisher's — see
-`hack/verify-channel-entry.py`, which is still worth having and is now the only
-part of this that survives.
+the `verify-channel-entry` job, which existed until 2026-11-28 (see "The publish path"
+above); the publisher's own anonymous `helm pull` now does it.
 
 ---
 
@@ -526,33 +531,28 @@ first at the next bump.
 
 ## After publishing, verify
 
-### Two checks the pipeline now runs, because every other one authenticates
+### Two checks that once ran here, because every other one authenticates
 
 Added 2026-11-07, after finding that a successful publish from this repository
-would produce an uninstallable card (see the section above).
+would produce an uninstallable card (see the section above). **Both are gone and this
+section is history, not the pipeline.**
 
-**`channel-asset-host-gate`** — **DELETED 2026-11-07, and this paragraph is
-history, not the pipeline.** It was built on the retracted "this repo is
-private" premise; with a public caller it could only ever take its pass branch,
-which is the worst kind of check to keep. The surviving check is
-`verify-channel-entry` below. What it did: it refused the
-channel publish when **both** hold: this repository is not public, *and* the
-publisher at the ref we pin still derives the asset URL from the caller
-(`RELEASES_BASE: .../${{ inputs.source_repo }}/releases/download`). It reads
-`krateo-blueprints/charts`'s workflow directly — that repo is public — rather
-than tracking a flag here, so when `#6` merges the gate passes on its own and
-nothing needs editing. Deliberately **not** "refuse while this repo is
-private": that would keep refusing after the fix, because the repo stays
-private. It fails closed if it cannot read the publisher.
+**`channel-asset-host-gate`** — **DELETED 2026-11-07.** It was built on the retracted
+"this repo is private" premise; with a public caller it could only ever take its pass
+branch, which is the worst kind of check to keep. It refused the channel publish when
+**both** hold: this repository is not public, *and* the publisher at the ref we pin still
+derives the asset URL from the caller (`RELEASES_BASE: .../${{ inputs.source_repo
+}}/releases/download`). It read `krateo-blueprints/charts`'s workflow directly rather than
+tracking a flag here. It failed closed if it could not read the publisher.
 
-**`verify-channel-entry`** (after the publish, a detector). Runs
-`hack/verify-channel-entry.py`, which reads the URL the index *actually
-advertises* and fetches it **with no credentials** — the only check in this
-pipeline that uses the consumer's credentials rather than the publisher's. It
-asserts nothing about which host that is, so it survives `#6` and whatever
-follows. It is a detector, not a gate: by the time it runs the entry exists and
-failing the job does not retract it. Its purpose is to make the failure loud on
-the first release instead of silent until someone tries to install.
+**`verify-channel-entry`** — **DELETED 2026-11-28**, with `hack/verify-channel-entry.py`
+and `check-channel-entry-selftest`; the reason and the measurement are under "The publish
+path" above. It was a detector that ran after the publish: it read the URL the index
+*actually advertised* and fetched it **with no credentials**, the only check in the
+pipeline that used the consumer's credentials rather than the publisher's, and its
+purpose was to make an unfetchable entry loud on the first release instead of silent until
+someone tried to install. That job is now the publisher's (release-oci 2.3.0, charts
+1.13.2, PUBLISHING.md rule 8). The script is in git history before the deletion commit.
 
 Both were exercised before shipping, each branch with a control:
 
@@ -564,11 +564,8 @@ Both were exercised before shipping, each branch with a control:
 | version absent / chart absent | named, exit 1 |
 | in the index but the `.tgz` 404s (fixture) | caught, exit 1 — **and the good URL in the same run still passed** |
 
-Run it by hand against the live channel at any time:
-
-```bash
-python3 hack/verify-channel-entry.py kubernetes-cluster=0.14.0 baremetal-host=0.6.3
-```
+To check the live channel by hand now, fetch the advertised URL without credentials
+(`curl -fsSL -o /dev/null <url>` against the `urls:` entry in the served `index.yaml`).
 
 
 **Check the right population.** Three different index documents all answer
@@ -802,7 +799,7 @@ channel moved since 2026-10-09.
 | total charts | 810 | 813 |
 
 The baseline was recorded **before** tagging, which is the only thing that makes
-the second column mean anything: `hack/verify-channel-entry.py` reported the
+the second column mean anything: `hack/verify-channel-entry.py` (since deleted) reported the
 absence and exited 1, so it was not passing vacuously.
 
 Three things the table shows that no green check does:

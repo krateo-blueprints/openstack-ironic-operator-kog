@@ -821,33 +821,19 @@ check-blueprints:   # the two Marketplace blueprints would publish AND render a 
 	python3 -I scripts/check-blueprint-metadata.py --self-test && \
 		python3 -I scripts/check-blueprint-metadata.py $(if $(BLUEPRINT_ONLINE),--online,)
 
-check: check-channel-entry-selftest check-release-set-selftest check-screen-flags check-go-fmt check-findby-reachability check-upstream-arm-drift check-properties-fixture check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-chart-version-moved check-chart-version-form check-chart-renders check-charts-render-something check-release-table check-worker-node-ip check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest check-committed-credentials   # every standing screen
+check: check-release-set-selftest check-screen-flags check-go-fmt check-findby-reachability check-upstream-arm-drift check-properties-fixture check-examples check-mapping-sources check-oas-defaults check-path-forms check-schema-warnings-selftest check-blueprints check-restdefinition-shape check-chart-version-moved check-chart-version-form check-chart-renders check-charts-render-something check-release-table check-worker-node-ip check-bmc-passthrough check-publisher-scope-selftest check-transition-gates check-arm7-selftest check-committed-credentials   # every standing screen
 	@echo "all standing screens passed"
 
-check-channel-entry-selftest:   # prove the channel-entry check can FAIL before trusting its silence
-# hack/verify-channel-entry.py is the only check in the release pipeline that uses the
-# CONSUMER's credentials (none) rather than the publisher's, and it ran in 10 green
-# releases with no test of any kind. Ten greens prove nothing: the publisher's
-# equivalent step looked right too, and seeds its missing-list EMPTY before the retry
-# loop, so an index it never manages to read leaves nothing missing and the arm passes
-# (krateo-blueprints/charts#53).
-#
-# So every arm here is a POSITIVE control -- an input the check must reject, naming its
-# own reason -- plus one clean negative control and two mutation arms. Mutation A is
-# inverted on purpose: emptying the retry seeding must change NOTHING, because the first
-# attempt at this control assumed that seeding was the guard and the measurement said
-# otherwise. Mutation B is the real one: a verdict that trusts `found` blindly must make
-# the unreadable-index arm pass.
-#
-# The real run needs the served index and so belongs to the release workflow, not here.
-# This target is the controls only -- the same split as check-schema-warnings-selftest.
-	python3 -I hack/verify-channel-entry.py --self-test
+# check-channel-entry-selftest stood here and went on 2026-11-28 with the release-chart
+# `verify-channel-entry` job and hack/verify-channel-entry.py: release-oci 2.3.0 runs
+# publish-chart at charts 1.13.2, which carries krateo-blueprints/charts#53. Its history
+# is in docs/MARKETPLACE.md.
 
 check-release-set-selftest:   # prove the built-set check can FAIL before trusting its silence
 # hack/verify-release-set.py compares what release-oci built with charts/*/Chart.yaml, in
 # the release workflow's verify-release-set job. The real run needs the release artifact
 # and belongs there; this target is the controls only, the same split as
-# check-channel-entry-selftest. An empty artifact must FAIL, and a mutation arm must show
+# check-schema-warnings-selftest. An empty artifact must FAIL, and a mutation arm must show
 # that seeding `missing` the other way would let it pass.
 	python3 -I hack/verify-release-set.py --self-test
 
