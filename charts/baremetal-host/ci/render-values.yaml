@@ -1,0 +1,8 @@
+# The smallest valid configuration, for the release image gate and scripts/check-chart-renders-something.py.
+#
+# The chart is wrapped in `if .Values.nodeName`, so from its defaults it renders
+# successfully and emits NOTHING -- and a gate that renders only defaults then inspects
+# zero templates and reports a pass. `nodeName` and `driver` are the only required
+# fields (values.schema.json). Placeholder values, not a real host.
+nodeName: render-probe
+driver: fake-hardware
